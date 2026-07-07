@@ -1,0 +1,80 @@
+# Foundation registry — owners manifest (STEP-1.4)
+#
+# One row per governed branch. The branch->team STRUCTURE is fixed (this is the decision);
+# team/lead/member handles are PLACEHOLDERS until the GitHub teams are created and people assigned.
+#
+#   team    = GitHub team that owns the branch. Used by CODEOWNERS (review routing; durable across
+#             turnover, no single-person bottleneck). Replace @ttt/* with the real @org/team slug
+#             when the teams are created (e.g. @tttstudios/foundation-backend).
+#   lead    = named individual accountable for the branch; goes in each record's `owner` frontmatter.
+#             PLACEHOLDER (@lead-*) — assigned later (team decision to lock teams first).
+#   members = team membership — assigned when the GitHub team is created.
+#   candidate = de-facto owner harvested + verified from the estate (STEP-1.2). Reference only, NOT a
+#               commitment. Note the concentration flag: RamonEspinosa is the top signal on 5 branches,
+#               so leads should be SPREAD when assigned rather than defaulting to the candidate.
+#
+# This file is authored in STEP-1; it COMMITS into the registry repo once STEP-2.1 stands it up.
+
+branches:
+  - key: governance
+    scope: decisions, standards, product records, ownership map — governs every layer below
+    team: "@foundation-lead"          # the foundation-lead role (governance), not a domain team
+    lead: "@lead-foundation"          # PLACEHOLDER — leadership appointment, not harvestable
+    members: []                       # PLACEHOLDER
+    candidate: RamonEspinosa          # verified (authored CODEOWNERS/README/PR-template, PL#121) — weak as governance
+
+  - key: build
+    scope: package manager (pnpm vs npm), monorepo runner (Turborepo vs Nx), registry toolchain
+    team: "@ttt/build"
+    lead: "@lead-build"
+    members: []
+    candidate: tttyler-smith          # verified high (nx generators, CI/SonarQube, H#131/#54)
+
+  - key: design
+    scope: design tokens, brand themes, UI patterns, accessibility — one system, per-client brand
+    team: "@ttt/design"
+    lead: "@lead-design"
+    members: []
+    candidate: Sunnysit               # verified LOW (theme package PL#141) — signal thin; may need a real design owner
+
+  - key: frontend
+    scope: app shells, component library, routing/state
+    team: "@ttt/frontend"
+    lead: "@lead-frontend"
+    members: []
+    candidate: angellittt             # verified high (CODEOWNERS /apps/web, PL#199); co: Sunnysit
+
+  - key: backend
+    scope: API contract, services, jobs, data access
+    team: "@ttt/backend"
+    lead: "@lead-backend"
+    members: []
+    candidate: RamonEspinosa          # verified high (CODEOWNERS /apps/api, top author 150); co: fpena, jkuan1, rosa-rzi
+
+  - key: infra
+    scope: cloud (AWS/GCP/Azure), networking, environments, IaC/BaC
+    team: "@ttt/infra"
+    lead: "@lead-infra"
+    members: []
+    candidate: tttyler-smith          # verified high (handled CD/Docker H#46); co: RamonEspinosa (PL terraform)
+
+  - key: security
+    scope: authn/z, secrets, dependency & access policy, compliance
+    team: "@ttt/security"
+    lead: "@lead-security"
+    members: []
+    candidate: RamonEspinosa          # verified med (Entra verifier PL#8, Azure AD H#4); co: mikeh-ttt (HendersonV2 auth)
+
+  - key: data
+    scope: datastore, schema, migrations, data access
+    team: "@ttt/data"
+    lead: "@lead-data"
+    members: []
+    candidate: RamonEspinosa          # verified med (pg DB PL#1, migrations PL#10); co: mikeh-ttt (app DB)
+
+  - key: observability
+    scope: monitoring, logging, alerts, SLOs, dashboards
+    team: "@ttt/observability"
+    lead: "@lead-observability"
+    members: []
+    candidate: tttyler-smith          # verified med (winston logger lib H#52)
