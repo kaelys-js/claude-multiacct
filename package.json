@@ -1,0 +1,11 @@
+{
+  "name": "foundation-registry",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Business-as-Code governance registry: owned decision records (PRD/PDR/ADR/SPEC/tasks/release) governing how clients are built. Not a runtime application.",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22"
+  }
+}
