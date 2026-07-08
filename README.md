@@ -22,12 +22,12 @@ records/
   data/            # -> @ttt/data
   observability/   # -> @ttt/observability
 schema/            # record.schema.json (JSON Schema draft 2020-12: frontmatter + parent-type contract)
-templates/         # one template per record type (prd / pdr / adr / spec / tasks / release)
+templates/         # record templates (prd / pdr / adr / spec) + tasks / release spine-tier formats
 proposals/         # open-contribution drafts
 site/              # generated static index (built in CI)
 ```
 
-Record filenames are `<type>-<id>-<slug>.md`, e.g. `records/build/adr-0001-build-orchestrator.md`.
+Record filenames are `<type>-<id-lowercased>-<slug>.md`, e.g. `records/build/adr-0001-build-orchestrator.md`.
 
 ## Ownership
 

@@ -12,7 +12,7 @@ status: proposed            # one of: proposed | accepted | superseded
 # owner: a CODEOWNERS handle (team or user), literal, incl. leading '@'.
 #   For a PRD this is product/delivery, e.g. @lead-governance or @delivery-lead.
 owner: '@lead-governance'
-date: 2026-01-01            # ISO-8601; date this record reached its current status
+date: '2026-01-01'          # ISO-8601; date this record reached its current status
 # references: up-chain parent IDs this record derives from.
 #   PRD is the spine ROOT: this is normally [] (empty). Cross-links to other
 #   PRDs are allowed but a PRD never references a PDR/ADR/SPEC below it.
@@ -96,10 +96,11 @@ supersedes: null
 ```markdown
 ---
 id: PRD-0001
+type: PRD
 title: Why the foundation exists
 status: accepted
 owner: '@lead-product'
-date: 2026-05-18
+date: '2026-05-18'
 references: []
 supersedes: null
 ---

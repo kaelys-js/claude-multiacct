@@ -1,0 +1,67 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# WORK spine tier — tool-neutral tasks projection (tasks.yaml)
+#
+# This is the WORK tier of the spine (memo §11: "tasks.yaml the work · tool-neutral").
+# It projects the work implied by a SPEC into whatever tracker the team uses.
+#
+#   * It lives OUTSIDE the record registry — NOT under records/**. In practice a
+#     tasks.yaml sits alongside the work item it tracks, not among the records.
+#   * It is NOT a record.schema.json record and is NOT run through the STEP-3.1
+#     record validator. The record validator globs records/**/*.md only; this file
+#     is deliberately not reached by it.
+#   * It references a SPEC by id (the up-chain link), but carries no record
+#     frontmatter and never appears in records/.
+#
+# Fields
+#   spec              (required)  the SPEC id this work realises, e.g. SPEC-0001.
+#   tasks             (required)  list of work items. Each item:
+#     id              (required)  stable local key, e.g. T-001 (unique within this file).
+#     title           (required)  short human summary of the work.
+#     status          (required)  one of: todo | in-progress | blocked | done.
+#     owner           (required)  a GitHub @handle accountable for the item.
+#     depends_on      (optional)  list of task ids in this file that must precede it.
+#     tracker_ref     (optional)  the projected id in the external tracker
+#                                 (Linear / Jira / GitHub issue key) — the
+#                                 tool-neutral projection seam. Omit when unprojected.
+# ─────────────────────────────────────────────────────────────────────────────
+
+spec: SPEC-0001
+
+tasks:
+  - id: T-001
+    title: Author the record JSON Schema and the up-chain parent-type contract
+    status: done
+    owner: '@lead-backend'
+    tracker_ref: FOUND-101
+
+  - id: T-002
+    title: Author the PRD/PDR/ADR/SPEC record templates
+    status: done
+    owner: '@lead-backend'
+    depends_on:
+      - T-001
+    tracker_ref: FOUND-102
+
+  - id: T-003
+    title: Build the ajv + gray-matter record validator and wire pnpm run validate
+    status: in-progress
+    owner: '@lead-backend'
+    depends_on:
+      - T-001
+      - T-002
+    tracker_ref: FOUND-110
+
+  - id: T-004
+    title: Add the GitHub Actions blocking validate check
+    status: blocked
+    owner: '@lead-infra'
+    depends_on:
+      - T-003
+    tracker_ref: FOUND-111
+
+  - id: T-005
+    title: Generate the non-engineer-readable static index page
+    status: todo
+    owner: '@lead-frontend'
+    depends_on:
+      - T-003
