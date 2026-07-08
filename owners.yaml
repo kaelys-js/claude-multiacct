@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=./schema/owners.schema.json
 # Foundation registry — owners manifest (STEP-1.4)
 #
 # One row per governed branch. The branch->team STRUCTURE is fixed (this is the decision);

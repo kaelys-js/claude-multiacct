@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registry.foundation.internal/schema/owners.schema.json",
+  "title": "Foundation Registry Owners Manifest",
+  "description": "Draft 2020-12 schema for owners.yaml — the branch->team ownership map. One item per governed branch; team/lead/member handles are GitHub-handle-shaped.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["branches"],
+  "properties": {
+    "branches": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "scope", "team", "lead"],
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$",
+            "description": "Structural branch key (the domain directory name)."
+          },
+          "scope": {
+            "type": "string",
+            "description": "Human-readable statement of what the branch governs."
+          },
+          "team": {
+            "type": "string",
+            "pattern": "^@[A-Za-z0-9][A-Za-z0-9/-]*$",
+            "description": "GitHub team handle that owns the branch (may contain a / org/team separator)."
+          },
+          "lead": {
+            "type": "string",
+            "pattern": "^@[A-Za-z0-9-]+$",
+            "description": "Named individual accountable for the branch (a single GitHub user handle; no /)."
+          },
+          "members": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Team membership handles."
+          },
+          "candidate": {
+            "type": "string",
+            "description": "De-facto owner harvested from the estate. Reference only."
+          }
+        }
+      }
+    }
+  }
+}

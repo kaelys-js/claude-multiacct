@@ -242,7 +242,7 @@ function h2Headings(markdown: string, stopAt?: string): string[] {
     if (inFence) continue;
     // H2 only: exactly two leading '#', not '### '.
     const m = /^##[ \t]+(.+?)\s*$/.exec(line);
-    if (!m || line.startsWith("###")) continue;
+    if (!m || m[1] === undefined || line.startsWith("###")) continue;
     const heading = m[1].trim();
     if (stopAt !== undefined && heading.toLowerCase() === stopAt) break;
     out.push(heading);
@@ -674,6 +674,7 @@ function parseArgs(args: string[]): CliOptions {
   let json = false;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
+    if (a === undefined) continue;
     if (a === "--json") {
       json = true;
     } else if (a === "--root") {

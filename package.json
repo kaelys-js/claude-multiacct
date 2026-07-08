@@ -1,4 +1,5 @@
 {
+  "$schema": "./.schemas/package.json",
   "name": "foundation-registry",
   "version": "0.0.0",
   "private": true,
@@ -7,13 +8,15 @@
   "license": "UNLICENSED",
   "packageManager": "pnpm@11.10.0",
   "engines": {
-    "node": ">=26"
+    "node": "26.4.0",
+    "pnpm": "11.10.0"
   },
   "scripts": {
     "validate": "node scripts/validate-records.ts",
     "typecheck": "tsc --noEmit",
     "test": "node --test",
-    "build-site": "node scripts/build-site.ts"
+    "build-site": "node scripts/build-site.ts",
+    "sync:check": "node scripts/check-toolchain-sync.ts"
   },
   "devDependencies": {
     "@types/node": "26.1.0",

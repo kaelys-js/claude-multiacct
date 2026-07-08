@@ -39,7 +39,7 @@ function h2FromTemplate(md: string): string[] {
     }
     if (inFence) continue;
     const m = /^##[ \t]+(.+?)\s*$/.exec(line);
-    if (!m || line.startsWith("###")) continue;
+    if (!m || m[1] === undefined || line.startsWith("###")) continue;
     const h = m[1].trim();
     if (h.toLowerCase() === "filled example") break;
     out.push(h);
@@ -483,7 +483,7 @@ test("FILENAME_MISMATCH fires when the slug is not lowercase-kebab (uppercase + 
   await cleanup();
   const badErrs = errors.filter((e) => e.path.includes("Bad Slug") && e.rule === "FILENAME_MISMATCH");
   assert.equal(badErrs.length, 1, "a malformed slug must be FILENAME_MISMATCH");
-  assert.ok(badErrs[0].message.includes("slug"), "the message must distinguish the slug-format failure");
+  assert.ok(badErrs[0]?.message.includes("slug"), "the message must distinguish the slug-format failure");
   assert.deepEqual(rules(errors, "adr-0002-clean-slug"), [], "the clean-slug sibling must pass");
 });
 
@@ -525,7 +525,7 @@ test("BODY_SECTIONS_MISSING fires when an ADR's body carries PDR sections instea
   // The message must name at least one ADR heading absent from the PDR body.
   const missingAdrHeading = adrSections.find((h) => !pdrSections.some((p) => p.toLowerCase() === h.toLowerCase()));
   assert.ok(missingAdrHeading !== undefined, "sanity: ADR and PDR templates must differ in at least one heading");
-  assert.ok(wrong[0].message.toLowerCase().includes(missingAdrHeading.toLowerCase()), `message must name a missing ADR heading (${missingAdrHeading})`);
+  assert.ok(wrong[0]?.message.toLowerCase().includes(missingAdrHeading.toLowerCase()), `message must name a missing ADR heading (${missingAdrHeading})`);
   assert.deepEqual(rules(errors, "adr-0002-right-body"), [], "the ADR with the correct body must stay clean");
 });
 

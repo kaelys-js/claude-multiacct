@@ -1,4 +1,16 @@
-# Supply-chain cooldown: do not install a dependency version until it is at
-# least this old (minutes). pnpm 11 defaults to 1440 (1 day); we lengthen to 3 days.
-minimumReleaseAge: 4320
-minimumReleaseAgeExclude: []
+# yaml-language-server: $schema=./.schemas/pnpm-workspace.json
+# Dependency cooldown is enforced at UPDATE time by Renovate (minimumReleaseAge:
+# 3 days), NOT here: with exact pins + a committed lockfile installed via
+# --frozen-lockfile, the install-time gate would only ever block our own pinned
+# toolchain. Kept explicitly at 0. (Same rationale as stardust.)
+minimumReleaseAge: 0
+# pnpm 11: deps allowed to run install scripts. None of ours need to.
+allowBuilds: {}
+# pnpm 11 made .npmrc auth/registry-only — non-registry settings are read from
+# HERE (or ~/.config/pnpm/config.yaml), NOT .npmrc. So the exact-pin + engine
+# enforcement that .npmrc used to carry lives here, where `pnpm config get`
+# and every install actually honour it. (.npmrc keeps the same keys for any
+# npm-compatible tooling that still reads it, but pnpm ignores them there.)
+saveExact: true
+savePrefix: ""
+engineStrict: true
