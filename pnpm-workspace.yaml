@@ -1,0 +1,4 @@
+# Supply-chain cooldown: do not install a dependency version until it is at
+# least this old (minutes). pnpm 11 defaults to 1440 (1 day); we lengthen to 3 days.
+minimumReleaseAge: 4320
+minimumReleaseAgeExclude: []
