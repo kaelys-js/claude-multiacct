@@ -40,11 +40,6 @@
       "description": "Authored/last-status-change date, ISO 8601 (YYYY-MM-DD). ajv-formats validates this in full mode.",
       "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
     },
-    "domain": {
-      "type": "string",
-      "description": "Owned branch of the registry this record lives under (harvested owners, not imposed). Free-form at Stage 1 but recommended to match a directory under records/.",
-      "enum": ["build", "infra", "auth", "data", "design", "product", "platform"]
-    },
     "references": {
       "type": "array",
       "description": "Up-chain parent references: IDs of records higher on the spine that this record depends on/cites. Every entry MUST resolve to an existing record (validator) and MUST satisfy the parent-TYPE contract (parent_type_matrix). Ordering is not significant; duplicates are disallowed.",
