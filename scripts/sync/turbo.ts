@@ -39,6 +39,8 @@ const CONFIG_FILES: Readonly<Record<string, readonly string[]>> = {
 	gitleaks: [".gitleaks.toml"],
 	typescript: ["tsconfig.json"],
 	reuse: ["REUSE.toml"],
+	editorconfig: [".editorconfig", ".editorconfig-checker.json"],
+	gitmeta: [".gitattributes", ".gitignore", ".npmrc", "scripts/qa/gitmeta-check.ts"],
 };
 
 // File globs implied by a tool's {@link Match}, i.e. the set of files that tool

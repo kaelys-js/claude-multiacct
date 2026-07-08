@@ -22,5 +22,5 @@ description = "Obvious non-secret placeholders used in docs and examples."
 regexTarget = "match"
 regexes = [
 	'''(?i)(example|sample|dummy|placeholder|changeme|your[-_]?(token|key|secret))''',
-	'''noreply@ttt\.example''',
+	'''no-reply@ttt\.studios''',
 ]

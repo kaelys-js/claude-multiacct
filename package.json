@@ -4,7 +4,7 @@
 	"version": "0.0.0",
 	"private": true,
 	"description": "Business-as-Code governance registry: owned decision records (PRD/PDR/ADR/SPEC/tasks/release) governing how clients are built. Not a runtime application.",
-	"license": "UNLICENSED",
+	"license": "SEE LICENSE IN LICENSE",
 	"type": "module",
 	"scripts": {
 		"prepare": "lefthook install",
@@ -31,6 +31,8 @@
 		"lint:markdownlint": "node scripts/qa/lint.ts --only markdownlint",
 		"lint:check-jsonschema": "node scripts/qa/lint.ts --only check-jsonschema",
 		"lint:gitleaks": "node scripts/qa/lint.ts --only gitleaks",
+		"lint:editorconfig": "node scripts/qa/lint.ts --only editorconfig",
+		"lint:gitmeta": "node scripts/qa/lint.ts --only gitmeta",
 		"format:oxfmt": "node scripts/qa/format.ts --only oxfmt",
 		"format:check:oxfmt": "node scripts/qa/format.ts --only oxfmt --check",
 		"format:taplo": "node scripts/qa/format.ts --only taplo",

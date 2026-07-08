@@ -164,6 +164,25 @@ const TOOLS_INPUT = [
 			fullArgv: ["gitleaks", "dir", ".", "--redact", "--no-banner"],
 		},
 	},
+	// ── EditorConfig conformance ───────────────────────────────────────
+	{
+		id: "editorconfig",
+		// Matched by the presence of `.editorconfig`; `ec` walks the repo itself
+		// (honouring `.editorconfig` + `.editorconfig-checker.json`), so it runs
+		// once with no file args. The mise-resolved binary is `ec`, not
+		// `editorconfig-checker`.
+		match: { kind: "regex", pattern: String.raw`(^|/)\.editorconfig$` },
+		lint: { mode: "project", argv: ["ec"] },
+	},
+	// ── Git metadata (.gitignore / .gitattributes contents) ────────────
+	{
+		id: "gitmeta",
+		// Matched by the presence of `.gitattributes` (i.e. always, for this repo);
+		// the check script asserts .gitignore/.gitattributes semantics via git
+		// plumbing, so it runs once with no file args.
+		match: { kind: "regex", pattern: String.raw`(^|/)\.gitattributes$` },
+		lint: { mode: "project", argv: ["node", "scripts/qa/gitmeta-check.ts"] },
+	},
 ];
 
 /** The validated registry. A malformed entry throws at import (fail loud). */

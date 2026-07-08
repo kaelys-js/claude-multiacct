@@ -1,8 +1,8 @@
 #:schema ./.schemas/reuse.json
 version = 1
 SPDX-PackageName = "foundation-registry"
-SPDX-PackageSupplier = "TTT Studios <noreply@ttt.example>"
-SPDX-PackageDownloadLocation = "NOASSERTION"
+SPDX-PackageSupplier = "TTT Studios <no-reply@ttt.studios>"
+SPDX-PackageDownloadLocation = "https://github.com/tttstudios/foundation-registry"
 
 [[annotations]]
 path = "**"

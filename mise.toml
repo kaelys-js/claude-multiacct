@@ -50,6 +50,9 @@ yamllint = "1.38.0"
 # ── secrets ──────────────────────────────────────────────────────────
 "aqua:gitleaks/gitleaks" = "8.30.1"
 
+# ── editorconfig conformance (whitespace / final-newline / eol) ───────
+"aqua:editorconfig-checker/editorconfig-checker" = "3.8.0"
+
 # ── licensing / SPDX compliance (REUSE) ──────────────────────────────
 # The charset-normalizer extra ships a pure-Python encoding detector so reuse
 # doesn't fall back to python-magic, which needs a system libmagic (absent here).

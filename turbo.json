@@ -115,6 +115,22 @@
 			"outputs": [],
 			"outputLogs": "new-only"
 		},
+		"lint:editorconfig": {
+			"inputs": ["$TURBO_DEFAULT$", ".editorconfig", ".editorconfig-checker.json"],
+			"outputs": [],
+			"outputLogs": "new-only"
+		},
+		"lint:gitmeta": {
+			"inputs": [
+				"$TURBO_DEFAULT$",
+				".gitattributes",
+				".gitignore",
+				".npmrc",
+				"scripts/qa/gitmeta-check.ts"
+			],
+			"outputs": [],
+			"outputLogs": "new-only"
+		},
 		"qa:lint:all": {
 			"dependsOn": [
 				"lint:hygiene",
@@ -125,7 +141,9 @@
 				"lint:markdownlint",
 				"lint:check-jsonschema",
 				"lint:reuse",
-				"lint:gitleaks"
+				"lint:gitleaks",
+				"lint:editorconfig",
+				"lint:gitmeta"
 			],
 			"outputs": [],
 			"cache": false
