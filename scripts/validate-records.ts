@@ -14,7 +14,7 @@
 //   REF_TO_REJECTED, PARENT_TYPE, PARENT_COUNT, SUPERSEDE_TYPE,
 //   SUPERSEDE_STATUS, SUPERSEDE_BACKLINK, SUPERSEDE_FORK, SUPERSEDE_CYCLE,
 //   FRONTMATTER_MISSING, FILENAME_MISMATCH, DOMAIN_UNKNOWN,
-//   OWNER_DOMAIN_MISMATCH.
+//   OWNER_DOMAIN_MISMATCH, BODY_SECTIONS_MISSING.
 
 import { readFile, stat } from "node:fs/promises";
 import { glob } from "node:fs/promises";
@@ -221,6 +221,70 @@ function domainOf(root: string, path: string): string | undefined {
   return segments[0];
 }
 
+// The four record types whose bodies are section-checked. Frontmatter carries
+// these UPPER-cased; the template files are lower-cased on disk.
+const BODY_CHECK_TYPES = ["PRD", "PDR", "ADR", "SPEC"];
+
+// Extract the top-level (H2, `## `) headings from markdown, skipping fenced
+// code blocks so a `##` inside ``` is ignored. `stopAt`, if given (lower-cased,
+// trimmed), halts scanning when that heading is reached (used to cut a
+// template's "## Filled example" section off the canonical set). Returns the
+// heading texts (trimmed, original case) in document order.
+function h2Headings(markdown: string, stopAt?: string): string[] {
+  const out: string[] = [];
+  let inFence = false;
+  for (const line of markdown.split("\n")) {
+    // Toggle fenced code blocks on ``` or ~~~ fence lines.
+    if (/^\s*(```|~~~)/.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    // H2 only: exactly two leading '#', not '### '.
+    const m = /^##[ \t]+(.+?)\s*$/.exec(line);
+    if (!m || line.startsWith("###")) continue;
+    const heading = m[1].trim();
+    if (stopAt !== undefined && heading.toLowerCase() === stopAt) break;
+    out.push(heading);
+  }
+  return out;
+}
+
+// DRIFT-PROOF canonical sections: the required H2 headings for each record type
+// are DERIVED from templates/<type>.template.md — the `## ` headings that appear
+// BEFORE the "## Filled example" line — so the check tracks the templates and
+// cannot drift from them (the same single-source discipline DOMAIN_UNKNOWN uses
+// for owners.yaml). templates/ lives at <root>/../templates. Missing/unreadable
+// templates/ or a needed template file is an OPERATIONAL fault (exit 2).
+async function loadCanonicalSections(root: string): Promise<Map<string, string[]>> {
+  const templatesDir = join(root, "..", "templates");
+  const byType = new Map<string, string[]>();
+  for (const type of BODY_CHECK_TYPES) {
+    const templatePath = join(templatesDir, `${type.toLowerCase()}.template.md`);
+    let text: string;
+    try {
+      text = await readFile(templatePath, "utf8");
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      throw { operational: true, message: `cannot read template ${templatePath}: ${message}` } satisfies OperationalFault;
+    }
+    // A template's frontmatter has no H2s; parse the body after it. Fall back to
+    // the whole file if gray-matter can't split (still only H2s matter).
+    let body = text;
+    try {
+      body = matter(text).content;
+    } catch {
+      body = text;
+    }
+    const headings = h2Headings(body, "filled example");
+    if (headings.length === 0) {
+      throw { operational: true, message: `template ${templatePath} declared no canonical '## ' sections` } satisfies OperationalFault;
+    }
+    byType.set(type, headings);
+  }
+  return byType;
+}
+
 /**
  * Pure core: validate every record under `root` and return the full error list.
  * Deterministic; never calls process.exit. On an operational fault it throws an
@@ -235,6 +299,11 @@ export async function validateRecords(root: string): Promise<RecordError[]> {
   // per-record error.
   const owners = await loadOwners(root);
   const allowedDomains = owners.domains;
+
+  // Load the canonical body sections per type from the templates (drift-proof
+  // single source). Missing/unreadable templates/ is an operational fault (exit
+  // 2), same discipline as owners.yaml above.
+  const canonicalSections = await loadCanonicalSections(root);
 
   // --- Load + compile the schema ONCE (single source of truth, from disk) ---
   let validate: ValidateFunction;
@@ -303,9 +372,11 @@ export async function validateRecords(root: string): Promise<RecordError[]> {
     }
 
     let data: unknown;
+    let content = "";
     try {
       const parsed = matter(raw);
       data = parsed.data;
+      content = parsed.content;
     } catch (e) {
       // A record's OWN malformed frontmatter is a record error, not an
       // operational fault — the file is a record and its YAML is broken.
@@ -359,6 +430,27 @@ export async function validateRecords(root: string): Promise<RecordError[]> {
         rule: "ID_PATTERN",
         message: `id '${id}' does not match ^(PRD|PDR|ADR|SPEC)-[0-9]{4}$`,
       });
+    }
+
+    // BODY_SECTIONS_MISSING — the record's markdown body must carry every
+    // canonical H2 section for its type (frontmatter can be perfect while the
+    // body is another type's template). Skip when type is missing/invalid —
+    // SCHEMA_INVALID already covers that, no double-report. Extra headings and
+    // any order are fine; comparison is trimmed + case-insensitive; headings
+    // inside fenced code blocks are ignored.
+    const bodyType = typeof data["type"] === "string" ? (data["type"] as string) : undefined;
+    if (bodyType !== undefined && canonicalSections.has(bodyType)) {
+      const required = canonicalSections.get(bodyType) ?? [];
+      const present = new Set(h2Headings(content).map((h) => h.toLowerCase()));
+      const missing = required.filter((h) => !present.has(h.toLowerCase()));
+      if (missing.length > 0) {
+        errors.push({
+          path,
+          recordId: id,
+          rule: "BODY_SECTIONS_MISSING",
+          message: `${bodyType} body is missing required section(s): ${missing.join("; ")}`,
+        });
+      }
     }
 
     // BUILD MODEL — index by id even if schema-invalid (so downstream ref checks

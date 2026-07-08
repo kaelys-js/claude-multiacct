@@ -13,11 +13,62 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, copyFile } from "node:fs/promises";
+import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import matter from "gray-matter";
 import { validateRecords } from "../scripts/validate-records.ts";
 import type { RecordError } from "../scripts/validate-records.ts";
+
+// The four record types whose templates drive body-section validation.
+const TEMPLATE_TYPES = ["prd", "pdr", "adr", "spec"];
+
+// Derive each type's canonical H2 headings from the REPO's real templates —
+// SAME single source the validator uses — so a valid fixture body is generated
+// from the templates and can never drift from what the validator requires. Tests
+// run with cwd = repo root (node --test), so the templates are at ./templates.
+function h2FromTemplate(md: string): string[] {
+  const body = matter(md).content;
+  const out: string[] = [];
+  let inFence = false;
+  for (const line of body.split("\n")) {
+    if (/^\s*(```|~~~)/.test(line)) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    const m = /^##[ \t]+(.+?)\s*$/.exec(line);
+    if (!m || line.startsWith("###")) continue;
+    const h = m[1].trim();
+    if (h.toLowerCase() === "filled example") break;
+    out.push(h);
+  }
+  return out;
+}
+
+// Cache: uppercase type -> canonical H2 headings, loaded from ./templates once.
+let canonicalCache: Map<string, string[]> | undefined;
+async function canonicalSections(): Promise<Map<string, string[]>> {
+  if (canonicalCache) return canonicalCache;
+  const m = new Map<string, string[]>();
+  for (const t of TEMPLATE_TYPES) {
+    const text = await readFile(join("templates", `${t}.template.md`), "utf8");
+    m.set(t.toUpperCase(), h2FromTemplate(text));
+  }
+  canonicalCache = m;
+  return m;
+}
+
+// A minimal-but-complete body for a record of `type`: every canonical H2 for
+// that type (so a baseline record never trips BODY_SECTIONS_MISSING). Returns ""
+// for an unknown/absent type (the body check is skipped for those anyway).
+async function canonicalBody(type: string | undefined): Promise<string> {
+  if (type === undefined) return "# Record body\n";
+  const sections = (await canonicalSections()).get(type);
+  if (!sections) return "# Record body\n";
+  return ["# Record body", "", ...sections.flatMap((h) => [`## ${h}`, "", "Placeholder.", ""])].join("\n");
+}
 
 // --- fixture helpers --------------------------------------------------------
 
@@ -51,7 +102,7 @@ function fm(over: Frontmatter): Frontmatter {
 
 // Serialise frontmatter to YAML by hand (so a test can inject deliberately
 // malformed values like an UNquoted date without gray-matter re-quoting it).
-function toYaml(f: Frontmatter): string {
+function toYaml(f: Frontmatter, body: string): string {
   const lines: string[] = ["---"];
   const put = (k: string, v: string) => lines.push(`${k}: ${v}`);
   if (f.id !== undefined) put("id", f.id);
@@ -66,7 +117,7 @@ function toYaml(f: Frontmatter): string {
   }
   if ("supersedes" in f) put("supersedes", f.supersedes === null ? "null" : String(f.supersedes));
   if ("supersededBy" in f) put("supersededBy", f.supersededBy === null ? "null" : String(f.supersededBy));
-  lines.push("---", "", "# Record body", "");
+  lines.push("---", "", body);
   return lines.join("\n");
 }
 
@@ -76,6 +127,9 @@ interface FileSpec {
   frontmatter: Frontmatter;
   // when set, write this literal content instead of serialising frontmatter
   raw?: string;
+  // when set, use this markdown body instead of the type's canonical sections
+  // (for the BODY_SECTIONS_MISSING negative test).
+  body?: string;
 }
 
 // The nine governed domains and their leads (mirrors owners.yaml
@@ -113,10 +167,22 @@ async function runFixture(files: FileSpec[], keys: string[] = DOMAIN_KEYS): Prom
   const root = join(base, "records");
   await mkdir(root, { recursive: true });
   await writeFile(join(base, "owners.yaml"), ownersYaml(keys), "utf8");
+  // Copy the repo's real templates into the fixture so the validator finds them
+  // at <root>/../templates and derives the SAME canonical sections the fixture
+  // bodies are generated from — single source, no drift.
+  const templatesDir = join(base, "templates");
+  await mkdir(templatesDir, { recursive: true });
+  for (const t of TEMPLATE_TYPES) {
+    await copyFile(join("templates", `${t}.template.md`), join(templatesDir, `${t}.template.md`));
+  }
   for (const f of files) {
     const full = join(root, f.rel);
     await mkdir(join(full, ".."), { recursive: true });
-    await writeFile(full, f.raw ?? toYaml(f.frontmatter), "utf8");
+    // A record's default body carries its type's canonical sections so valid
+    // records don't trip BODY_SECTIONS_MISSING; `f.body` overrides for the
+    // negative test; `f.raw` overrides the whole file.
+    const body = f.body ?? (await canonicalBody(f.frontmatter.type));
+    await writeFile(full, f.raw ?? toYaml(f.frontmatter, body), "utf8");
   }
   const errors = await validateRecords(root);
   return { errors, cleanup: () => rm(base, { recursive: true, force: true }) };
@@ -437,6 +503,60 @@ test("OWNER_DOMAIN_MISMATCH fires when a record's owner is not its domain's lead
   assert.ok(mismatch.includes("OWNER_DOMAIN_MISMATCH"), "owner != domain lead must be OWNER_DOMAIN_MISMATCH");
   assert.deepEqual(rules(errors, "adr-0002-right-owner"), [], "the record owned by the real backend lead must stay clean");
   assert.deepEqual(rules(errors, "prd-0001"), [], "the governance PRD (owner = governance lead) must stay clean");
+});
+
+test("BODY_SECTIONS_MISSING fires when an ADR's body carries PDR sections instead of ADR sections", async () => {
+  // WHY: frontmatter can be a perfect ADR while the markdown body was copied
+  // from the PDR template — the record LOOKS right in the index but its actual
+  // content is the wrong shape. The body must carry every canonical ADR heading;
+  // a PDR body (Problem/Decision/…) is missing ADR headings like 'Context and
+  // problem statement'. A sibling ADR with the correct body must stay clean.
+  const pdrSections = (await canonicalSections()).get("PDR") ?? [];
+  const adrSections = (await canonicalSections()).get("ADR") ?? [];
+  const pdrBody = ["# Record body", "", ...pdrSections.flatMap((h) => [`## ${h}`, "", "Placeholder.", ""])].join("\n");
+  const { errors, cleanup } = await runFixture([
+    validPrd,
+    { rel: "build/adr-0001-wrong-body.md", frontmatter: fm({ id: "ADR-0001", type: "ADR", owner: "@lead-build", references: ["PRD-0001"], supersedes: null }), body: pdrBody },
+    { rel: "build/adr-0002-right-body.md", frontmatter: fm({ id: "ADR-0002", type: "ADR", owner: "@lead-build", references: ["PRD-0001"], supersedes: null }) },
+  ]);
+  await cleanup();
+  const wrong = errors.filter((e) => e.path.includes("adr-0001-wrong-body") && e.rule === "BODY_SECTIONS_MISSING");
+  assert.equal(wrong.length, 1, "an ADR with a PDR body must fire BODY_SECTIONS_MISSING");
+  // The message must name at least one ADR heading absent from the PDR body.
+  const missingAdrHeading = adrSections.find((h) => !pdrSections.some((p) => p.toLowerCase() === h.toLowerCase()));
+  assert.ok(missingAdrHeading !== undefined, "sanity: ADR and PDR templates must differ in at least one heading");
+  assert.ok(wrong[0].message.toLowerCase().includes(missingAdrHeading.toLowerCase()), `message must name a missing ADR heading (${missingAdrHeading})`);
+  assert.deepEqual(rules(errors, "adr-0002-right-body"), [], "the ADR with the correct body must stay clean");
+});
+
+test("FILENAME_MISMATCH fires when the filename type disagrees with the frontmatter type (mislabeled record)", async () => {
+  // WHY (explicit cross-type #1): a file named adr-0001-x.md but whose
+  // frontmatter is a PDR (id PDR-0001, type PDR) is mislabeled — the filename
+  // promises an ADR, the frontmatter delivers a PDR. The filename must encode the
+  // record's own id, so 'adr-0001-x.md' cannot host PDR-0001: FILENAME_MISMATCH.
+  const { errors, cleanup } = await runFixture([
+    validPrd,
+    { rel: "build/adr-0001-x.md", frontmatter: fm({ id: "PDR-0001", type: "PDR", owner: "@lead-build", references: ["PRD-0001"], supersedes: null }) },
+  ]);
+  await cleanup();
+  assert.ok(rules(errors, "build/adr-0001-x").includes("FILENAME_MISMATCH"), "a filename type that disagrees with the frontmatter id must be FILENAME_MISMATCH");
+  assert.deepEqual(rules(errors, "prd-0001"), [], "the valid PRD sibling must stay clean");
+});
+
+test("SCHEMA_INVALID fires when the frontmatter id and type disagree internally (id ADR-0003, type PDR)", async () => {
+  // WHY (explicit cross-type #2): the schema's per-type branch pins the id regex
+  // to the type (a PDR's id must match ^PDR-\\d{4}$). An id of ADR-0003 with
+  // type PDR is internally inconsistent and must fail shape validation — you
+  // cannot smuggle an ADR id into a PDR record.
+  const { errors, cleanup } = await runFixture([
+    validPrd,
+    // Name the file for its declared id (ADR-0003) so FILENAME_MISMATCH doesn't
+    // mask the point — we want the id/type disagreement itself to be SCHEMA_INVALID.
+    { rel: "build/adr-0003-id-type-disagree.md", frontmatter: fm({ id: "ADR-0003", type: "PDR", owner: "@lead-build", references: ["PRD-0001"], supersedes: null }) },
+  ]);
+  await cleanup();
+  assert.ok(rules(errors, "adr-0003-id-type-disagree").includes("SCHEMA_INVALID"), "an id/type mismatch must be SCHEMA_INVALID");
+  assert.deepEqual(rules(errors, "prd-0001"), [], "the valid PRD sibling must stay clean");
 });
 
 test("DOMAIN_UNKNOWN fires when a record sits under a non-governed domain directory", async () => {
