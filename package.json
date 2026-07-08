@@ -17,6 +17,7 @@
 		"qa:lint": "turbo run qa:lint:all",
 		"qa:format": "turbo run qa:format:all",
 		"qa:format:check": "turbo run qa:format:check:all",
+		"qa:schema": "node scripts/qa/schema-check.ts",
 		"qa:lint:all": "node -e \"process.exit(0)\"",
 		"qa:format:all": "node -e \"process.exit(0)\"",
 		"qa:format:check:all": "node -e \"process.exit(0)\"",
