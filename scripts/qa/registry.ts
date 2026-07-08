@@ -67,6 +67,13 @@ export const ToolSchema = v.pipe(
 		match: MatchSchema,
 		lint: v.optional(LintSchema),
 		format: v.optional(FormatSchema),
+		/**
+		 * Skip this tool in staged (pre-commit) mode; run it only in a whole-repo
+		 * pass (pre-push / CI / `pnpm qa:lint`). For tools that need the full tree
+		 * or do network IO we don't want on every commit (e.g. schema-check fetches
+		 * remote `$schema`s). Defaults to false — tools run in both modes.
+		 */
+		wholeRepoOnly: v.optional(v.boolean(), false),
 	}),
 	// A tool must do at least one of lint/format, else it is dead config.
 	v.check(
@@ -167,12 +174,13 @@ const TOOLS_INPUT = [
 	// ── EditorConfig conformance ───────────────────────────────────────
 	{
 		id: "editorconfig",
-		// Matched by the presence of `.editorconfig`; `ec` walks the repo itself
-		// (honouring `.editorconfig` + `.editorconfig-checker.json`), so it runs
-		// once with no file args. The mise-resolved binary is `ec`, not
-		// `editorconfig-checker`.
+		// Matched by the presence of `.editorconfig`; the wrapper walks the repo via
+		// `ec` (honouring `.editorconfig` + `.editorconfig-checker.json`), so it runs
+		// once with no file args. It runs `ec` through the mise wrapper and, unlike
+		// bare `ec`, fails when `.editorconfig` is unparseable (ec prints that error
+		// but exits 0).
 		match: { kind: "regex", pattern: String.raw`(^|/)\.editorconfig$` },
-		lint: { mode: "project", argv: ["ec"] },
+		lint: { mode: "project", argv: ["node", "scripts/qa/editorconfig-check.ts"] },
 	},
 	// ── Git metadata (.gitignore / .gitattributes contents) ────────────
 	{
@@ -182,6 +190,17 @@ const TOOLS_INPUT = [
 		// plumbing, so it runs once with no file args.
 		match: { kind: "regex", pattern: String.raw`(^|/)\.gitattributes$` },
 		lint: { mode: "project", argv: ["node", "scripts/qa/gitmeta-check.ts"] },
+	},
+	// ── Schema instance validation (config/data vs schemas) ────────────
+	{
+		id: "schema",
+		// Matched by the presence of `package.json` (always tracked) so the tool
+		// triggers on any whole-repo pass; schema-check itself auto-discovers every
+		// config file. `wholeRepoOnly` keeps it out of the pre-commit staged path
+		// because it fetches remote `$schema`s (no network on every commit).
+		match: { kind: "regex", pattern: String.raw`(^|/)package\.json$` },
+		wholeRepoOnly: true,
+		lint: { mode: "project", argv: ["node", "scripts/qa/schema-check.ts"] },
 	},
 ];
 

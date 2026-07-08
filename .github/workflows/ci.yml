@@ -1,10 +1,11 @@
-# Four parallel jobs (format, lint, sync, schema) — wall-time is the slowest
-# job, not the sum. Every job sources its toolchain from the repo's own mise
-# (via the vendored bin/mise wrapper), so CI uses the exact node/pnpm/linter
-# versions pinned in mise.toml + mise.lock — identical to local, no external
-# setup action. Each job is self-contained and a required gate (no `if:`).
-# Typecheck (tsc) and REUSE license compliance run inside the `lint` job as
-# members of the qa:lint pipeline, so there is no separate `types` job.
+# Three parallel jobs (format, lint, sync) — wall-time is the slowest job, not
+# the sum. Every job sources its toolchain from the repo's own mise (via the
+# vendored bin/mise wrapper), so CI uses the exact node/pnpm/linter versions
+# pinned in mise.toml + mise.lock — identical to local, no external setup
+# action. Each job is self-contained and a required gate (no `if:`).
+# Typecheck (tsc), REUSE license compliance, AND schema instance validation all
+# run inside the `lint` job as members of the qa:lint pipeline, so there is no
+# separate `types` or `schema` job.
 
 name: CI
 
@@ -99,29 +100,3 @@ jobs:
         run: ./bin/mise exec -- pnpm install --frozen-lockfile
       - name: Generated-file drift (versions / turbo / schemas)
         run: ./bin/mise exec -- pnpm run sync:check
-
-  schema:
-    name: schema
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Restore mise toolchain
-        uses: actions/cache@v4
-        with:
-          path: .mise
-          key: mise-${{ runner.os }}-${{ hashFiles('mise.toml', 'mise.lock') }}
-      - name: Expose vendored mise on PATH
-        run: |
-          ./bin/mise --version >/dev/null 2>&1 || true
-          mkdir -p "$HOME/.local/bin"
-          ln -sf "$(ls "$PWD"/.mise/mise-* | head -n1)" "$HOME/.local/bin/mise"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - name: Install toolchain (mise — node, pnpm, check-jsonschema)
-        run: ./bin/mise install
-      - name: Install dependencies
-        run: ./bin/mise exec -- pnpm install --frozen-lockfile
-      - name: Schema instance validation (config/data vs schemas)
-        run: ./bin/mise exec -- pnpm run qa:schema

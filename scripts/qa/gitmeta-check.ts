@@ -15,6 +15,8 @@
  *  - No tracked file is git-ignored, and the tree has no line-ending
  *    renormalisation drift (beyond files already modified in the working tree).
  *  - `.npmrc` is well-formed (pnpm can parse it).
+ *  - Neither `.gitignore` nor `.gitattributes` has an exact-duplicate content
+ *    line, and git emits no parse warning/error over sample paths.
  *
  * It NEVER leaves staged or renormalised changes behind.
  *
@@ -22,6 +24,8 @@
  */
 
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 const ROOT = ((): string => {
 	const r = spawnSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" });
@@ -34,10 +38,10 @@ function fail(message: string): void {
 	failures.push(message);
 }
 
-// Run a git command in the repo root, returning status + trimmed stdout.
-function git(args: readonly string[]): { status: number; stdout: string } {
+// Run a git command in the repo root, returning status + raw stdout + stderr.
+function git(args: readonly string[]): { status: number; stdout: string; stderr: string } {
 	const r = spawnSync("git", [...args], { cwd: ROOT, encoding: "utf8" });
-	return { status: r.status ?? 1, stdout: r.stdout };
+	return { status: r.status ?? 1, stdout: r.stdout, stderr: r.stderr ?? "" };
 }
 
 // ── .gitignore via `git check-ignore` ────────────────────────────────
@@ -177,11 +181,89 @@ function checkNpmrc(): void {
 	}
 }
 
+// ── duplicate content lines in .gitignore / .gitattributes ────────────
+
+// The exact content lines of a git-metadata file, dropping blank lines and
+// full-line `#` comments (a repeated comment or blank line is not a defect).
+// Content is compared verbatim otherwise — trailing whitespace is significant to
+// git, so we do NOT trim it away.
+function contentLines(file: string): string[] {
+	let text: string;
+	try {
+		text = readFileSync(join(ROOT, file), "utf8");
+	} catch {
+		return [];
+	}
+	return text.split("\n").filter((line) => {
+		const trimmed = line.trim();
+		return trimmed !== "" && !trimmed.startsWith("#");
+	});
+}
+
+// Flag any exact-duplicate content line in a git-metadata file. Duplicate
+// patterns are dead weight at best and a sign of a merge/edit mistake at worst.
+//
+// NOTE: we deliberately do NOT implement dead-negation detection (a `!pat` whose
+// pattern nothing prior ignores). This repo carries INTENTIONAL defensive
+// negations — `!pnpm-lock.yaml`, `!bin/mise` — that nothing earlier ignores, and
+// flagging them would be a false positive.
+function checkDuplicateLines(file: string): void {
+	const seen = new Set<string>();
+	const dupes = new Set<string>();
+	for (const line of contentLines(file)) {
+		if (seen.has(line)) {
+			dupes.add(line);
+		}
+		seen.add(line);
+	}
+	if (dupes.size > 0) {
+		fail(`${file}: duplicate content line(s): ${[...dupes].map((d) => `"${d}"`).join(", ")}.`);
+	}
+}
+
+// ── git parse warnings on .gitattributes / .gitignore ─────────────────
+
+// Ask git to exercise `.gitattributes` and `.gitignore` over a few sample paths
+// and fail if git emits any parse diagnostic about those files. A malformed line
+// makes git print to stderr while still exiting 0 (e.g. `warning: … .gitattributes …`,
+// or `foo!bad is not a valid attribute name: .gitattributes:N`), so — like the
+// editorconfig gate — the diagnostic itself must be promoted to a failure.
+// `core.attributesfile=/dev/null` isolates the repo's own `.gitattributes` from
+// any global attributes file. `check-attr`/`check-ignore` write nothing to stderr
+// on a clean run, so we treat BOTH the explicit `warning:`/`error:`/`fatal:`
+// prefixes AND any stderr that names `.gitattributes`/`.gitignore` (git's parse
+// diagnostics cite the offending file+line) as a defect.
+const GITMETA_WARN = /^(?:warning|error|fatal):|\.git(?:attributes|ignore)\b/imu;
+const SAMPLE_PATHS: readonly string[] = ["x.md", "x.ts", "x.json", "pnpm-lock.yaml", "x.png"];
+
+function checkGitParseWarnings(): void {
+	const attr = git([
+		"-c",
+		"core.attributesfile=/dev/null",
+		"check-attr",
+		"--all",
+		"--",
+		...SAMPLE_PATHS,
+	]);
+	if (GITMETA_WARN.test(attr.stderr)) {
+		fail(`.gitattributes: git emitted a parse diagnostic: ${attr.stderr.trim()}`);
+	}
+	for (const path of SAMPLE_PATHS) {
+		const ignore = git(["check-ignore", "-q", path]);
+		if (GITMETA_WARN.test(ignore.stderr)) {
+			fail(`.gitignore: git emitted a parse diagnostic: ${ignore.stderr.trim()}`);
+		}
+	}
+}
+
 checkGitignore();
 checkGitattributes();
 checkTrackedNotIgnored();
 checkRenormalize();
 checkNpmrc();
+checkDuplicateLines(".gitignore");
+checkDuplicateLines(".gitattributes");
+checkGitParseWarnings();
 
 if (failures.length > 0) {
 	process.stderr.write(`gitmeta-check: ${String(failures.length)} assertion(s) failed:\n`);

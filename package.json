@@ -33,6 +33,7 @@
 		"lint:gitleaks": "node scripts/qa/lint.ts --only gitleaks",
 		"lint:editorconfig": "node scripts/qa/lint.ts --only editorconfig",
 		"lint:gitmeta": "node scripts/qa/lint.ts --only gitmeta",
+		"lint:schema": "node scripts/qa/lint.ts --only schema",
 		"format:oxfmt": "node scripts/qa/format.ts --only oxfmt",
 		"format:check:oxfmt": "node scripts/qa/format.ts --only oxfmt --check",
 		"format:taplo": "node scripts/qa/format.ts --only taplo",

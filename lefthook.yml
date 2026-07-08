@@ -1,8 +1,7 @@
+# yaml-language-server: $schema=./.schemas/lefthook.json
 #
 # https://github.com/evilmartians/lefthook
 #
-
-# yaml-language-server: $schema=https://raw.githubusercontent.com/evilmartians/lefthook/master/schema.json
 
 # Hook execution model:
 #   piped: true  — commands run in priority order; a failure stops the pipeline
@@ -48,9 +47,11 @@ pre-commit:
 # Thorough, whole-project validation before code leaves the machine. Pre-commit
 # handles fast staged-file format+lint; pre-push runs the rest of the pipeline
 # that needs the full project graph, not just the staged diff.
-# Pipeline: sync-drift (p0) → schema (p1) → lint (p2) → format-check (p3)
-# Whole-project typecheck (tsc) and REUSE license compliance are members of the
-# `qa:lint` pipeline now, so the p2 lint step covers them — no separate step.
+# Pipeline: sync-drift (p0) → lint (p1) → format-check (p2)
+# Whole-project typecheck (tsc), REUSE license compliance, AND schema instance
+# validation are members of the `qa:lint` pipeline now (schema-check runs as the
+# `wholeRepoOnly` `schema` tool), so the p1 lint step covers them — no separate
+# schema step.
 
 pre-push:
   piped: true
@@ -64,23 +65,17 @@ pre-push:
       priority: 0
       run: pnpm sync:check
       fail_text: "Generated-file drift. Run 'pnpm sync' to regenerate (versions/turbo/schemas)."
-    # p1 — Schema instance validation: config/data files conform to their
-    # schemas (owners.yaml, package.json, tsconfig.json, …). Runs after the drift
-    # gate so it validates the in-tree schemas, and is a REQUIRED CI job too.
-    schema:
-      priority: 1
-      run: pnpm qa:schema
-      fail_text: "Schema validation failed. Run 'pnpm qa:schema' to see failures."
-    # p2 — Whole-repo lint (every tool over every tracked file). This includes
-    # the whole-project typecheck (tsc --noEmit) and REUSE license compliance
-    # (reuse lint), which are members of the qa:lint pipeline.
+    # p1 — Whole-repo lint (every tool over every tracked file). This includes
+    # the whole-project typecheck (tsc --noEmit), REUSE license compliance
+    # (reuse lint), and schema instance validation (the `wholeRepoOnly` `schema`
+    # tool) — all members of the qa:lint pipeline.
     lint:
-      priority: 2
+      priority: 1
       run: pnpm qa:lint
       fail_text: "Linting failed. Run 'pnpm qa:lint' to see failures."
-    # p3 — Whole-repo format check (non-zero if anything is unformatted).
+    # p2 — Whole-repo format check (non-zero if anything is unformatted).
     format-check:
-      priority: 3
+      priority: 2
       run: pnpm qa:format:check
       fail_text: "Formatting drift. Run 'pnpm qa:format' to fix."
 

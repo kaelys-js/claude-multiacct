@@ -64,6 +64,10 @@ const SCHEMA_SOURCES: Readonly<Record<string, (toml: string) => string>> = {
 		`https://raw.githubusercontent.com/DavidAnson/markdownlint-cli2/v${readToolVersion(t, "npm:markdownlint-cli2")}/schema/markdownlint-cli2-config-schema.json`,
 	// mise ships its own always-current schema (unversioned; mise self-bootstraps).
 	mise: () => "https://mise.jdx.dev/schema/mise.json",
+	// lefthook + commitlint ship public upstream schemas; vendored UNVERSIONED (like
+	// mise/taplo) so an offline editor still validates lefthook.yml / commitlint.config.json.
+	lefthook: () => "https://raw.githubusercontent.com/evilmartians/lefthook/master/schema.json",
+	commitlint: () => "https://json.schemastore.org/commitlintrc.json",
 	// ── SchemaStore snapshots (unversioned; re-fetched fresh) ──────────
 	taplo: () => schemaStore("taplo"),
 	yamllint: () => schemaStore("yamllint"),

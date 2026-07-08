@@ -175,7 +175,12 @@ export function run(mode: Mode, staged: string[] | null, only: string | null = n
 	let ok = true;
 
 	// When `--only <id>` is set, restrict to that single tool; otherwise every tool.
-	const applicable = only === null ? TOOLS : TOOLS.filter((tool) => tool.id === only);
+	// `wholeRepoOnly` tools are skipped in staged (pre-commit) mode — they need the
+	// full tree / do network IO we don't want on every commit — but run normally in
+	// a whole-repo pass (pre-push / CI / `pnpm qa:lint`).
+	const applicable = (only === null ? TOOLS : TOOLS.filter((tool) => tool.id === only)).filter(
+		(tool) => wholeRepo || !tool.wholeRepoOnly,
+	);
 
 	if (mode === "lint") {
 		if ((only === null || only === "hygiene") && !runHygiene(candidates)) {

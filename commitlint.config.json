@@ -1,5 +1,5 @@
 {
-	"$schema": "https://www.schemastore.org/commitlintrc.json",
+	"$schema": "./.schemas/commitlint.json",
 	"extends": ["@commitlint/config-conventional"],
 	"rules": {
 		"type-enum": [

@@ -39,7 +39,7 @@ const CONFIG_FILES: Readonly<Record<string, readonly string[]>> = {
 	gitleaks: [".gitleaks.toml"],
 	typescript: ["tsconfig.json"],
 	reuse: ["REUSE.toml"],
-	editorconfig: [".editorconfig", ".editorconfig-checker.json"],
+	editorconfig: [".editorconfig", ".editorconfig-checker.json", "scripts/qa/editorconfig-check.ts"],
 	gitmeta: [".gitattributes", ".gitignore", ".npmrc", "scripts/qa/gitmeta-check.ts"],
 };
 
