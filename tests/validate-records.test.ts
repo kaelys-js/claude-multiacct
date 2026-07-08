@@ -34,11 +34,16 @@ interface Frontmatter {
 }
 
 // A quoted, schema-valid baseline for each field. Individual fixtures override.
+// Default owner is the governance lead (@lead-foundation) because unless a
+// fixture says otherwise its records sit under records/governance/ — so the
+// default owner must equal that domain's lead or every governance fixture would
+// trip OWNER_DOMAIN_MISMATCH. Records placed in other domain dirs (build/,
+// backend/, …) override `owner` to that domain's lead.
 function fm(over: Frontmatter): Frontmatter {
   return {
     title: "A sufficiently long record title",
     status: "accepted",
-    owner: "@lead-governance",
+    owner: LEAD_OF["governance"],
     date: "'2026-05-18'",
     ...over,
   };
@@ -73,14 +78,30 @@ interface FileSpec {
   raw?: string;
 }
 
-// The nine governed domain branch keys (owners.yaml `branches[].key`). Domain
-// is structural now — a record lives under records/<domain>/ — so every fixture
-// needs an owners.yaml the validator reads to know the sanctioned set, and every
-// record must sit under a valid domain dir or it trips DOMAIN_UNKNOWN.
-const DOMAIN_KEYS = ["governance", "build", "design", "frontend", "backend", "infra", "security", "data", "observability"];
+// The nine governed domains and their leads (mirrors owners.yaml
+// `branches[].key` / `branches[].lead`). Domain is structural now — a record
+// lives under records/<domain>/ — so every fixture needs an owners.yaml the
+// validator reads for BOTH the sanctioned domain set (DOMAIN_UNKNOWN) and each
+// domain's lead (OWNER_DOMAIN_MISMATCH). A record's owner must equal its
+// domain's lead or it trips OWNER_DOMAIN_MISMATCH, so fixtures set owner from
+// this map.
+const LEAD_OF: Record<string, string> = {
+  governance: "@lead-foundation",
+  build: "@lead-build",
+  design: "@lead-design",
+  frontend: "@lead-frontend",
+  backend: "@lead-backend",
+  infra: "@lead-infra",
+  security: "@lead-security",
+  data: "@lead-data",
+  observability: "@lead-observability",
+};
+const DOMAIN_KEYS = Object.keys(LEAD_OF);
 
 function ownersYaml(keys: string[]): string {
-  return ["branches:", ...keys.map((k) => `  - key: ${k}\n    team: "@ttt/${k}"`)].join("\n") + "\n";
+  return (
+    ["branches:", ...keys.map((k) => `  - key: ${k}\n    team: "@ttt/${k}"\n    lead: "${LEAD_OF[k]}"`)].join("\n") + "\n"
+  );
 }
 
 // Build a temp registry, run the validator, return errors + a cleanup fn. Writes
@@ -381,6 +402,41 @@ test("FILENAME_MISMATCH fires when the basename does not encode the id", async (
   await cleanup();
   assert.ok(rules(errors, "wrong-name-here").includes("FILENAME_MISMATCH"), "mismatched basename must be FILENAME_MISMATCH");
   assert.deepEqual(rules(errors, "prd-0001"), [], "the valid PRD sibling must stay clean");
+});
+
+test("FILENAME_MISMATCH fires when the slug is not lowercase-kebab (uppercase + space + punctuation)", async () => {
+  // WHY: the filename slug must be lowercase-kebab so id⇄path is unambiguous and
+  // the slug is URL/anchor-safe for the static index. A name like
+  // 'adr-0001-Bad Slug!.md' has the right id prefix but an illegal slug — it must
+  // still fail FILENAME_MISMATCH, with a message that names the slug problem.
+  const { errors, cleanup } = await runFixture([
+    validPrd,
+    { rel: "build/adr-0001-Bad Slug!.md", frontmatter: fm({ id: "ADR-0001", type: "ADR", owner: "@lead-build", references: ["PRD-0001"], supersedes: null }) },
+    { rel: "build/adr-0002-clean-slug.md", frontmatter: fm({ id: "ADR-0002", type: "ADR", owner: "@lead-build", references: ["PRD-0001"], supersedes: null }) },
+  ]);
+  await cleanup();
+  const badErrs = errors.filter((e) => e.path.includes("Bad Slug") && e.rule === "FILENAME_MISMATCH");
+  assert.equal(badErrs.length, 1, "a malformed slug must be FILENAME_MISMATCH");
+  assert.ok(badErrs[0].message.includes("slug"), "the message must distinguish the slug-format failure");
+  assert.deepEqual(rules(errors, "adr-0002-clean-slug"), [], "the clean-slug sibling must pass");
+});
+
+test("OWNER_DOMAIN_MISMATCH fires when a record's owner is not its domain's lead", async () => {
+  // WHY: ownership must match placement — a record under records/backend/ is
+  // owned by the backend lead. A backend record owned by @lead-design has an
+  // accountable author who does not own that branch; CODEOWNERS routing and the
+  // record's stated owner would disagree. A sibling backend record owned by the
+  // real backend lead must stay clean (discriminator).
+  const { errors, cleanup } = await runFixture([
+    validPrd,
+    { rel: "backend/adr-0001-wrong-owner.md", frontmatter: fm({ id: "ADR-0001", type: "ADR", owner: "@lead-design", references: ["PRD-0001"], supersedes: null }) },
+    { rel: "backend/adr-0002-right-owner.md", frontmatter: fm({ id: "ADR-0002", type: "ADR", owner: "@lead-backend", references: ["PRD-0001"], supersedes: null }) },
+  ]);
+  await cleanup();
+  const mismatch = rules(errors, "adr-0001-wrong-owner");
+  assert.ok(mismatch.includes("OWNER_DOMAIN_MISMATCH"), "owner != domain lead must be OWNER_DOMAIN_MISMATCH");
+  assert.deepEqual(rules(errors, "adr-0002-right-owner"), [], "the record owned by the real backend lead must stay clean");
+  assert.deepEqual(rules(errors, "prd-0001"), [], "the governance PRD (owner = governance lead) must stay clean");
 });
 
 test("DOMAIN_UNKNOWN fires when a record sits under a non-governed domain directory", async () => {

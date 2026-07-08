@@ -6,7 +6,7 @@ type: PDR
 title: <the feature / product decision, as a noun phrase>
 status: proposed            # one of: proposed | accepted | superseded
 # owner: CODEOWNERS handle. For a PDR this is product/delivery.
-owner: '@lead-product'
+owner: '@lead-foundation'
 date: '2026-01-01'
 # references: MUST contain at least one up-chain PRD id. May also cite sibling
 #   PDR/ADR ids this decision depends on. Never references a SPEC (that is down-chain).
@@ -87,7 +87,7 @@ id: PDR-0001
 type: PDR
 title: Static index site for the foundation registry
 status: accepted
-owner: '@lead-product'
+owner: '@lead-foundation'
 date: '2026-05-22'
 references:
   - PRD-0001

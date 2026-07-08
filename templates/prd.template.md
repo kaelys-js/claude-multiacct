@@ -10,8 +10,8 @@ title: <one line, imperative or noun-phrase; no trailing period>
 #   superseded → replaced by a newer record (name it in `supersedes` of the successor)
 status: proposed            # one of: proposed | accepted | superseded
 # owner: a CODEOWNERS handle (team or user), literal, incl. leading '@'.
-#   For a PRD this is product/delivery, e.g. @lead-governance or @delivery-lead.
-owner: '@lead-governance'
+#   For a PRD this is product/delivery, e.g. @lead-foundation or @delivery-lead.
+owner: '@lead-foundation'
 date: '2026-01-01'          # ISO-8601; date this record reached its current status
 # references: up-chain parent IDs this record derives from.
 #   PRD is the spine ROOT: this is normally [] (empty). Cross-links to other
@@ -99,7 +99,7 @@ id: PRD-0001
 type: PRD
 title: Why the foundation exists
 status: accepted
-owner: '@lead-product'
+owner: '@lead-foundation'
 date: '2026-05-18'
 references: []
 supersedes: null

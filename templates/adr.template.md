@@ -6,7 +6,7 @@ type: ADR
 title: <the architectural decision, as a noun phrase>
 status: proposed            # one of: proposed | accepted | superseded
 # owner: CODEOWNERS handle for the governance domain this decision lives in,
-#   e.g. @lead-build, @lead-infra, @lead-sec, @lead-data, @lead-backend.
+#   e.g. @lead-build, @lead-infra, @lead-security, @lead-data, @lead-backend.
 owner: '@lead-build'
 date: '2026-01-01'
 # references: MUST contain at least one up-chain PRD id; may cite related ADR/PDR ids.

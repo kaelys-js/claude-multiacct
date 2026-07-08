@@ -8,6 +8,13 @@
 //
 // Run natively by Node 26 (`node scripts/validate-records.ts`) — erasable TS
 // syntax only (no enums/namespaces/param-properties); `tsc --noEmit` type-checks.
+//
+// RULE-CODE ROSTER (stable machine codes emitted on RecordError.rule):
+//   SCHEMA_INVALID, ID_DUPLICATE, ID_PATTERN, REF_UNRESOLVED, REF_SELF,
+//   REF_TO_REJECTED, PARENT_TYPE, PARENT_COUNT, SUPERSEDE_TYPE,
+//   SUPERSEDE_STATUS, SUPERSEDE_BACKLINK, SUPERSEDE_FORK, SUPERSEDE_CYCLE,
+//   FRONTMATTER_MISSING, FILENAME_MISMATCH, DOMAIN_UNKNOWN,
+//   OWNER_DOMAIN_MISMATCH.
 
 import { readFile, stat } from "node:fs/promises";
 import { glob } from "node:fs/promises";
@@ -51,6 +58,11 @@ interface RecordNode {
   supersedes: string | null;
   supersededBy: string | null;
   path: string;
+  // Structural domain (first path segment beneath root) and the record's owner
+  // handle from frontmatter — used by the OWNER_DOMAIN_MISMATCH invariant.
+  domain: string | undefined;
+  domainGoverned: boolean;
+  owner: string | undefined;
 }
 
 // An operational fault (unreadable dir, bad glob) — distinct from a record
@@ -120,15 +132,30 @@ function schemaErrorToMessage(e: ErrorObject): string {
   return msg;
 }
 
-// FILENAME_CHECK (B.3 step 3): basename must be `<id-lowercased>-<slug>.md`.
-// e.g. id ADR-0001 -> basename must start with "adr-0001-" and be a .md file.
-function filenameMatchesId(path: string, id: string): boolean {
+// FILENAME_CHECK (B.3 step 3): basename must be `<id-lowercased>-<slug>.md`,
+// e.g. `adr-0001-build-orchestrator.md`. The slug (everything after the
+// `<id-lowercased>-` prefix) must be lowercase-kebab so the id⇄path lockstep is
+// unambiguous and URL/anchor-safe for the index. Returns a specific failure
+// reason so the caller's FILENAME_MISMATCH message distinguishes a wrong
+// id-prefix from a malformed slug.
+const SLUG_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+
+// undefined = ok; otherwise a human reason for the mismatch.
+function filenameMismatchReason(path: string, id: string): string | undefined {
   const base = basename(path);
-  if (!base.endsWith(".md")) return false;
+  if (!base.endsWith(".md")) {
+    return `basename '${base}' must be a .md file`;
+  }
   const stem = base.slice(0, -".md".length);
   const prefix = `${id.toLowerCase()}-`;
-  // Require the id prefix AND a non-empty slug after it.
-  return stem.startsWith(prefix) && stem.length > prefix.length;
+  if (!stem.startsWith(prefix) || stem.length <= prefix.length) {
+    return `basename must be '<id-lowercased>-<slug>.md' for ${id} (expected prefix '${prefix}')`;
+  }
+  const slug = stem.slice(prefix.length);
+  if (!SLUG_RE.test(slug)) {
+    return `slug '${slug}' must be lowercase-kebab (^[a-z0-9]+(-[a-z0-9]+)*$): no uppercase, spaces, punctuation, or leading/trailing/double hyphens`;
+  }
+  return undefined;
 }
 
 // DOMAIN_UNKNOWN support: the sanctioned domain set is the `branches[].key`
@@ -137,7 +164,16 @@ function filenameMatchesId(path: string, id: string): boolean {
 // (records/<domain>/…), not an optional frontmatter field — so the allowed set
 // must come from owners.yaml, not be hardcoded. owners.yaml lives at the repo
 // root, one level above the records root: <root>/../owners.yaml.
-async function loadAllowedDomains(root: string): Promise<Set<string>> {
+//
+// The manifest also carries each branch's `lead` handle; we capture a
+// domain->lead map alongside the allowed-domain set so OWNER_DOMAIN_MISMATCH can
+// assert a record's `owner` equals the lead of its domain directory.
+interface OwnersManifest {
+  domains: Set<string>;
+  leadOf: Map<string, string>;
+}
+
+async function loadOwners(root: string): Promise<OwnersManifest> {
   const ownersPath = join(root, "..", "owners.yaml");
   let text: string;
   try {
@@ -157,16 +193,21 @@ async function loadAllowedDomains(root: string): Promise<Set<string>> {
   if (!Array.isArray(branches)) {
     throw { operational: true, message: `owners.yaml at ${ownersPath} has no 'branches' array` } satisfies OperationalFault;
   }
-  const keys = new Set<string>();
+  const domains = new Set<string>();
+  const leadOf = new Map<string, string>();
   for (const b of branches) {
     if (isPlainObject(b) && typeof b["key"] === "string") {
-      keys.add(b["key"]);
+      const key = b["key"];
+      domains.add(key);
+      if (typeof b["lead"] === "string") {
+        leadOf.set(key, b["lead"]);
+      }
     }
   }
-  if (keys.size === 0) {
+  if (domains.size === 0) {
     throw { operational: true, message: `owners.yaml at ${ownersPath} declared no branch keys` } satisfies OperationalFault;
   }
-  return keys;
+  return { domains, leadOf };
 }
 
 // The record's domain is the FIRST path segment beneath root
@@ -188,10 +229,12 @@ function domainOf(root: string, path: string): string | undefined {
 export async function validateRecords(root: string): Promise<RecordError[]> {
   const errors: RecordError[] = [];
 
-  // Load the sanctioned domain set BEFORE scanning records — if owners.yaml is
-  // missing/unparseable the validator cannot know the domains, which is an
-  // operational fault (exit 2), not a per-record error.
-  const allowedDomains = await loadAllowedDomains(root);
+  // Load the owners manifest (domain set + domain->lead map) BEFORE scanning
+  // records — if owners.yaml is missing/unparseable the validator cannot know
+  // the domains or leads, which is an operational fault (exit 2), not a
+  // per-record error.
+  const owners = await loadOwners(root);
+  const allowedDomains = owners.domains;
 
   // --- Load + compile the schema ONCE (single source of truth, from disk) ---
   let validate: ValidateFunction;
@@ -244,9 +287,10 @@ export async function validateRecords(root: string): Promise<RecordError[]> {
     // beneath root and MUST be a governed branch key. This is path-based, so it
     // is asserted independently of frontmatter validity.
     const domain = domainOf(root, path);
+    const domainGoverned = domain !== undefined && allowedDomains.has(domain);
     if (domain === undefined) {
       errors.push({ path, rule: "DOMAIN_UNKNOWN", message: `${path} is not under a governed domain directory (records/<domain>/…)` });
-    } else if (!allowedDomains.has(domain)) {
+    } else if (!domainGoverned) {
       errors.push({ path, rule: "DOMAIN_UNKNOWN", message: `${path} is not a governed domain (${domain} is not a branch key in owners.yaml)` });
     }
 
@@ -298,13 +342,11 @@ export async function validateRecords(root: string): Promise<RecordError[]> {
     }
 
     // FILENAME check (only meaningful when we have an id string).
-    if (id !== undefined && !filenameMatchesId(path, id)) {
-      errors.push({
-        path,
-        recordId: id,
-        rule: "FILENAME_MISMATCH",
-        message: `basename must be '<id-lowercased>-<slug>.md' for ${id} (expected prefix '${id.toLowerCase()}-')`,
-      });
+    if (id !== undefined) {
+      const reason = filenameMismatchReason(path, id);
+      if (reason !== undefined) {
+        errors.push({ path, recordId: id, rule: "FILENAME_MISMATCH", message: reason });
+      }
     }
 
     // ID_PATTERN: a dedicated check so a schema-clean-but-malformed id still has
@@ -342,10 +384,11 @@ export async function validateRecords(root: string): Promise<RecordError[]> {
     const supersededBy = typeof data["supersededBy"] === "string" ? (data["supersededBy"] as string) : null;
     const type = typeof data["type"] === "string" ? (data["type"] as string) : "";
     const status = typeof data["status"] === "string" ? (data["status"] as string) : "";
+    const owner = typeof data["owner"] === "string" ? (data["owner"] as string) : undefined;
 
     // First occurrence wins in the model; duplicates are reported below.
     if (!model.has(id)) {
-      model.set(id, { id, type, status, references, supersedes, supersededBy, path });
+      model.set(id, { id, type, status, references, supersedes, supersededBy, path, domain, domainGoverned, owner });
     }
   }
 
@@ -370,6 +413,23 @@ export async function validateRecords(root: string): Promise<RecordError[]> {
 
   for (const node of model.values()) {
     const self = node.id;
+
+    // OWNER_DOMAIN_MISMATCH: a record's `owner` must equal its domain's lead in
+    // owners.yaml — the record-level enforcement that ownership matches
+    // placement. Skip when the domain is not governed (DOMAIN_UNKNOWN already
+    // covers that) or when `owner` is absent (schema `required` covers it) — no
+    // double-reporting.
+    if (node.domainGoverned && node.domain !== undefined && node.owner !== undefined) {
+      const lead = owners.leadOf.get(node.domain);
+      if (lead !== undefined && node.owner !== lead) {
+        errors.push({
+          path: node.path,
+          recordId: self,
+          rule: "OWNER_DOMAIN_MISMATCH",
+          message: `record owner '${node.owner}' does not match the '${node.domain}' domain lead '${lead}' in owners.yaml`,
+        });
+      }
+    }
 
     // (B) reference resolution + (PT-6) self + (PT-7) rejected parent.
     for (const ref of node.references) {
