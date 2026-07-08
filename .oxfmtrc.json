@@ -2,6 +2,7 @@
 	"$schema": "./.schemas/oxfmt.json",
 	"printWidth": 100,
 	"tabWidth": 2,
+	"sortPackageJson": false,
 	"ignorePatterns": [
 		"node_modules",
 		"dist",

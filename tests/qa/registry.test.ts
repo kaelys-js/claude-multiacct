@@ -164,4 +164,31 @@ describe("TOOLS (the validated registry)", () => {
 		// typescript runs project-mode (whole-graph typecheck, no FILES token).
 		expect(byId.get("typescript")?.lint?.mode).toBe("project");
 	});
+
+	it("wires syncpack as a package.json tool with a version-lint AND a sort-format", () => {
+		// WHY: syncpack is the ONLY tool that both lints (version/range consistency via
+		// `syncpack lint`) and formats (package.json field sorting via `syncpack
+		// format`). If the lint dropped to files-mode it would append file paths syncpack
+		// rejects; if the format check/write diverged from `format`/`format --check` the
+		// pre-commit sort and the CI sort-gate would disagree. This pins both halves.
+		const syncpack = new Map(TOOLS.map((t) => [t.id, t])).get("syncpack");
+		expect(syncpack?.match).toEqual({ kind: "regex", pattern: String.raw`(^|/)package\.json$` });
+		// Version consistency runs project-mode (no FILES token — syncpack discovers
+		// packages itself) through `pnpm exec` because syncpack is a node_modules bin.
+		expect(syncpack?.lint?.mode).toBe("project");
+		expect(syncpack?.lint).toMatchObject({
+			argv: ["pnpm", "exec", "syncpack", "lint", "--no-ansi"],
+		});
+		// Format check == `format --check` (sort gate); write == `format` (sorts in
+		// place). Neither carries the FILES token, so dispatch runs them verbatim.
+		expect(syncpack?.format?.check).toEqual([
+			"pnpm",
+			"exec",
+			"syncpack",
+			"format",
+			"--check",
+			"--no-ansi",
+		]);
+		expect(syncpack?.format?.write).toEqual(["pnpm", "exec", "syncpack", "format", "--no-ansi"]);
+	});
 });

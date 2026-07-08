@@ -94,6 +94,11 @@ describe("sync/turbo", () => {
 			outputs: [],
 			outputLogs: "new-only",
 		});
+		// The static `clean` fan-out task: never cached (it deletes artefacts) and
+		// emits no outputs. Once packages/* exist, `turbo run clean` runs each
+		// package's own `clean`. Losing this shape would let turbo cache a destructive
+		// task or expect outputs it never produces.
+		expect(tasks["clean"]).toEqual({ cache: false, outputs: [] });
 	});
 
 	it("derives one lint:<tool> task per linting tool, scoped to that tool's globs + config", async () => {
@@ -112,6 +117,26 @@ describe("sync/turbo", () => {
 		expect(tasks["lint:gitleaks"]?.["inputs"]?.[0]).toBe("$TURBO_DEFAULT$");
 		expect(tasks["lint:gitleaks"]?.["inputs"]).toContain(".gitleaks.toml");
 		expect(tasks["lint:reuse"]?.["inputs"]).toEqual(["$TURBO_DEFAULT$", "REUSE.toml"]);
+	});
+
+	it("derives syncpack's lint + format tasks scoped to its config, and fans them into the aggregators", async () => {
+		// WHY: syncpack both lints (versions) and formats (sort), so it must yield a
+		// `lint:syncpack`, a `format:syncpack` (uncached), and a `format:check:syncpack`,
+		// each carrying `.syncpackrc.json` in inputs so editing the config busts only
+		// syncpack's cache. And all three must be in their umbrella aggregators or
+		// syncpack silently stops running in CI.
+		const tasks = await generateTasks();
+		expect(tasks["lint:syncpack"]?.["inputs"]).toContain(".syncpackrc.json");
+		expect(tasks["format:syncpack"]?.["cache"]).toBe(false);
+		expect(tasks["format:syncpack"]?.["inputs"]).toContain(".syncpackrc.json");
+		expect(tasks["format:check:syncpack"]?.["inputs"]).toContain(".syncpackrc.json");
+		expect((tasks["qa:lint:all"] as { dependsOn: string[] }).dependsOn).toContain("lint:syncpack");
+		expect((tasks["qa:format:all"] as { dependsOn: string[] }).dependsOn).toContain(
+			"format:syncpack",
+		);
+		expect((tasks["qa:format:check:all"] as { dependsOn: string[] }).dependsOn).toContain(
+			"format:check:syncpack",
+		);
 	});
 
 	it("derives write + check format tasks for formatting tools (write is never cached)", async () => {

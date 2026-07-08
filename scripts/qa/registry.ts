@@ -202,6 +202,21 @@ const TOOLS_INPUT = [
 		wholeRepoOnly: true,
 		lint: { mode: "project", argv: ["node", "scripts/qa/schema-check.ts"] },
 	},
+	// ── Dependency version consistency + package.json sorting (syncpack) ─
+	{
+		id: "syncpack",
+		// Matched by any package.json. syncpack discovers packages itself (one now,
+		// packages/* once the monorepo lands), so it runs project-mode: `lint` checks
+		// version/range consistency, `format`/`format --check` sort every package.json
+		// per `.syncpackrc.json`. syncpack is a node_modules bin (not a mise tool), so
+		// it's invoked through `pnpm exec` like tsc. `--no-ansi` keeps CI logs clean.
+		match: { kind: "regex", pattern: String.raw`(^|/)package\.json$` },
+		lint: { mode: "project", argv: ["pnpm", "exec", "syncpack", "lint", "--no-ansi"] },
+		format: {
+			check: ["pnpm", "exec", "syncpack", "format", "--check", "--no-ansi"],
+			write: ["pnpm", "exec", "syncpack", "format", "--no-ansi"],
+		},
+	},
 ];
 
 /** The validated registry. A malformed entry throws at import (fail loud). */

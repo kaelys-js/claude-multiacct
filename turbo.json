@@ -5,6 +5,7 @@
 	"ui": "tui",
 	"dangerouslyDisablePackageManagerCheck": false,
 	"tasks": {
+		"clean": { "cache": false, "outputs": [] },
 		"qa:hooks": { "inputs": ["lefthook.yml"], "outputs": [], "cache": false },
 		"test": { "inputs": ["$TURBO_DEFAULT$"], "outputs": [] },
 		"test:coverage:run": {
@@ -143,6 +144,21 @@
 			"outputLogs": "new-only"
 		},
 		"lint:schema": { "inputs": ["$TURBO_DEFAULT$"], "outputs": [], "outputLogs": "new-only" },
+		"lint:syncpack": {
+			"inputs": ["$TURBO_DEFAULT$", ".syncpackrc.json"],
+			"outputs": [],
+			"outputLogs": "new-only"
+		},
+		"format:syncpack": {
+			"inputs": ["$TURBO_DEFAULT$", ".syncpackrc.json"],
+			"outputs": [],
+			"cache": false
+		},
+		"format:check:syncpack": {
+			"inputs": ["$TURBO_DEFAULT$", ".syncpackrc.json"],
+			"outputs": [],
+			"outputLogs": "new-only"
+		},
 		"qa:lint:all": {
 			"dependsOn": [
 				"lint:hygiene",
@@ -156,18 +172,19 @@
 				"lint:gitleaks",
 				"lint:editorconfig",
 				"lint:gitmeta",
-				"lint:schema"
+				"lint:schema",
+				"lint:syncpack"
 			],
 			"outputs": [],
 			"cache": false
 		},
 		"qa:format:all": {
-			"dependsOn": ["format:oxfmt", "format:taplo"],
+			"dependsOn": ["format:oxfmt", "format:taplo", "format:syncpack"],
 			"outputs": [],
 			"cache": false
 		},
 		"qa:format:check:all": {
-			"dependsOn": ["format:check:oxfmt", "format:check:taplo"],
+			"dependsOn": ["format:check:oxfmt", "format:check:taplo", "format:check:syncpack"],
 			"outputs": [],
 			"cache": false
 		}

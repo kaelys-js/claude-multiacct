@@ -41,6 +41,7 @@ const CONFIG_FILES: Readonly<Record<string, readonly string[]>> = {
 	reuse: ["REUSE.toml"],
 	editorconfig: [".editorconfig", ".editorconfig-checker.json", "scripts/qa/editorconfig-check.ts"],
 	gitmeta: [".gitattributes", ".gitignore", ".npmrc", "scripts/qa/gitmeta-check.ts"],
+	syncpack: [".syncpackrc.json"],
 };
 
 // File globs implied by a tool's {@link Match}, i.e. the set of files that tool
@@ -94,6 +95,10 @@ type TaskDef = {
 // `dependsOn`.
 function generateTasks(): Record<string, TaskDef> {
 	const tasks: Record<string, TaskDef> = {
+		// Per-package `clean` fan-out: once packages/* exist, `turbo run clean` runs
+		// each package's own `clean` script. Never cached (it deletes artefacts) and
+		// emits no outputs. The root `clean`/`clean:all` scripts wrap this + an rm.
+		clean: { cache: false, outputs: [] },
 		"qa:hooks": { inputs: ["lefthook.yml"], outputs: [], cache: false },
 		// Unit test run (no coverage) — whole-repo inputs, no build artefacts.
 		test: { inputs: ["$TURBO_DEFAULT$"], outputs: [] },
