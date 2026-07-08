@@ -1,0 +1,133 @@
+{
+	"$schema": "https://turbo.build/schema.json",
+	"globalDependencies": ["mise.lock", "mise.toml"],
+	"globalPassThroughEnv": ["NODE_ENV", "CI"],
+	"ui": "tui",
+	"dangerouslyDisablePackageManagerCheck": false,
+	"tasks": {
+		"qa:hooks": { "inputs": ["lefthook.yml"], "outputs": [], "cache": false },
+		"qa:types": { "inputs": ["$TURBO_DEFAULT$"], "outputs": [], "outputLogs": "new-only" },
+		"lint:hygiene": { "inputs": ["$TURBO_DEFAULT$"], "outputs": [], "outputLogs": "new-only" },
+		"lint:oxlint": {
+			"inputs": [
+				"**/*.cjs",
+				"**/*.cts",
+				"**/*.js",
+				"**/*.jsx",
+				"**/*.mjs",
+				"**/*.mts",
+				"**/*.ts",
+				"**/*.tsx",
+				".oxlintrc.json"
+			],
+			"outputs": [],
+			"outputLogs": "new-only"
+		},
+		"format:oxfmt": {
+			"inputs": [
+				"**/*.cjs",
+				"**/*.css",
+				"**/*.cts",
+				"**/*.graphql",
+				"**/*.js",
+				"**/*.json",
+				"**/*.jsonc",
+				"**/*.jsx",
+				"**/*.less",
+				"**/*.md",
+				"**/*.mdx",
+				"**/*.mjs",
+				"**/*.mts",
+				"**/*.scss",
+				"**/*.ts",
+				"**/*.tsx",
+				"**/*.yaml",
+				"**/*.yml",
+				".editorconfig",
+				".oxfmtrc.json"
+			],
+			"outputs": [],
+			"cache": false
+		},
+		"format:check:oxfmt": {
+			"inputs": [
+				"**/*.cjs",
+				"**/*.css",
+				"**/*.cts",
+				"**/*.graphql",
+				"**/*.js",
+				"**/*.json",
+				"**/*.jsonc",
+				"**/*.jsx",
+				"**/*.less",
+				"**/*.md",
+				"**/*.mdx",
+				"**/*.mjs",
+				"**/*.mts",
+				"**/*.scss",
+				"**/*.ts",
+				"**/*.tsx",
+				"**/*.yaml",
+				"**/*.yml",
+				".editorconfig",
+				".oxfmtrc.json"
+			],
+			"outputs": [],
+			"outputLogs": "new-only"
+		},
+		"lint:yamllint": {
+			"inputs": ["**/*.yaml", "**/*.yml", ".yamllint"],
+			"outputs": [],
+			"outputLogs": "new-only"
+		},
+		"lint:taplo": {
+			"inputs": ["**/*.toml", "taplo.toml"],
+			"outputs": [],
+			"outputLogs": "new-only"
+		},
+		"format:taplo": { "inputs": ["**/*.toml", "taplo.toml"], "outputs": [], "cache": false },
+		"format:check:taplo": {
+			"inputs": ["**/*.toml", "taplo.toml"],
+			"outputs": [],
+			"outputLogs": "new-only"
+		},
+		"lint:markdownlint": {
+			"inputs": ["**/*.md", "**/*.mdx", ".markdownlint-cli2.jsonc"],
+			"outputs": [],
+			"outputLogs": "new-only"
+		},
+		"lint:check-jsonschema": {
+			"inputs": ["**/*.schema.json"],
+			"outputs": [],
+			"outputLogs": "new-only"
+		},
+		"lint:gitleaks": {
+			"inputs": ["$TURBO_DEFAULT$", ".gitleaks.toml"],
+			"outputs": [],
+			"outputLogs": "new-only"
+		},
+		"qa:lint:all": {
+			"dependsOn": [
+				"lint:hygiene",
+				"lint:oxlint",
+				"lint:yamllint",
+				"lint:taplo",
+				"lint:markdownlint",
+				"lint:check-jsonschema",
+				"lint:gitleaks"
+			],
+			"outputs": [],
+			"cache": false
+		},
+		"qa:format:all": {
+			"dependsOn": ["format:oxfmt", "format:taplo"],
+			"outputs": [],
+			"cache": false
+		},
+		"qa:format:check:all": {
+			"dependsOn": ["format:check:oxfmt", "format:check:taplo"],
+			"outputs": [],
+			"cache": false
+		}
+	}
+}

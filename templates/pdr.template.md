@@ -4,10 +4,10 @@
 id: PDR-0000
 type: PDR
 title: <the feature / product decision, as a noun phrase>
-status: proposed            # one of: proposed | accepted | superseded
+status: proposed # one of: proposed | accepted | superseded
 # owner: CODEOWNERS handle. For a PDR this is product/delivery.
-owner: '@lead-foundation'
-date: '2026-01-01'
+owner: "@lead-foundation"
+date: "2026-01-01"
 # references: MUST contain at least one up-chain PRD id. May also cite sibling
 #   PDR/ADR ids this decision depends on. Never references a SPEC (that is down-chain).
 references:
@@ -63,9 +63,9 @@ supersedes: null
      This is the field the DoR gate cares about most: an unresolved question means the
      record is not ready and the work cannot enter build. -->
 
-| # | Question (was open) | Decision |
-|---|---------------------|----------|
-| 1 | <question> | <decision> |
+| #   | Question (was open) | Decision   |
+| --- | ------------------- | ---------- |
+| 1   | <question>          | <decision> |
 
 ## Dependencies
 
@@ -87,8 +87,8 @@ id: PDR-0001
 type: PDR
 title: Static index site for the foundation registry
 status: accepted
-owner: '@lead-foundation'
-date: '2026-05-22'
+owner: "@lead-foundation"
+date: "2026-05-22"
 references:
   - PRD-0001
 supersedes: null
@@ -139,10 +139,10 @@ theming — one static page only.
 
 ## Resolved open questions
 
-| # | Question (was open) | Decision |
-|---|---------------------|----------|
-| 1 | Hosted app or static file? | Static file — a hosted catalogue is a later stage per PRD-0001 out-of-scope. |
-| 2 | Who can read it? | Anyone with repo/artifact access; no auth layer at this stage. |
+| #   | Question (was open)        | Decision                                                                     |
+| --- | -------------------------- | ---------------------------------------------------------------------------- |
+| 1   | Hosted app or static file? | Static file — a hosted catalogue is a later stage per PRD-0001 out-of-scope. |
+| 2   | Who can read it?           | Anyone with repo/artifact access; no auth layer at this stage.               |
 
 ## Dependencies
 

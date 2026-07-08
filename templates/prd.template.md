@@ -8,11 +8,11 @@ title: <one line, imperative or noun-phrase; no trailing period>
 #   proposed   → drafted, not yet signed off
 #   accepted   → signed off; this is current truth
 #   superseded → replaced by a newer record (name it in `supersedes` of the successor)
-status: proposed            # one of: proposed | accepted | superseded
+status: proposed # one of: proposed | accepted | superseded
 # owner: a CODEOWNERS handle (team or user), literal, incl. leading '@'.
 #   For a PRD this is product/delivery, e.g. @lead-foundation or @delivery-lead.
-owner: '@lead-foundation'
-date: '2026-01-01'          # ISO-8601; date this record reached its current status
+owner: "@lead-foundation"
+date: "2026-01-01" # ISO-8601; date this record reached its current status
 # references: up-chain parent IDs this record derives from.
 #   PRD is the spine ROOT: this is normally [] (empty). Cross-links to other
 #   PRDs are allowed but a PRD never references a PDR/ADR/SPEC below it.
@@ -75,9 +75,9 @@ supersedes: null
      each row resolves to a decision (often a downstream PDR/ADR) or is closed here.
      A PRD with unresolved questions is not yet `accepted`. -->
 
-| # | Question | Resolution / owning record |
-|---|----------|----------------------------|
-| 1 | <question> | <decision, or PDR-/ADR- id> |
+| #   | Question   | Resolution / owning record  |
+| --- | ---------- | --------------------------- |
+| 1   | <question> | <decision, or PDR-/ADR- id> |
 
 ## Down-chain records
 
@@ -99,8 +99,8 @@ id: PRD-0001
 type: PRD
 title: Why the foundation exists
 status: accepted
-owner: '@lead-foundation'
-date: '2026-05-18'
+owner: "@lead-foundation"
+date: "2026-05-18"
 references: []
 supersedes: null
 ---
@@ -168,10 +168,10 @@ and a static index only.
 
 ## Open questions → decisions
 
-| # | Question | Resolution / owning record |
-|---|----------|----------------------------|
-| 1 | Which build orchestrator is the standard? | Deferred to the build owner on the record — ADR-0001 |
-| 2 | What is the minimum bar for "ready"? | Codified as the DEFINITION-OF-READY checklist |
+| #   | Question                                  | Resolution / owning record                           |
+| --- | ----------------------------------------- | ---------------------------------------------------- |
+| 1   | Which build orchestrator is the standard? | Deferred to the build owner on the record — ADR-0001 |
+| 2   | What is the minimum bar for "ready"?      | Codified as the DEFINITION-OF-READY checklist        |
 
 ## Down-chain records
 

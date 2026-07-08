@@ -1,5 +1,7 @@
 #:schema ./.schemas/mise.json
-min_version = "2026.7.0"
+# Matches the mise version vendored by bin/mise (the repo-scoped bootstrap that
+# scripts/qa + lefthook + CI all run through), so the pinned wrapper satisfies it.
+min_version = "2026.5.0"
 
 [settings]
 # Read .nvmrc as Node's version source, kept in lockstep with [tools].node.
@@ -12,6 +14,38 @@ auto_install = false
 lockfile = true
 experimental = true
 
+[env]
+# Workspace-scoped tool installations — all binaries live inside the repo.
+MISE_INSTALLS_DIR = "{{config_root}}/.mise/installs"
+
 [tools]
 node = "26.4.0"
 pnpm = "11.10.0"
+
+# ─── QA toolchain — every linter/formatter this registry uses, pinned here so
+# the repo is self-contained: `mise install` gets all of them into
+# .mise/installs. The single `qa:lint` / `qa:format` commands (scripts/qa/*)
+# run these via `mise exec`, and lefthook + CI call those same commands. mise
+# itself is bootstrapped by bin/mise.
+
+# Python — hosts the pipx-backed tools below so they need no system Python.
+python = "3.13"
+
+# ── ts/js + json/yaml/md formatting & js/ts lint ─────────────────────
+"npm:oxlint" = "1.72.0"
+"npm:oxfmt" = "0.57.0"
+
+# ── toml (lint + format) ─────────────────────────────────────────────
+"npm:@taplo/cli" = "0.7.0"
+
+# ── yaml (semantic lint; oxfmt owns layout) ──────────────────────────
+yamllint = "1.38.0"
+
+# ── markdown (lint; oxfmt owns formatting) ───────────────────────────
+"npm:markdownlint-cli2" = "0.23.0"
+
+# ── json schema meta-validation ──────────────────────────────────────
+"pipx:check-jsonschema" = "0.37.4"
+
+# ── secrets ──────────────────────────────────────────────────────────
+"aqua:gitleaks/gitleaks" = "8.30.1"

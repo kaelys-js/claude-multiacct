@@ -31,13 +31,13 @@ tasks:
   - id: T-001
     title: Author the record JSON Schema and the up-chain parent-type contract
     status: done
-    owner: '@lead-backend'
+    owner: "@lead-backend"
     tracker_ref: FOUND-101
 
   - id: T-002
     title: Author the PRD/PDR/ADR/SPEC record templates
     status: done
-    owner: '@lead-backend'
+    owner: "@lead-backend"
     depends_on:
       - T-001
     tracker_ref: FOUND-102
@@ -45,7 +45,7 @@ tasks:
   - id: T-003
     title: Build the ajv + gray-matter record validator and wire pnpm run validate
     status: in-progress
-    owner: '@lead-backend'
+    owner: "@lead-backend"
     depends_on:
       - T-001
       - T-002
@@ -54,7 +54,7 @@ tasks:
   - id: T-004
     title: Add the GitHub Actions blocking validate check
     status: blocked
-    owner: '@lead-infra'
+    owner: "@lead-infra"
     depends_on:
       - T-003
     tracker_ref: FOUND-111
@@ -62,6 +62,6 @@ tasks:
   - id: T-005
     title: Generate the non-engineer-readable static index page
     status: todo
-    owner: '@lead-frontend'
+    owner: "@lead-frontend"
     depends_on:
       - T-003

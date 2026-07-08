@@ -4,10 +4,10 @@
 id: SPEC-0000
 type: SPEC
 title: <the capability / system, as a noun phrase>
-status: accepted            # one of: proposed | accepted | superseded
+status: accepted # one of: proposed | accepted | superseded
 # owner: CODEOWNERS handle for the domain that owns this capability.
-owner: '@lead-backend'
-date: '2026-01-01'
+owner: "@lead-backend"
+date: "2026-01-01"
 # references: up-chain records that justify this current state — the PDR/ADR decisions
 #   that shaped it. A SPEC must cite at least one ADR (PRD is not a valid SPEC parent).
 references:
@@ -71,8 +71,8 @@ id: SPEC-0001
 type: SPEC
 title: Foundation registry — current state
 status: accepted
-owner: '@lead-backend'
-date: '2026-05-24'
+owner: "@lead-backend"
+date: "2026-05-24"
 references:
   - PDR-0001
   - ADR-0001

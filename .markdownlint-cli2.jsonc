@@ -1,0 +1,54 @@
+// markdownlint-cli2 standard for stardust. Auto-discovered from the repo root.
+// Run via `pnpm qa:lint` (through mise). Markdown *formatting* is oxfmt's job,
+// so layout rules oxfmt owns (line length, list/heading spacing) are disabled;
+// what remains catches real documentation defects — broken structure, bad
+// links, duplicate headings, raw HTML, missing code-fence languages.
+{
+	"$schema": "./.schemas/markdownlint-cli2.json",
+	"config": {
+		"default": true,
+
+		// oxfmt owns wrapping and blank-line/whitespace layout.
+		"MD013": false, // line-length
+		"MD012": false, // multiple consecutive blank lines
+		"MD009": false, // trailing spaces (oxfmt handles)
+
+		// Structure & correctness (kept on):
+		"MD003": { "style": "atx" }, // consistent heading style
+		"MD004": { "style": "dash" }, // consistent unordered-list bullets
+		"MD007": { "indent": 2 }, // nested-list indent
+		"MD024": { "siblings_only": true }, // duplicate headings only under same parent
+		"MD025": { "level": 1, "front_matter_title": "" }, // single H1; don't treat frontmatter `title:` as the H1 (records carry both)
+		"MD029": { "style": "ordered" }, // ordered-list numbering
+		// Allow the presentational HTML that centered READMEs conventionally use.
+		"MD033": {
+			"allowed_elements": [
+				"br",
+				"details",
+				"summary",
+				"kbd",
+				"div",
+				"p",
+				"a",
+				"img",
+				"sub",
+				"sup",
+				"h1",
+				"strong",
+			],
+		},
+		"MD040": true, // fenced code blocks must declare a language
+		"MD046": { "style": "fenced" }, // code-block style
+		"MD048": { "style": "backtick" }, // code-fence style
+		"MD049": { "style": "underscore" }, // emphasis style
+		"MD050": { "style": "asterisk" }, // strong style
+
+		// First line need not be a top-level heading (badges/frontmatter precede it).
+		"MD041": false,
+	},
+	"globs": ["**/*.md", "**/*.mdx"],
+	// templates/ carry deliberate fill-in placeholders (<title>, <Option A>, <pro>…)
+	// that markdownlint misreads as inline HTML (MD033); real records have no
+	// placeholders, so records/ stays linted. oxfmt still formats templates/.
+	"ignores": ["node_modules", ".mise", "dist", "build", "coverage", "CHANGELOG.md", "templates"],
+}

@@ -1,31 +1,61 @@
 {
-  "$schema": "./.schemas/package.json",
-  "name": "foundation-registry",
-  "version": "0.0.0",
-  "private": true,
-  "type": "module",
-  "description": "Business-as-Code governance registry: owned decision records (PRD/PDR/ADR/SPEC/tasks/release) governing how clients are built. Not a runtime application.",
-  "license": "UNLICENSED",
-  "packageManager": "pnpm@11.10.0",
-  "engines": {
-    "node": "26.4.0",
-    "pnpm": "11.10.0"
-  },
-  "scripts": {
-    "validate": "node scripts/validate-records.ts",
-    "typecheck": "tsc --noEmit",
-    "test": "node --test",
-    "build-site": "node scripts/build-site.ts",
-    "sync:check": "node scripts/check-toolchain-sync.ts"
-  },
-  "devDependencies": {
-    "@types/node": "26.1.0",
-    "typescript": "6.0.3"
-  },
-  "dependencies": {
-    "ajv": "8.20.0",
-    "ajv-formats": "3.0.1",
-    "gray-matter": "4.0.3",
-    "yaml": "2.9.0"
-  }
+	"$schema": "./.schemas/package.json",
+	"name": "foundation-registry",
+	"version": "0.0.0",
+	"private": true,
+	"description": "Business-as-Code governance registry: owned decision records (PRD/PDR/ADR/SPEC/tasks/release) governing how clients are built. Not a runtime application.",
+	"license": "UNLICENSED",
+	"type": "module",
+	"scripts": {
+		"prepare": "lefthook install",
+		"validate": "node scripts/validate-records.ts",
+		"typecheck": "tsc --noEmit",
+		"test": "node --test",
+		"build-site": "node scripts/build-site.ts",
+		"qa:types": "tsc --noEmit",
+		"qa:hooks": "lefthook validate",
+		"qa:lint": "turbo run qa:lint:all",
+		"qa:format": "turbo run qa:format:all",
+		"qa:format:check": "turbo run qa:format:check:all",
+		"qa:lint:all": "node -e \"process.exit(0)\"",
+		"qa:format:all": "node -e \"process.exit(0)\"",
+		"qa:format:check:all": "node -e \"process.exit(0)\"",
+		"lint:commit": "commitlint --config commitlint.config.json --edit",
+		"lint:hygiene": "node scripts/qa/lint.ts --only hygiene",
+		"lint:oxlint": "node scripts/qa/lint.ts --only oxlint",
+		"lint:yamllint": "node scripts/qa/lint.ts --only yamllint",
+		"lint:taplo": "node scripts/qa/lint.ts --only taplo",
+		"lint:markdownlint": "node scripts/qa/lint.ts --only markdownlint",
+		"lint:check-jsonschema": "node scripts/qa/lint.ts --only check-jsonschema",
+		"lint:gitleaks": "node scripts/qa/lint.ts --only gitleaks",
+		"format:oxfmt": "node scripts/qa/format.ts --only oxfmt",
+		"format:check:oxfmt": "node scripts/qa/format.ts --only oxfmt --check",
+		"format:taplo": "node scripts/qa/format.ts --only taplo",
+		"format:check:taplo": "node scripts/qa/format.ts --only taplo --check",
+		"sync": "node scripts/sync/versions.ts && node scripts/sync/schemas.ts && node scripts/sync/turbo.ts",
+		"sync:versions": "node scripts/sync/versions.ts",
+		"sync:schemas": "node scripts/sync/schemas.ts",
+		"sync:turbo": "node scripts/sync/turbo.ts",
+		"sync:check": "node scripts/sync/versions.ts --check && node scripts/sync/turbo.ts --check && node scripts/sync/schemas.ts --check"
+	},
+	"dependencies": {
+		"ajv": "8.20.0",
+		"ajv-formats": "3.0.1",
+		"gray-matter": "4.0.3",
+		"yaml": "2.9.0"
+	},
+	"devDependencies": {
+		"@commitlint/cli": "21.2.0",
+		"@commitlint/config-conventional": "21.2.0",
+		"@types/node": "26.1.0",
+		"lefthook": "2.1.9",
+		"turbo": "2.10.3",
+		"typescript": "6.0.3",
+		"valibot": "1.4.2"
+	},
+	"engines": {
+		"node": "26.4.0",
+		"pnpm": "11.10.0"
+	},
+	"packageManager": "pnpm@11.10.0"
 }

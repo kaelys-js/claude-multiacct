@@ -4,11 +4,11 @@
 id: ADR-0000
 type: ADR
 title: <the architectural decision, as a noun phrase>
-status: proposed            # one of: proposed | accepted | superseded
+status: proposed # one of: proposed | accepted | superseded
 # owner: CODEOWNERS handle for the governance domain this decision lives in,
 #   e.g. @lead-build, @lead-infra, @lead-security, @lead-data, @lead-backend.
-owner: '@lead-build'
-date: '2026-01-01'
+owner: "@lead-build"
+date: "2026-01-01"
 # references: MUST contain at least one up-chain PRD id; may cite related ADR/PDR ids.
 references:
   - PRD-0000
@@ -99,8 +99,8 @@ id: ADR-0001
 type: ADR
 title: Build orchestrator for the TypeScript monorepo
 status: proposed
-owner: '@lead-build'
-date: '2026-05-20'
+owner: "@lead-build"
+date: "2026-05-20"
 references:
   - PRD-0001
 supersedes: null

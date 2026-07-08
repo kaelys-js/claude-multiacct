@@ -1,6 +1,6 @@
 # foundation-registry
 
-The **Business-as-Code governance layer** for the shared client foundation. This repository holds the firm's owned decisions and records — Product Requirement Documents (PRD), Product Decision Records (PDR), Architecture Decision Records (ADR), capability Specs (SPEC), Tasks, and Releases — that govern *how* client projects are built; it is the single source of truth for those decisions, it does **not** run in production, and it is **not** the client TypeScript monorepo. Records are Markdown with YAML frontmatter, validated by schema, and owned in pieces by named GitHub teams (see [`owners.yaml`](owners.yaml)).
+The **Business-as-Code governance layer** for the shared client foundation. This repository holds the firm's owned decisions and records — Product Requirement Documents (PRD), Product Decision Records (PDR), Architecture Decision Records (ADR), capability Specs (SPEC), Tasks, and Releases — that govern _how_ client projects are built; it is the single source of truth for those decisions, it does **not** run in production, and it is **not** the client TypeScript monorepo. Records are Markdown with YAML frontmatter, validated by schema, and owned in pieces by named GitHub teams (see [`owners.yaml`](owners.yaml)).
 
 ## Status
 

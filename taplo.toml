@@ -1,0 +1,29 @@
+#:schema ./.schemas/taplo.json
+# TOML standard for stardust — taplo (lint + format). Run via `pnpm qa:lint`
+# (taplo lint) and `pnpm qa:format` (taplo fmt), through mise. Beyond the
+# dev-standards set, added because stardust carries TOML (mise.toml, this file,
+# ruff.toml, …) and it should be held to the same bar as everything else.
+
+include = ["**/*.toml"]
+exclude = ["**/.mise/**", "**/node_modules/**", "**/dist/**"]
+
+[formatting]
+column_width = 100
+indent_string = "\t"
+align_entries = false
+align_comments = true
+array_auto_expand = true
+array_auto_collapse = true
+compact_arrays = true
+compact_inline_tables = false
+indent_tables = false
+reorder_keys = false
+reorder_arrays = false
+allowed_blank_lines = 1
+trailing_newline = true
+
+[[rule]]
+# mise.toml keeps tools in a deliberate, commented grouping — never reorder it.
+include = ["mise.toml"]
+[rule.formatting]
+reorder_keys = false

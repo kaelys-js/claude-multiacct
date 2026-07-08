@@ -4,8 +4,11 @@
 # --frozen-lockfile, the install-time gate would only ever block our own pinned
 # toolchain. Kept explicitly at 0. (Same rationale as stardust.)
 minimumReleaseAge: 0
-# pnpm 11: deps allowed to run install scripts. None of ours need to.
-allowBuilds: {}
+# pnpm 11: deps allowed to run install scripts. lefthook's postinstall installs
+# the git hooks (same as `pnpm prepare`); allow it so `pnpm install` doesn't fail
+# the ignored-builds gate.
+allowBuilds:
+  lefthook: true
 # pnpm 11 made .npmrc auth/registry-only — non-registry settings are read from
 # HERE (or ~/.config/pnpm/config.yaml), NOT .npmrc. So the exact-pin + engine
 # enforcement that .npmrc used to carry lives here, where `pnpm config get`

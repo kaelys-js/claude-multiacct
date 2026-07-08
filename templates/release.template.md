@@ -42,25 +42,25 @@ Each entry carries:
 - version: v0.1.0
   date: 2026-05-24
   spec:
-    - SPEC-0001
-  tasks:
-    - T-001
-    - T-002
-  changes: >-
+  - SPEC-0001
+    tasks:
+  - T-001
+  - T-002
+    changes: >-
     First cut of the governance registry: record schema, the four record
     templates, and the up-chain parent-type contract landed.
-  clients: []
+    clients: []
 
 - version: v0.2.0
   date: 2026-06-09
   spec:
-    - SPEC-0001
-  tasks:
-    - T-003
-    - T-004
-  changes: >-
+  - SPEC-0001
+    tasks:
+  - T-003
+  - T-004
+    changes: >-
     Record validator (ajv + gray-matter) and the blocking CI check went live;
     malformed, orphaned, and duplicate records now fail the build.
-  clients:
-    - providence-living
-    - handled-monorepo-poc
+    clients:
+  - providence-living
+  - handled-monorepo-poc
