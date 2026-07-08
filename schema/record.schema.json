@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://registry.foundation.internal/schema/record.schema.json",
+  "title": "Foundation Governance Record Frontmatter (Stage 1)",
+  "description": "Draft 2020-12 schema for the YAML frontmatter of every governance record (PRD, PDR, ADR, SPEC). Validates shape; the CI validator (see validator_spec) enforces the cross-record invariants JSON Schema alone cannot express (ID uniqueness, reference resolution, parent-TYPE contract).",
+  "type": "object",
+  "unevaluatedProperties": false,
+  "$comment": "unevaluatedProperties:false (not additionalProperties) is required so the allOf/if-then branches below can legally introduce branch-specific keys. additionalProperties:false would reject them because it is evaluated per-subschema and does not see sibling allOf properties.",
+  "required": ["id", "type", "title", "status", "owner", "date"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Globally unique record ID. Per-type regex enforced in the type branches below. The FOUND- namespace prefix is reserved for foundation records; CLIENT- is a later stage and MUST NOT appear in Stage 1.",
+      "pattern": "^(PRD|PDR|ADR|SPEC)-[0-9]{4}$"
+    },
+    "type": {
+      "type": "string",
+      "enum": ["PRD", "PDR", "ADR", "SPEC"],
+      "description": "Record type discriminator. Stage 1 recognises exactly these four. 'tasks' and 'release' are spine stages tracked outside the record registry and are NOT record types here."
+    },
+    "title": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 120,
+      "description": "Human title, sentence-case, no trailing period."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["proposed", "accepted", "superseded", "deprecated", "rejected"],
+      "description": "Lifecycle state. proposed=under owner review; accepted=in force; superseded=replaced by a newer record (see supersedes on the successor); deprecated=intentionally retired, no successor; rejected=proposal an owner declined. ADRs are immutable once accepted: change happens by issuing a successor and flipping the old record to superseded, never by rewriting an accepted ADR's decision."
+    },
+    "owner": {
+      "type": "string",
+      "description": "Single accountable domain owner as a GitHub handle. Exactly one owner per record (the CODEOWNERS gate resolves to one accountable reviewer). Group handles (containing '/') are disallowed at Stage 1 to keep accountability singular.",
+      "pattern": "^@[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$"
+    },
+    "date": {
+      "type": "string",
+      "format": "date",
+      "description": "Authored/last-status-change date, ISO 8601 (YYYY-MM-DD). ajv-formats validates this in full mode.",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+    },
+    "domain": {
+      "type": "string",
+      "description": "Owned branch of the registry this record lives under (harvested owners, not imposed). Free-form at Stage 1 but recommended to match a directory under records/.",
+      "enum": ["build", "infra", "auth", "data", "design", "product", "platform"]
+    },
+    "references": {
+      "type": "array",
+      "description": "Up-chain parent references: IDs of records higher on the spine that this record depends on/cites. Every entry MUST resolve to an existing record (validator) and MUST satisfy the parent-TYPE contract (parent_type_matrix). Ordering is not significant; duplicates are disallowed.",
+      "items": { "type": "string", "pattern": "^(PRD|PDR|ADR|SPEC)-[0-9]{4}$" },
+      "uniqueItems": true,
+      "default": []
+    },
+    "supersedes": {
+      "type": ["string", "null"],
+      "description": "If this record replaces a prior record of the SAME type, its ID. The validator asserts: target exists, target.type == this.type, target.status == 'superseded', and no two live records supersede the same target. null or omitted for original records.",
+      "pattern": "^(PRD|PDR|ADR|SPEC)-[0-9]{4}$"
+    },
+    "supersededBy": {
+      "type": ["string", "null"],
+      "description": "Back-pointer set on a superseded record to its successor. Present iff status=='superseded' (enforced in the status branch below and cross-checked by the validator against the successor's supersedes).",
+      "pattern": "^(PRD|PDR|ADR|SPEC)-[0-9]{4}$"
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+      "uniqueItems": true
+    }
+  },
+  "allOf": [
+    {
+      "$comment": "PRD — root of the spine. No up-chain parent exists, so references MUST be empty. IDs pinned to PRD-NNNN.",
+      "if": { "properties": { "type": { "const": "PRD" } }, "required": ["type"] },
+      "then": {
+        "properties": {
+          "id": { "type": "string", "pattern": "^PRD-[0-9]{4}$" },
+          "references": { "type": "array", "maxItems": 0 }
+        }
+      }
+    },
+    {
+      "$comment": "PDR — product decision. MUST cite exactly one PRD parent (the business case it realises). No other parent types allowed at Stage 1.",
+      "if": { "properties": { "type": { "const": "PDR" } }, "required": ["type"] },
+      "then": {
+        "properties": {
+          "id": { "type": "string", "pattern": "^PDR-[0-9]{4}$" },
+          "references": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 1,
+            "items": { "type": "string", "pattern": "^PRD-[0-9]{4}$" }
+          }
+        },
+        "required": ["references"]
+      }
+    },
+    {
+      "$comment": "ADR — architecture decision. MUST cite exactly one PRD parent. Immutable once accepted (change via supersession). References array is the single PRD it serves.",
+      "if": { "properties": { "type": { "const": "ADR" } }, "required": ["type"] },
+      "then": {
+        "properties": {
+          "id": { "type": "string", "pattern": "^ADR-[0-9]{4}$" },
+          "references": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 1,
+            "items": { "type": "string", "pattern": "^PRD-[0-9]{4}$" }
+          }
+        },
+        "required": ["references"]
+      }
+    },
+    {
+      "$comment": "SPEC — living capability. MUST cite at least one ADR parent; MAY cite multiple ADRs and additionally PDRs (a capability can realise several decisions). At least one ADR is mandatory; PRD/SPEC parents are disallowed. The 'at least one ADR' rule is a contains-constraint here and re-asserted by the validator against the matrix.",
+      "if": { "properties": { "type": { "const": "SPEC" } }, "required": ["type"] },
+      "then": {
+        "properties": {
+          "id": { "type": "string", "pattern": "^SPEC-[0-9]{4}$" },
+          "references": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "pattern": "^(ADR|PDR)-[0-9]{4}$" },
+            "contains": { "type": "string", "pattern": "^ADR-[0-9]{4}$" },
+            "minContains": 1
+          }
+        },
+        "required": ["references"]
+      }
+    },
+    {
+      "$comment": "Status coupling: a superseded record MUST carry supersededBy; a non-superseded record MUST NOT.",
+      "if": { "properties": { "status": { "const": "superseded" } }, "required": ["status"] },
+      "then": { "required": ["supersededBy"], "properties": { "supersededBy": { "type": "string" } } },
+      "else": { "properties": { "supersededBy": { "const": null } } }
+    }
+  ]
+}
