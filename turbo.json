@@ -6,7 +6,6 @@
 	"dangerouslyDisablePackageManagerCheck": false,
 	"tasks": {
 		"qa:hooks": { "inputs": ["lefthook.yml"], "outputs": [], "cache": false },
-		"qa:types": { "inputs": ["$TURBO_DEFAULT$"], "outputs": [], "outputLogs": "new-only" },
 		"lint:hygiene": { "inputs": ["$TURBO_DEFAULT$"], "outputs": [], "outputLogs": "new-only" },
 		"lint:oxlint": {
 			"inputs": [
@@ -20,6 +19,11 @@
 				"**/*.tsx",
 				".oxlintrc.json"
 			],
+			"outputs": [],
+			"outputLogs": "new-only"
+		},
+		"lint:typescript": {
+			"inputs": ["**/*.cts", "**/*.mts", "**/*.ts", "**/*.tsx", "tsconfig.json"],
 			"outputs": [],
 			"outputLogs": "new-only"
 		},
@@ -101,6 +105,11 @@
 			"outputs": [],
 			"outputLogs": "new-only"
 		},
+		"lint:reuse": {
+			"inputs": ["$TURBO_DEFAULT$", "REUSE.toml"],
+			"outputs": [],
+			"outputLogs": "new-only"
+		},
 		"lint:gitleaks": {
 			"inputs": ["$TURBO_DEFAULT$", ".gitleaks.toml"],
 			"outputs": [],
@@ -110,10 +119,12 @@
 			"dependsOn": [
 				"lint:hygiene",
 				"lint:oxlint",
+				"lint:typescript",
 				"lint:yamllint",
 				"lint:taplo",
 				"lint:markdownlint",
 				"lint:check-jsonschema",
+				"lint:reuse",
 				"lint:gitleaks"
 			],
 			"outputs": [],

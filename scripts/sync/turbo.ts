@@ -37,6 +37,8 @@ const CONFIG_FILES: Readonly<Record<string, readonly string[]>> = {
 	markdownlint: [".markdownlint-cli2.jsonc"],
 	"check-jsonschema": [],
 	gitleaks: [".gitleaks.toml"],
+	typescript: ["tsconfig.json"],
+	reuse: ["REUSE.toml"],
 };
 
 // File globs implied by a tool's {@link Match}, i.e. the set of files that tool
@@ -91,11 +93,6 @@ type TaskDef = {
 function generateTasks(): Record<string, TaskDef> {
 	const tasks: Record<string, TaskDef> = {
 		"qa:hooks": { inputs: ["lefthook.yml"], outputs: [], cache: false },
-		"qa:types": {
-			inputs: ["$TURBO_DEFAULT$"],
-			outputs: [],
-			outputLogs: "new-only",
-		},
 		// Hygiene guard (merge-conflict markers, oversized files) — whole-repo scope.
 		"lint:hygiene": {
 			inputs: ["$TURBO_DEFAULT$"],

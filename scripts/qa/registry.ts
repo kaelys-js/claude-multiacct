@@ -42,6 +42,16 @@ export const LintSchema = v.variant("mode", [
 		stagedArgv: v.array(v.string()),
 		fullArgv: v.array(v.string()),
 	}),
+	/**
+	 * Whole-project tool: run `argv` once, verbatim, with NO file-list
+	 * substitution (tsc/reuse). Gated on ≥1 matched file, so a staged run that
+	 * touched none of the tool's files skips it, while a whole-repo run always
+	 * has candidates and runs it.
+	 */
+	v.object({
+		mode: v.literal("project"),
+		argv: v.array(v.string()),
+	}),
 ]);
 
 /** A formatter's command: a check variant and a write variant over the files. */
@@ -72,6 +82,14 @@ const TOOLS_INPUT = [
 		id: "oxlint",
 		match: { kind: "ext", extensions: ["js", "mjs", "cjs", "jsx", "ts", "mts", "cts", "tsx"] },
 		lint: { mode: "files", argv: ["oxlint", FILES], fullRepoDot: true },
+	},
+	{
+		id: "typescript",
+		match: { kind: "ext", extensions: ["ts", "mts", "cts", "tsx"] },
+		// Whole-project typecheck: tsc reads the file graph itself (via tsconfig),
+		// so it runs once with no file args. `tsc` is a node_modules bin, not a
+		// mise tool, so invoke it through pnpm (which is on mise's PATH).
+		lint: { mode: "project", argv: ["pnpm", "exec", "tsc", "--noEmit"] },
 	},
 	{
 		id: "oxfmt",
@@ -127,6 +145,14 @@ const TOOLS_INPUT = [
 		id: "check-jsonschema",
 		match: { kind: "regex", pattern: String.raw`\.schema\.json$` },
 		lint: { mode: "files", argv: ["check-jsonschema", "--check-metaschema", FILES] },
+	},
+	// ── License compliance (REUSE / SPDX) ──────────────────────────────
+	{
+		id: "reuse",
+		// Matched by the presence of REUSE.toml; `reuse lint` scans the whole tree
+		// against it, so it runs once with no file args.
+		match: { kind: "regex", pattern: String.raw`(^|/)REUSE\.toml$` },
+		lint: { mode: "project", argv: ["reuse", "lint"] },
 	},
 	// ── Secrets ────────────────────────────────────────────────────────
 	{

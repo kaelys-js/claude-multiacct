@@ -103,6 +103,13 @@ function runLint(tool: Tool, candidates: string[], wholeRepo: boolean): boolean 
 		return null;
 	}
 
+	if (lint.mode === "project") {
+		// Whole-project tool: gated on ≥1 matched file (checked above), then run
+		// its argv verbatim with no FILES substitution.
+		note(tool.id);
+		return mise([...lint.argv]);
+	}
+
 	// mode === "files"
 	note(tool.id);
 	return mise(expandArgv(lint.argv, files, { wholeRepo, fullRepoDot: lint.fullRepoDot ?? false }));

@@ -49,7 +49,8 @@ pre-commit:
 # handles fast staged-file format+lint; pre-push runs the rest of the pipeline
 # that needs the full project graph, not just the staged diff.
 # Pipeline: sync-drift (p0) → schema (p1) → lint (p2) → format-check (p3)
-#           → typecheck (p4)
+# Whole-project typecheck (tsc) and REUSE license compliance are members of the
+# `qa:lint` pipeline now, so the p2 lint step covers them — no separate step.
 
 pre-push:
   piped: true
@@ -70,7 +71,9 @@ pre-push:
       priority: 1
       run: pnpm qa:schema
       fail_text: "Schema validation failed. Run 'pnpm qa:schema' to see failures."
-    # p2 — Whole-repo lint (every tool over every tracked file).
+    # p2 — Whole-repo lint (every tool over every tracked file). This includes
+    # the whole-project typecheck (tsc --noEmit) and REUSE license compliance
+    # (reuse lint), which are members of the qa:lint pipeline.
     lint:
       priority: 2
       run: pnpm qa:lint
@@ -80,12 +83,6 @@ pre-push:
       priority: 3
       run: pnpm qa:format:check
       fail_text: "Formatting drift. Run 'pnpm qa:format' to fix."
-    # p4 — Types: whole-project (not staged) because a change in one file can
-    # break another's types.
-    typecheck:
-      priority: 4
-      run: pnpm qa:types
-      fail_text: "Type check failed (tsc). Run 'pnpm qa:types' to see errors."
 
 # ─── Post-Checkout / Post-Merge ──────────────────────────────────────────────
 # Keep the working tree consistent after branch switches and merges:
