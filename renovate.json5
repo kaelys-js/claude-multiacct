@@ -1,0 +1,117 @@
+{
+	// Self-hosted Renovate config for foundation-registry. Scope: npm/pnpm
+	// workspace deps + mise-pinned toolchain.
+	//
+	// 1. npm/pnpm deps. The built-in `npm` manager reads the workspace
+	//    package.json files + pnpm-lock.yaml. patch/minor/digest are auto-merged
+	//    after CI; major is a review PR. lockFileMaintenance refreshes the lock.
+	//
+	// 2. mise tools. The built-in `mise` manager reads mise.toml `[tools]`
+	//    (node, pnpm, oxlint, gitleaks, etc.). Same policy as npm:
+	//    patch/minor auto-merge after CI, major -> review PR.
+	//
+	// All auto-merges wait a `minimumReleaseAge` cool-down so brand-new releases
+	// aren't merged the instant they publish. Every Renovate commit is
+	// `chore(deps): …`, which passes this repo's commitlint for ALL managers.
+	$schema: "https://docs.renovatebot.com/renovate-schema.json",
+
+	extends: ["config:recommended", ":dependencyDashboard", ":semanticCommits"],
+
+	timezone: "America/Vancouver",
+
+	// Conservative cadence: once a day, before 06:00 local. Weekly digest churn
+	// stays low-noise and lands before the workday.
+	schedule: ["* 0-5 * * *"],
+
+	dependencyDashboard: true,
+
+	// --- Commit / PR message shape -------------------------------------------
+	// Must satisfy this repo's commitlint: type MUST be in the type-enum and
+	// "chore" IS in it; scope is kebab-case and "deps" is in the scope-enum. So
+	// every Renovate commit reads:
+	//   chore(deps): update <dep> to <newvalue>
+	// which passes type-enum, type-case, scope-case, scope-enum, subject-empty.
+	semanticCommits: "enabled",
+	semanticCommitType: "chore",
+	semanticCommitScope: "deps",
+	commitMessagePrefix: "chore(deps):",
+	// Renovate's default body appends the changelog etc.; the header above is the
+	// only line commitlint validates and it is compliant.
+
+	// --- Concurrency / noise control -----------------------------------------
+	prConcurrentLimit: 4,
+	prHourlyLimit: 2,
+	// Rebase stale branches so the digest/tag stays fresh until merge.
+	rebaseWhen: "behind-base-branch",
+
+	// Cool-down: never auto-merge a release younger than this. Guards against
+	// a compromised/yanked just-published version landing hands-off. (The pnpm
+	// workspace's own minimumReleaseAge is 0; this is Renovate's independent gate.)
+	minimumReleaseAge: "3 days",
+
+	// Enabled managers:
+	//   - npm   -> package.json (× workspace) + pnpm-lock.yaml
+	//   - mise  -> mise.toml [tools] versions
+	// Everything else (GitHub Actions, etc.) stays off.
+	enabledManagers: ["npm", "mise"],
+
+	// Keep pnpm-lock.yaml fresh (dedupe / transitive security bumps) via a
+	// scheduled lockfile-only PR. Auto-merged after CI (see packageRules).
+	lockFileMaintenance: {
+		enabled: true,
+		automerge: true,
+		platformAutomerge: true,
+	},
+
+	// --- packageRules --------------------------------------------------------
+	// Automerge matrix (all automerges gated on green CI + minimumReleaseAge):
+	//   npm     patch/minor/digest      -> automerge (devDeps grouped)
+	//   npm     major                   -> review PR (never grouped)
+	//   mise    patch/minor             -> automerge (grouped)
+	//   mise    major                   -> review PR (never grouped)
+	//   lockFileMaintenance             -> automerge (configured above)
+	packageRules: [
+		// ── npm / pnpm workspace deps ────────────────────────────────────────
+		{
+			// patch/minor/digest are non-breaking by semver; CI (format/lint/types/
+			// tests) fully validates JS deps, so auto-merge after green CI. devDeps
+			// (all our deps are devDependencies) grouped to keep PR noise down.
+			matchManagers: ["npm"],
+			matchUpdateTypes: ["patch", "minor", "digest"],
+			automerge: true,
+			automergeType: "pr",
+			platformAutomerge: true,
+			groupName: "npm dev dependencies (non-major)",
+			commitMessageTopic: "npm dev dependencies",
+		},
+		{
+			// Major npm bumps can break; review PR, its own PR (never grouped).
+			matchManagers: ["npm"],
+			matchUpdateTypes: ["major"],
+			automerge: false,
+			groupName: null,
+		},
+
+		// ── mise toolchain ───────────────────────────────────────────────────
+		{
+			// patch/minor toolchain bumps (linters/formatters/runtimes) auto-merge
+			// after green CI — CI runs every tool via `mise exec`, so a broken tool
+			// version fails CI before merge. Grouped to keep noise down.
+			matchManagers: ["mise"],
+			matchUpdateTypes: ["patch", "minor"],
+			automerge: true,
+			automergeType: "pr",
+			platformAutomerge: true,
+			groupName: "mise toolchain (non-major)",
+			commitMessageTopic: "mise toolchain",
+		},
+		{
+			// Major toolchain bumps (e.g. a new Node major) are a human decision;
+			// review PR, its own PR (never grouped).
+			matchManagers: ["mise"],
+			matchUpdateTypes: ["major"],
+			automerge: false,
+			groupName: null,
+		},
+	],
+}

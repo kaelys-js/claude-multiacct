@@ -84,6 +84,13 @@ backend = "npm:oxlint"
 version = "0.37.4"
 backend = "pipx:check-jsonschema"
 
+[[tools."pipx:reuse"]]
+version = "6.2.0"
+backend = "pipx:reuse"
+
+[tools."pipx:reuse".options]
+extras = "charset-normalizer"
+
 [[tools.pnpm]]
 version = "11.10.0"
 backend = "aqua:pnpm/pnpm"

@@ -1,7 +1,8 @@
+#:schema ./.schemas/gitleaks.json
 # Secret-scanning standard for foundation-registry — gitleaks. Run via
-# `pnpm qa:lint` (staged scan in the pre-commit path; whole-tree `gitleaks dir .`
-# in pre-push/CI). Extends gitleaks' built-in ruleset rather than replacing it,
-# then narrows false positives with a reviewed allowlist.
+# `pnpm qa:lint` (staged scan in the pre-commit path). Extends gitleaks' built-in
+# ruleset rather than replacing it, then narrows false positives with a reviewed
+# allowlist.
 
 [extend]
 useDefault = true
@@ -19,4 +20,7 @@ paths = [
 [[allowlists]]
 description = "Obvious non-secret placeholders used in docs and examples."
 regexTarget = "match"
-regexes = ['''(?i)(example|sample|dummy|placeholder|changeme|your[-_]?(token|key|secret))''']
+regexes = [
+	'''(?i)(example|sample|dummy|placeholder|changeme|your[-_]?(token|key|secret))''',
+	'''noreply@ttt\.example''',
+]

@@ -1,0 +1,12 @@
+LicenseRef-Proprietary — Proprietary / All Rights Reserved
+
+Copyright © 2026 TTT Studios. All rights reserved.
+
+This software and its accompanying files (the "Work") are proprietary and
+confidential to TTT Studios. The Work is provided for internal use only. No
+license, right, or permission of any kind is granted to any party to use, copy,
+modify, merge, publish, distribute, sublicense, or sell any portion of the Work,
+whether in source or compiled form, without the prior express written consent of
+TTT Studios.
+
+THE WORK IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED.

@@ -1,0 +1,11 @@
+#:schema ./.schemas/reuse.json
+version = 1
+SPDX-PackageName = "foundation-registry"
+SPDX-PackageSupplier = "TTT Studios <noreply@ttt.example>"
+SPDX-PackageDownloadLocation = "NOASSERTION"
+
+[[annotations]]
+path = "**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 TTT Studios"
+SPDX-License-Identifier = "LicenseRef-Proprietary"

@@ -51,6 +51,9 @@ function schemaStore(name: string): string {
  * returns its upstream download URL. Versioned entries read the pinned tool
  * version; SchemaStore entries ignore the argument and re-fetch canonically.
  */
+// NOTE: `.schemas/gitleaks.json` and `.schemas/reuse.json` are hand-vendored (no
+// public upstream) and intentionally excluded from SCHEMA_SOURCES so `sync:check`
+// stays green.
 const SCHEMA_SOURCES: Readonly<Record<string, (toml: string) => string>> = {
 	oxlint: (t) =>
 		`https://raw.githubusercontent.com/oxc-project/oxc/oxlint_v${readToolVersion(t, "npm:oxlint")}/npm/oxlint/configuration_schema.json`,
