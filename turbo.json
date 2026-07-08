@@ -1,11 +1,17 @@
 {
-	"$schema": "https://turbo.build/schema.json",
+	"$schema": "./.schemas/turbo.json",
 	"globalDependencies": ["mise.lock", "mise.toml"],
 	"globalPassThroughEnv": ["NODE_ENV", "CI"],
 	"ui": "tui",
 	"dangerouslyDisablePackageManagerCheck": false,
 	"tasks": {
 		"qa:hooks": { "inputs": ["lefthook.yml"], "outputs": [], "cache": false },
+		"test": { "inputs": ["$TURBO_DEFAULT$"], "outputs": [] },
+		"test:coverage:run": {
+			"inputs": ["$TURBO_DEFAULT$"],
+			"outputs": ["coverage/**"],
+			"outputLogs": "new-only"
+		},
 		"lint:hygiene": { "inputs": ["$TURBO_DEFAULT$"], "outputs": [], "outputLogs": "new-only" },
 		"lint:oxlint": {
 			"inputs": [

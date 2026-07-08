@@ -32,7 +32,7 @@
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 
 const ROOT = ((): string => {
 	const r = spawnSync("git", ["rev-parse", "--show-toplevel"], { encoding: "utf8" });
@@ -162,14 +162,16 @@ function isRemote(ref: string): boolean {
 }
 
 // Resolve a schema reference to the argument passed to `--schemafile`: a remote
-// URL passes through; a repo-relative path (`./x`, `schema/x`) resolves against
-// the repo root so check-jsonschema reads the vendored/authored copy.
-function resolveRef(ref: string): string {
+// URL passes through; a relative path resolves against the REFERENCING FILE's
+// directory (matching yaml-language-server / `$schema` semantics), so a ref like
+// `../schema/x.json` from `templates/foo.yaml` reaches `schema/x.json`. Root-level
+// files (dirname ".") keep working as `./x` → repo-root/x.
+function resolveRef(ref: string, file: string): string {
 	if (isRemote(ref)) {
 		return ref;
 	}
 	const rel = ref.replace(/^\.\//u, "");
-	return isAbsolute(rel) ? rel : join(ROOT, rel);
+	return isAbsolute(rel) ? rel : join(ROOT, dirname(file), rel);
 }
 
 // Read a tracked file's schema reference, or null if it declares none / is an
@@ -200,6 +202,63 @@ function discover(): Discovered[] {
 		}
 	}
 	return found;
+}
+
+// ── Schema-coverage gate ────────────────────────────────────────────────────
+// Instance validation (above) only covers files that ALREADY declare a schema.
+// The coverage gate closes the other half: every tracked config file that COULD
+// carry a schema marker MUST carry one, so a new `.yml`/`.toml`/`.json*` can't
+// slip in unvalidated. A file with no marker is a hard FAIL (not a skip).
+
+// Paths excluded from the coverage requirement: generated / vendored / lock
+// files that are not authored repo config, plus the schemas themselves. `*.lock`
+// and `**/*.schema.json` are matched by suffix; the rest are prefix/exact.
+const COVERAGE_EXCLUDED_PREFIXES: readonly string[] = [
+	".schemas/",
+	"coverage/",
+	"node_modules/",
+	"dist/",
+	"build/",
+	".turbo/",
+	".mise/",
+	".git/",
+];
+const COVERAGE_EXCLUDED_EXACT = new Set(["pnpm-lock.yaml", "mise.lock"]);
+
+// Whether a tracked config file is exempt from the schema-coverage requirement.
+function isCoverageExcluded(file: string): boolean {
+	if (
+		COVERAGE_EXCLUDED_EXACT.has(file) ||
+		file.endsWith(".lock") ||
+		file.endsWith(".schema.json")
+	) {
+		return true;
+	}
+	return COVERAGE_EXCLUDED_PREFIXES.some((p) => file.startsWith(p));
+}
+
+// Whether `file` is a coverage-gated config file (right extension, not excluded)
+// that declares NO schema marker. Unreadable files are treated as compliant (the
+// gate can't assert a marker it can't read; `git ls-files` output is trusted).
+function lacksSchemaMarker(file: string): boolean {
+	if (!CONFIG_EXTENSIONS.has(extOf(file)) || isCoverageExcluded(file)) {
+		return false;
+	}
+	let text: string;
+	try {
+		text = readFileSync(join(ROOT, file), "utf8");
+	} catch {
+		return false;
+	}
+	return extractRef(file, text) === null;
+}
+
+// Tracked config files (json/jsonc/json5/yaml/yml/toml) that are NOT excluded
+// yet declare NO schema marker. Deterministic (git ls-files order).
+function missingSchemaRefs(): string[] {
+	const listed = spawnSync("git", ["ls-files"], { cwd: ROOT, encoding: "utf8" });
+	const files = listed.stdout.split("\n").filter(Boolean);
+	return files.filter(lacksSchemaMarker);
 }
 
 // Signatures in check-jsonschema's output that mean the SCHEMA could not be
@@ -246,7 +305,7 @@ function dataFileFor(d: Discovered): { path: string; cleanup: string | null } {
 // download failure is classified `warn-unreachable` (network resilience); any
 // other non-zero exit is a genuine `fail`.
 function validate(d: Discovered): Outcome {
-	const schemafile = resolveRef(d.ref);
+	const schemafile = resolveRef(d.ref, d.file);
 	const { path, cleanup } = dataFileFor(d);
 	// The data path is either the original file or a stripped jsonc/json5 copy with
 	// a `.json` name, which check-jsonschema parses as plain JSON.
@@ -273,6 +332,25 @@ function validate(d: Discovered): Outcome {
 }
 
 function main(): void {
+	// Coverage gate first: every tracked config file that could carry a schema
+	// marker must declare one. A miss is a hard failure (listed by name) — the
+	// point is that an unvalidated config file can never merge.
+	const missing = missingSchemaRefs();
+	process.stdout.write("[1m▸ schema coverage gate[0m\n");
+	if (missing.length > 0) {
+		process.stderr.write(
+			`  ✗ FAIL ${String(missing.length)} tracked config file(s) declare NO schema marker:\n`,
+		);
+		for (const file of missing) {
+			process.stderr.write(`    ${file}\n`);
+		}
+		process.stderr.write(
+			"  Add a marker ($schema | # yaml-language-server: $schema= | #:schema) or exclude it.\n",
+		);
+	} else {
+		process.stdout.write("  ✓ OK   every tracked config file declares a schema marker\n");
+	}
+
 	const discovered = discover();
 
 	process.stdout.write("[1m▸ schema instance validation (auto-discovered)[0m\n");
@@ -281,7 +359,7 @@ function main(): void {
 		process.stdout.write(`    ${d.file} → ${d.ref}\n`);
 	}
 
-	let failed = 0;
+	let failed = missing.length;
 	for (const d of discovered) {
 		const outcome = validate(d);
 		process.stdout.write(`  ${mark(outcome)} ${d.file} → ${d.ref}\n`);

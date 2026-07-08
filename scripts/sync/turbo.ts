@@ -95,6 +95,16 @@ type TaskDef = {
 function generateTasks(): Record<string, TaskDef> {
 	const tasks: Record<string, TaskDef> = {
 		"qa:hooks": { inputs: ["lefthook.yml"], outputs: [], cache: false },
+		// Unit test run (no coverage) — whole-repo inputs, no build artefacts.
+		test: { inputs: ["$TURBO_DEFAULT$"], outputs: [] },
+		// Coverage run — emits the `coverage/**` report tree. Bare task name (not
+		// stardust's `//#test:coverage:run`): foundation is a SINGLE-PACKAGE repo, and
+		// turbo rejects the `//#<task>` package-task syntax outside a monorepo.
+		"test:coverage:run": {
+			inputs: ["$TURBO_DEFAULT$"],
+			outputs: ["coverage/**"],
+			outputLogs: "new-only",
+		},
 		// Hygiene guard (merge-conflict markers, oversized files) — whole-repo scope.
 		"lint:hygiene": {
 			inputs: ["$TURBO_DEFAULT$"],
@@ -139,7 +149,8 @@ function generateTasks(): Record<string, TaskDef> {
 // The full generated `turbo.json` object.
 function generateConfig(): Record<string, unknown> {
 	return {
-		$schema: "https://turbo.build/schema.json",
+		// Vendored locally (offline-safe), like mise/pnpm-workspace reference `./.schemas/`.
+		$schema: "./.schemas/turbo.json",
 		// Only truly-global inputs remain here. Each tool's config moved into its
 		// own task inputs so editing e.g. `.yamllint` busts only yamllint.
 		globalDependencies: ["mise.lock", "mise.toml"],

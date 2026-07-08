@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=../schema/tasks.schema.json
 # ─────────────────────────────────────────────────────────────────────────────
 # WORK spine tier — tool-neutral tasks projection (tasks.yaml)
 #

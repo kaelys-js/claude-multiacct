@@ -68,12 +68,16 @@ const SCHEMA_SOURCES: Readonly<Record<string, (toml: string) => string>> = {
 	// mise/taplo) so an offline editor still validates lefthook.yml / commitlint.config.json.
 	lefthook: () => "https://raw.githubusercontent.com/evilmartians/lefthook/master/schema.json",
 	commitlint: () => "https://json.schemastore.org/commitlintrc.json",
+	// turbo ships its own public schema (unversioned, like mise); vendored so
+	// turbo.json validates offline against `./.schemas/turbo.json`.
+	turbo: () => "https://turbo.build/schema.json",
 	// ── SchemaStore snapshots (unversioned; re-fetched fresh) ──────────
 	taplo: () => schemaStore("taplo"),
 	yamllint: () => schemaStore("yamllint"),
 	package: () => schemaStore("package"),
 	tsconfig: () => schemaStore("tsconfig"),
 	"pnpm-workspace": () => schemaStore("pnpm-workspace"),
+	"github-workflow": () => schemaStore("github-workflow"),
 };
 
 // Fetch a URL as UTF-8 text, throwing on any non-2xx response.

@@ -9,7 +9,11 @@
 	"scripts": {
 		"prepare": "lefthook install",
 		"validate": "node scripts/validate-records.ts",
-		"test": "node --test",
+		"test": "vitest run",
+		"test:coverage": "vitest run --coverage",
+		"test:coverage:run": "vitest run --coverage",
+		"qa:test": "turbo run test",
+		"qa:test:coverage": "turbo run test:coverage:run",
 		"build-site": "node scripts/build-site.ts",
 		"qa:hooks": "lefthook validate",
 		"lint": "pnpm qa:lint",
@@ -54,10 +58,12 @@
 		"@commitlint/cli": "21.2.0",
 		"@commitlint/config-conventional": "21.2.0",
 		"@types/node": "26.1.0",
+		"@vitest/coverage-v8": "4.1.9",
 		"lefthook": "2.1.9",
 		"turbo": "2.10.3",
 		"typescript": "6.0.3",
-		"valibot": "1.4.2"
+		"valibot": "1.4.2",
+		"vitest": "4.1.9"
 	},
 	"engines": {
 		"node": "26.4.0",

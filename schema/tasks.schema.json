@@ -1,0 +1,57 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"$id": "https://registry.foundation.internal/schema/tasks.schema.json",
+	"title": "Foundation tasks projection (tasks.yaml)",
+	"description": "The WORK spine tier (memo §11): a tool-neutral tasks.yaml projecting the work implied by a SPEC into whatever tracker the team uses. Lives OUTSIDE records/** and is NOT a record.schema.json record.",
+	"type": "object",
+	"additionalProperties": false,
+	"required": ["spec", "tasks"],
+	"properties": {
+		"spec": {
+			"type": "string",
+			"description": "The SPEC id this work realises (the up-chain reference).",
+			"pattern": "^SPEC-[0-9]{4}$"
+		},
+		"tasks": {
+			"type": "array",
+			"description": "The work items projected from the SPEC.",
+			"minItems": 1,
+			"items": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["id", "title", "status", "owner"],
+				"properties": {
+					"id": {
+						"type": "string",
+						"description": "Stable local key, unique within this file (e.g. T-001).",
+						"pattern": "^T-[0-9]+$"
+					},
+					"title": {
+						"type": "string",
+						"description": "Short human summary of the work.",
+						"minLength": 1
+					},
+					"status": {
+						"type": "string",
+						"enum": ["todo", "in-progress", "blocked", "done"]
+					},
+					"owner": {
+						"type": "string",
+						"description": "A single accountable GitHub @handle (no group '/').",
+						"pattern": "^@[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$"
+					},
+					"depends_on": {
+						"type": "array",
+						"description": "Task ids in this file that must precede this one.",
+						"items": { "type": "string", "pattern": "^T-[0-9]+$" },
+						"uniqueItems": true
+					},
+					"tracker_ref": {
+						"type": "string",
+						"description": "The projected id in the external tracker (Linear/Jira/GitHub issue key) — the tool-neutral projection seam."
+					}
+				}
+			}
+		}
+	}
+}
