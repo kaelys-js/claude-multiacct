@@ -322,8 +322,9 @@ temp/
 .cocoindex_code/
 
 # Governance records are never build output — the `build/` rule above would
-# otherwise clobber the records/build/ domain directory. Keep the records tree.
-!records/build/
+# otherwise clobber the records/build/ domain directory (now inside the
+# @foundation/registry package). Keep the records tree.
+!packages/products/registry/records/build/
 
 # Lock files — DO NOT IGNORE
 # pnpm-lock.yaml MUST be committed

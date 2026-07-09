@@ -1,6 +1,6 @@
 # foundation-registry
 
-The **Business-as-Code governance layer** for the shared client foundation. This repository holds the firm's owned decisions and records — Product Requirement Documents (PRD), Product Decision Records (PDR), Architecture Decision Records (ADR), capability Specs (SPEC), Tasks, and Releases — that govern _how_ client projects are built; it is the single source of truth for those decisions, it does **not** run in production, and it is **not** the client TypeScript monorepo. Records are Markdown with YAML frontmatter, validated by schema, and owned in pieces by named GitHub teams (see [`owners.yaml`](owners.yaml)).
+The **Business-as-Code governance layer** for the shared client foundation. This repository holds the firm's owned decisions and records — Product Requirement Documents (PRD), Product Decision Records (PDR), Architecture Decision Records (ADR), capability Specs (SPEC), Tasks, and Releases — that govern _how_ client projects are built; it is the single source of truth for those decisions, it does **not** run in production, and it is **not** the client TypeScript monorepo. Records are Markdown with YAML frontmatter, validated by schema, and owned in pieces by named GitHub teams (see [`owners.yaml`](packages/products/registry/owners.yaml)).
 
 ## Status
 
@@ -10,24 +10,28 @@ Stood up per **STEP-2.1** of `foundation-stage1-tasks.md`. The directory layout 
 
 Records are partitioned by **domain** (matching the branch keys in `owners.yaml`), so CODEOWNERS routes review to the owning team per domain. The record type and id live in the filename and frontmatter; the PRD → (PDR/ADR) → SPEC → tasks → release **spine** is a reference relationship enforced by the schema, not a directory hierarchy.
 
+The record spine now lives in the `@foundation/registry` workspace package (`packages/products/registry/`); the toolchain that governs it lives in the `@foundation/{config,core,qa,sync}` packages under `packages/shared/`. (The complete workspace layout is documented in STEP-0.7.)
+
 ```text
-records/
-  governance/      # cross-domain & governance records (e.g. PRD-0001, foundation SPEC)  -> @foundation-lead
-  build/           # -> @ttt/build
-  design/          # -> @ttt/design
-  frontend/        # -> @ttt/frontend
-  backend/         # -> @ttt/backend
-  infra/           # -> @ttt/infra
-  security/        # -> @ttt/security
-  data/            # -> @ttt/data
-  observability/   # -> @ttt/observability
-schema/            # record.schema.json (JSON Schema draft 2020-12: frontmatter + parent-type contract)
-templates/         # record templates (prd / pdr / adr / spec) + tasks / release spine-tier formats
-proposals/         # open-contribution drafts
-site/              # generated static index (built in CI)
+packages/products/registry/    # @foundation/registry — the record spine
+  records/
+    governance/     # cross-domain & governance records (e.g. PRD-0001, foundation SPEC)  -> @foundation-lead
+    build/          # -> @ttt/build
+    design/         # -> @ttt/design
+    frontend/       # -> @ttt/frontend
+    backend/        # -> @ttt/backend
+    infra/          # -> @ttt/infra
+    security/       # -> @ttt/security
+    data/           # -> @ttt/data
+    observability/  # -> @ttt/observability
+  schema/           # record.schema.json + owners.schema.json + tasks.schema.json (JSON Schema draft 2020-12)
+  templates/        # record templates (prd / pdr / adr / spec) + tasks / release spine-tier formats
+  proposals/        # open-contribution drafts
+  owners.yaml       # domain -> team + lead manifest (validated by owners.schema.json)
+site/                # generated static index (built in CI; STEP-5)
 ```
 
-Record filenames are `<type>-<id-lowercased>-<slug>.md`, e.g. `records/build/adr-0001-build-orchestrator.md`.
+Record filenames are `<type>-<id-lowercased>-<slug>.md`, e.g. `packages/products/registry/records/build/adr-0001-build-orchestrator.md`.
 
 ## Ownership
 

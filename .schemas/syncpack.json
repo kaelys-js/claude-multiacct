@@ -1,7 +1,7 @@
 {
 	"$schema": "https://json-schema.org/draft/2020-12/schema",
 	"$id": "https://ttt.example/schemas/syncpack.json",
-	"$comment": "Hand-vendored minimal permissive schema for syncpack's config (.syncpackrc.json). syncpack v15 (the Rust rewrite) publishes NO JSON Schema — it is absent from SchemaStore and ships no schema in its npm package or GitHub dist — so this schema is intentionally NOT in scripts/sync/schemas.ts SCHEMA_SOURCES and is excluded from sync:check. It exists so an editor's $schema resolves offline and `check-jsonschema --check-metaschema` passes. Permissive by design: it pins the shape of the keys this repo uses (indent/sortFirst/sortAz/versionGroups/semverGroups) while allowing other syncpack keys via additionalProperties.",
+	"$comment": "Hand-vendored minimal permissive schema for syncpack's config (.syncpackrc.json). syncpack v15 (the Rust rewrite) publishes NO JSON Schema — it is absent from SchemaStore and ships no schema in its npm package or GitHub dist — so this schema is intentionally NOT in packages/shared/utils/sync/src/schemas.ts SCHEMA_SOURCES and is excluded from sync:check. It exists so an editor's $schema resolves offline and `check-jsonschema --check-metaschema` passes. Permissive by design: it pins the shape of the keys this repo uses (indent/sortFirst/sortAz/versionGroups/semverGroups) while allowing other syncpack keys via additionalProperties.",
 	"title": "syncpack Configuration",
 	"description": "Configuration file for syncpack (.syncpackrc.json) — dependency version consistency and package.json field sorting.",
 	"type": "object",

@@ -1,5 +1,5 @@
 {
-	"$comment": "Hand-vendored from editorconfig-checker/editorconfig-checker (.editorconfig-checker.schema.json on the default branch). Not published to SchemaStore, so this schema is intentionally NOT in scripts/sync/schemas.ts SCHEMA_SOURCES and is excluded from sync:check — same pattern as gitleaks/reuse.",
+	"$comment": "Hand-vendored from editorconfig-checker/editorconfig-checker (.editorconfig-checker.schema.json on the default branch). Not published to SchemaStore, so this schema is intentionally NOT in packages/shared/utils/sync/src/schemas.ts SCHEMA_SOURCES and is excluded from sync:check — same pattern as gitleaks/reuse.",
 	"$schema": "https://json-schema.org/draft/2020-12/schema",
 	"$id": "https://ttt.example/schemas/editorconfig-checker.json",
 	"title": "editorconfig-checker configuration",

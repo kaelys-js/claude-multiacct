@@ -6,15 +6,19 @@
 	"dangerouslyDisablePackageManagerCheck": false,
 	"tasks": {
 		"clean": { "cache": false, "outputs": [] },
-		"qa:hooks": { "inputs": ["lefthook.yml"], "outputs": [], "cache": false },
-		"test": { "inputs": ["$TURBO_DEFAULT$"], "outputs": [] },
-		"test:coverage:run": {
+		"qa:hooks": {
+			"inputs": ["lefthook.yml", "packages/shared/config/lefthook.yml"],
+			"outputs": [],
+			"cache": false
+		},
+		"//#test": { "inputs": ["$TURBO_DEFAULT$"], "outputs": [] },
+		"//#test:coverage:run": {
 			"inputs": ["$TURBO_DEFAULT$"],
 			"outputs": ["coverage/**"],
 			"outputLogs": "new-only"
 		},
-		"lint:hygiene": { "inputs": ["$TURBO_DEFAULT$"], "outputs": [], "outputLogs": "new-only" },
-		"lint:oxlint": {
+		"//#lint:hygiene": { "inputs": ["$TURBO_DEFAULT$"], "outputs": [], "outputLogs": "new-only" },
+		"//#lint:oxlint": {
 			"inputs": [
 				"**/*.cjs",
 				"**/*.cts",
@@ -24,17 +28,24 @@
 				"**/*.mts",
 				"**/*.ts",
 				"**/*.tsx",
-				".oxlintrc.json"
+				"packages/shared/config/oxlint.json"
 			],
 			"outputs": [],
 			"outputLogs": "new-only"
 		},
-		"lint:typescript": {
-			"inputs": ["**/*.cts", "**/*.mts", "**/*.ts", "**/*.tsx", "tsconfig.json"],
+		"//#lint:typescript": {
+			"inputs": [
+				"**/*.cts",
+				"**/*.mts",
+				"**/*.ts",
+				"**/*.tsx",
+				"packages/shared/config/tsconfig.base.json",
+				"tsconfig.json"
+			],
 			"outputs": [],
 			"outputLogs": "new-only"
 		},
-		"format:oxfmt": {
+		"//#format:oxfmt": {
 			"inputs": [
 				"**/*.cjs",
 				"**/*.css",
@@ -55,12 +66,12 @@
 				"**/*.yaml",
 				"**/*.yml",
 				".editorconfig",
-				".oxfmtrc.json"
+				"packages/shared/config/oxfmt.json"
 			],
 			"outputs": [],
 			"cache": false
 		},
-		"format:check:oxfmt": {
+		"//#format:check:oxfmt": {
 			"inputs": [
 				"**/*.cjs",
 				"**/*.css",
@@ -81,110 +92,130 @@
 				"**/*.yaml",
 				"**/*.yml",
 				".editorconfig",
-				".oxfmtrc.json"
+				"packages/shared/config/oxfmt.json"
 			],
 			"outputs": [],
 			"outputLogs": "new-only"
 		},
-		"lint:yamllint": {
-			"inputs": ["**/*.yaml", "**/*.yml", ".yamllint"],
+		"//#lint:yamllint": {
+			"inputs": ["**/*.yaml", "**/*.yml", "packages/shared/config/yamllint-base.yaml"],
 			"outputs": [],
 			"outputLogs": "new-only"
 		},
-		"lint:taplo": {
-			"inputs": ["**/*.toml", "taplo.toml"],
+		"//#lint:taplo": {
+			"inputs": ["**/*.toml", "packages/shared/config/taplo.toml"],
 			"outputs": [],
 			"outputLogs": "new-only"
 		},
-		"format:taplo": { "inputs": ["**/*.toml", "taplo.toml"], "outputs": [], "cache": false },
-		"format:check:taplo": {
-			"inputs": ["**/*.toml", "taplo.toml"],
+		"//#format:taplo": {
+			"inputs": ["**/*.toml", "packages/shared/config/taplo.toml"],
+			"outputs": [],
+			"cache": false
+		},
+		"//#format:check:taplo": {
+			"inputs": ["**/*.toml", "packages/shared/config/taplo.toml"],
 			"outputs": [],
 			"outputLogs": "new-only"
 		},
-		"lint:markdownlint": {
-			"inputs": ["**/*.md", "**/*.mdx", ".markdownlint-cli2.jsonc"],
+		"//#lint:markdownlint": {
+			"inputs": [
+				"**/*.md",
+				"**/*.mdx",
+				"packages/shared/config/.markdownlint-cli2.jsonc",
+				"packages/shared/config/markdownlint.jsonc"
+			],
 			"outputs": [],
 			"outputLogs": "new-only"
 		},
-		"lint:check-jsonschema": {
+		"//#lint:check-jsonschema": {
 			"inputs": ["**/*.schema.json"],
 			"outputs": [],
 			"outputLogs": "new-only"
 		},
-		"lint:reuse": {
+		"//#lint:reuse": {
 			"inputs": ["$TURBO_DEFAULT$", "REUSE.toml"],
 			"outputs": [],
 			"outputLogs": "new-only"
 		},
-		"lint:gitleaks": {
-			"inputs": ["$TURBO_DEFAULT$", ".gitleaks.toml"],
+		"//#lint:gitleaks": {
+			"inputs": ["$TURBO_DEFAULT$", "packages/shared/config/gitleaks.toml"],
 			"outputs": [],
 			"outputLogs": "new-only"
 		},
-		"lint:editorconfig": {
+		"//#lint:editorconfig": {
 			"inputs": [
 				"$TURBO_DEFAULT$",
 				".editorconfig",
-				".editorconfig-checker.json",
-				"scripts/qa/editorconfig-check.ts"
+				"packages/shared/config/editorconfig-checker.json",
+				"packages/shared/utils/qa/src/editorconfig-check.ts"
 			],
 			"outputs": [],
 			"outputLogs": "new-only"
 		},
-		"lint:gitmeta": {
+		"//#lint:gitmeta": {
 			"inputs": [
 				"$TURBO_DEFAULT$",
 				".gitattributes",
 				".gitignore",
 				".npmrc",
-				"scripts/qa/gitmeta-check.ts"
+				"packages/shared/utils/qa/src/gitmeta-check.ts"
 			],
 			"outputs": [],
 			"outputLogs": "new-only"
 		},
-		"lint:schema": { "inputs": ["$TURBO_DEFAULT$"], "outputs": [], "outputLogs": "new-only" },
-		"lint:syncpack": {
-			"inputs": ["$TURBO_DEFAULT$", ".syncpackrc.json"],
+		"//#lint:lefthook": {
+			"inputs": [
+				"$TURBO_DEFAULT$",
+				"lefthook.yml",
+				"packages/shared/config/lefthook.yml",
+				"packages/shared/utils/qa/src/lefthook-check.ts"
+			],
 			"outputs": [],
 			"outputLogs": "new-only"
 		},
-		"format:syncpack": {
-			"inputs": ["$TURBO_DEFAULT$", ".syncpackrc.json"],
+		"//#lint:schema": { "inputs": ["$TURBO_DEFAULT$"], "outputs": [], "outputLogs": "new-only" },
+		"//#lint:syncpack": {
+			"inputs": ["$TURBO_DEFAULT$", "packages/shared/config/syncpack.json"],
+			"outputs": [],
+			"outputLogs": "new-only"
+		},
+		"//#format:syncpack": {
+			"inputs": ["$TURBO_DEFAULT$", "packages/shared/config/syncpack.json"],
 			"outputs": [],
 			"cache": false
 		},
-		"format:check:syncpack": {
-			"inputs": ["$TURBO_DEFAULT$", ".syncpackrc.json"],
+		"//#format:check:syncpack": {
+			"inputs": ["$TURBO_DEFAULT$", "packages/shared/config/syncpack.json"],
 			"outputs": [],
 			"outputLogs": "new-only"
 		},
-		"qa:lint:all": {
+		"//#qa:lint:all": {
 			"dependsOn": [
-				"lint:hygiene",
-				"lint:oxlint",
-				"lint:typescript",
-				"lint:yamllint",
-				"lint:taplo",
-				"lint:markdownlint",
-				"lint:check-jsonschema",
-				"lint:reuse",
-				"lint:gitleaks",
-				"lint:editorconfig",
-				"lint:gitmeta",
-				"lint:schema",
-				"lint:syncpack"
+				"//#lint:hygiene",
+				"//#lint:oxlint",
+				"//#lint:typescript",
+				"//#lint:yamllint",
+				"//#lint:taplo",
+				"//#lint:markdownlint",
+				"//#lint:check-jsonschema",
+				"//#lint:reuse",
+				"//#lint:gitleaks",
+				"//#lint:editorconfig",
+				"//#lint:gitmeta",
+				"//#lint:lefthook",
+				"//#lint:schema",
+				"//#lint:syncpack"
 			],
 			"outputs": [],
 			"cache": false
 		},
-		"qa:format:all": {
-			"dependsOn": ["format:oxfmt", "format:taplo", "format:syncpack"],
+		"//#qa:format:all": {
+			"dependsOn": ["//#format:oxfmt", "//#format:taplo", "//#format:syncpack"],
 			"outputs": [],
 			"cache": false
 		},
-		"qa:format:check:all": {
-			"dependsOn": ["format:check:oxfmt", "format:check:taplo", "format:check:syncpack"],
+		"//#qa:format:check:all": {
+			"dependsOn": ["//#format:check:oxfmt", "//#format:check:taplo", "//#format:check:syncpack"],
 			"outputs": [],
 			"cache": false
 		}

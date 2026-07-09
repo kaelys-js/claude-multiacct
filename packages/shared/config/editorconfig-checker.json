@@ -1,0 +1,16 @@
+{
+	"$schema": "../../../.schemas/editorconfig-checker.json",
+	"Exclude": [
+		"\\.mise/",
+		"node_modules/",
+		"\\.turbo/",
+		"\\.git/",
+		"pnpm-lock\\.yaml",
+		"\\.schemas/",
+		"(^|/)bin/mise$"
+	],
+	"Disable": {
+		"Indentation": true,
+		"MaxLineLength": true
+	}
+}

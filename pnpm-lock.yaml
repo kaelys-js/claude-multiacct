@@ -7,19 +7,6 @@ settings:
 importers:
 
   .:
-    dependencies:
-      ajv:
-        specifier: 8.20.0
-        version: 8.20.0
-      ajv-formats:
-        specifier: 3.0.1
-        version: 3.0.1(ajv@8.20.0)
-      gray-matter:
-        specifier: 4.0.3
-        version: 4.0.3
-      yaml:
-        specifier: 2.9.0
-        version: 2.9.0
     devDependencies:
       '@commitlint/cli':
         specifier: 21.2.0
@@ -27,6 +14,9 @@ importers:
       '@commitlint/config-conventional':
         specifier: 21.2.0
         version: 21.2.0
+      '@foundation/config':
+        specifier: workspace:*
+        version: link:packages/shared/config
       '@types/node':
         specifier: 26.1.0
         version: 26.1.0
@@ -45,14 +35,62 @@ importers:
       typescript:
         specifier: 6.0.3
         version: 6.0.3
-      valibot:
-        specifier: 1.4.2
-        version: 1.4.2(typescript@6.0.3)
       vitest:
         specifier: 4.1.9
         version: 4.1.9(@types/node@26.1.0)(@vitest/coverage-v8@4.1.9)(vite@8.1.3(@types/node@26.1.0)(jiti@2.6.1)(yaml@2.9.0))
 
-  packages/_probe: {}
+  packages/products/registry:
+    dependencies:
+      ajv:
+        specifier: 8.20.0
+        version: 8.20.0
+      ajv-formats:
+        specifier: 3.0.1
+        version: 3.0.1(ajv@8.20.0)
+      gray-matter:
+        specifier: 4.0.3
+        version: 4.0.3
+      yaml:
+        specifier: 2.9.0
+        version: 2.9.0
+    devDependencies:
+      '@foundation/config':
+        specifier: workspace:*
+        version: link:../../shared/config
+
+  packages/shared/config: {}
+
+  packages/shared/utils/core:
+    devDependencies:
+      '@foundation/config':
+        specifier: workspace:*
+        version: link:../../config
+
+  packages/shared/utils/qa:
+    dependencies:
+      '@foundation/core':
+        specifier: workspace:*
+        version: link:../core
+      valibot:
+        specifier: 1.4.2
+        version: 1.4.2(typescript@6.0.3)
+    devDependencies:
+      '@foundation/config':
+        specifier: workspace:*
+        version: link:../../config
+
+  packages/shared/utils/sync:
+    dependencies:
+      '@foundation/core':
+        specifier: workspace:*
+        version: link:../core
+      '@foundation/qa':
+        specifier: workspace:*
+        version: link:../qa
+    devDependencies:
+      '@foundation/config':
+        specifier: workspace:*
+        version: link:../../config
 
 packages:
 

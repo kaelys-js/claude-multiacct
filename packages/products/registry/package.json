@@ -1,0 +1,18 @@
+{
+	"$schema": "../../../.schemas/package.json",
+	"name": "@foundation/registry",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Foundation record registry: the record validator, schemas, templates, records, and proposals.",
+	"license": "SEE LICENSE IN LICENSE",
+	"dependencies": {
+		"ajv": "8.20.0",
+		"ajv-formats": "3.0.1",
+		"gray-matter": "4.0.3",
+		"yaml": "2.9.0"
+	},
+	"devDependencies": {
+		"@foundation/config": "workspace:*"
+	}
+}

@@ -1,5 +1,5 @@
 {
-	"$comment": "Hand-vendored from resist-js-private (packages/shared/utils/cli/src/tools/schema-updater/schemas/gitleaks.schema.json). No public upstream / SchemaStore entry exists, so this schema is intentionally NOT in scripts/sync/schemas.ts SCHEMA_SOURCES and is excluded from sync:check.",
+	"$comment": "Hand-vendored from resist-js-private (packages/shared/utils/cli/src/tools/schema-updater/schemas/gitleaks.schema.json). No public upstream / SchemaStore entry exists, so this schema is intentionally NOT in packages/shared/utils/sync/src/schemas.ts SCHEMA_SOURCES and is excluded from sync:check.",
 	"$schema": "https://json-schema.org/draft-07/schema#",
 	"$id": "https://resist.js/schemas/gitleaks.schema.json",
 	"title": "Gitleaks Configuration",

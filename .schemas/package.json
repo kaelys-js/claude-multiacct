@@ -1,6 +1,7 @@
 {
 	"$schema": "http://json-schema.org/draft-07/schema#",
-	"title": "JSON schema for NPM package.json files",
+	"type": "object",
+	"$id": "https://json.schemastore.org/package.json",
 	"definitions": {
 		"person": {
 			"description": "A person who has been involved in creating or maintaining this package.",
@@ -365,7 +366,6 @@
 			}
 		}
 	},
-	"type": "object",
 	"patternProperties": {
 		"^_": {
 			"description": "Any property starting with _ is valid.",
@@ -1325,5 +1325,5 @@
 			"additionalProperties": false
 		}
 	},
-	"$id": "https://json.schemastore.org/package.json"
+	"title": "JSON schema for NPM package.json files"
 }

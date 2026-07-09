@@ -1,4 +1,8 @@
 # yaml-language-server: $schema=./.schemas/pnpm-workspace.json
+# Workspace members. `packages/**` matches package dirs at any depth; intermediate
+# dirs without a package.json (packages/shared, packages/shared/utils) are ignored.
+packages:
+  - "packages/**"
 # Dependency cooldown is enforced at UPDATE time by Renovate (minimumReleaseAge:
 # 3 days), NOT here: with exact pins + a committed lockfile installed via
 # --frozen-lockfile, the install-time gate would only ever block our own pinned
