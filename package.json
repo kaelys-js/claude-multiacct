@@ -33,6 +33,8 @@
 	},
 	"packageManager": "pnpm@11.10.0",
 	"scripts": {
+		"ci:local": "node packages/shared/utils/qa/src/ci-local.ts",
+		"ci:local:clean": "node packages/shared/utils/qa/src/ci-local.ts --clean",
 		"clean": "([ -d packages ] && turbo run clean --filter='./packages/*' || true) && rm -rf coverage .turbo dist build",
 		"clean:all": "([ -d packages ] && turbo run clean --filter='./packages/*' || true) && rm -rf coverage .turbo dist build node_modules .mise",
 		"fix:deps": "syncpack fix --config packages/shared/config/syncpack.json",

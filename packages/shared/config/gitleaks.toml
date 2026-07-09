@@ -18,6 +18,17 @@ paths = [
 ]
 
 [[allowlists]]
+description = """
+Generated build and cache artifacts — regenerated output, never committed secrets.
+A CI runner (and `pnpm ci:local` via act) installs the toolchain and deps INSIDE the
+job before the scan runs, so these dirs exist in-tree at scan time; `gitleaks dir` is
+a filesystem walk with no .gitignore awareness, so they must be excluded here or their
+package metadata (base64 blobs, hashes) trips false positives. Dotted/anchored patterns
+only, so the `records/build/` governance domain is never matched.
+"""
+paths = ['''(^|/)\.pnpm-store/''', '''(^|/)\.turbo/''', '''(^|/)coverage/''']
+
+[[allowlists]]
 description = "Obvious non-secret placeholders used in docs and examples."
 regexTarget = "match"
 regexes = [
