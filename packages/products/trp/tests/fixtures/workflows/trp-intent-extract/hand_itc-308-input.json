@@ -1,0 +1,486 @@
+{
+	"id": "868k449ph",
+	"custom_id": "HAND_ITC-308",
+	"custom_item_id": 0,
+	"name": "[SPIKE] Receipt OCR - Discounted items",
+	"text_content": {
+		"sanitized": true,
+		"len": 617,
+		"hash": "fnv1a-3cd641f70812c6a7"
+	},
+	"description": {
+		"sanitized": true,
+		"len": 617,
+		"hash": "fnv1a-3cd641f70812c6a7"
+	},
+	"status": {
+		"id": "c90116564034_S9bJEHWp",
+		"status": "todo",
+		"color": "#8d8d8d",
+		"orderindex": 0,
+		"type": "open"
+	},
+	"orderindex": "121912120.00000000000000000000000000000000",
+	"date_created": "1782224174605",
+	"date_updated": "1783629022717",
+	"date_closed": null,
+	"date_done": null,
+	"archived": false,
+	"creator": {
+		"id": 26216448,
+		"username": "Satchel Catral",
+		"color": "#F31D2F",
+		"email": "satchel.catral@ttt.studio",
+		"profilePicture": null
+	},
+	"assignees": [
+		{
+			"id": 87453279,
+			"username": "Cole B",
+			"color": "#0091ff",
+			"initials": "CB",
+			"email": "cole.beuker@ttt.studio",
+			"profilePicture": "https://attachments.clickup.com/profilePictures/87453279_izc.jpg"
+		}
+	],
+	"group_assignees": [],
+	"watchers": [
+		{
+			"id": 26216448,
+			"username": "Satchel Catral",
+			"color": "#F31D2F",
+			"initials": "SC",
+			"email": "satchel.catral@ttt.studio",
+			"profilePicture": null
+		},
+		{
+			"id": 87417231,
+			"username": "Shay Aryan",
+			"color": "#afb42b",
+			"initials": "SA",
+			"email": "shay.aryan@ttt.studio",
+			"profilePicture": null
+		},
+		{
+			"id": 87453279,
+			"username": "Cole B",
+			"color": "#0091ff",
+			"initials": "CB",
+			"email": "cole.beuker@ttt.studio",
+			"profilePicture": "https://attachments.clickup.com/profilePictures/87453279_izc.jpg"
+		}
+	],
+	"checklists": [],
+	"tags": [],
+	"parent": null,
+	"top_level_parent": null,
+	"priority": {
+		"color": "#d8d8d8",
+		"id": "4",
+		"orderindex": "4",
+		"priority": "low"
+	},
+	"due_date": null,
+	"start_date": null,
+	"points": null,
+	"time_estimate": null,
+	"time_spent": 19800000,
+	"custom_fields": [
+		{
+			"id": "919bd9cd-6dc7-4378-813b-23f881d6bed7",
+			"name": "Sprint Point Converted",
+			"type": "formula",
+			"type_config": {
+				"simple": false,
+				"formula": {
+					"sanitized": true,
+					"len": 192,
+					"hash": "fnv1a-38f94b7ca1b3e053"
+				},
+				"version": "1.12",
+				"reset_at": 1776896617423,
+				"is_dynamic": false,
+				"return_types": ["number"],
+				"calculation_state": "ready"
+			},
+			"date_created": "1776896111492",
+			"hide_from_guests": false,
+			"value": "0",
+			"value_richtext": null,
+			"required": false
+		},
+		{
+			"id": "3c8897f9-b658-467e-b236-a1805604db55",
+			"name": "Discrepancy",
+			"type": "formula",
+			"type_config": {
+				"simple": false,
+				"formula": {
+					"sanitized": true,
+					"len": 548,
+					"hash": "fnv1a-e3c5de37daf32e98"
+				},
+				"version": "1.12",
+				"reset_at": 1776897556390,
+				"is_dynamic": false,
+				"return_types": ["null", "number"],
+				"calculation_state": "ready"
+			},
+			"date_created": "1776896694763",
+			"hide_from_guests": false,
+			"value": "0",
+			"value_richtext": null,
+			"required": false
+		},
+		{
+			"id": "71073b5a-6f7b-4064-a71e-16df49d36d54",
+			"name": "Time Tracked Converted",
+			"type": "formula",
+			"type_config": {
+				"simple": false,
+				"formula": "TASK_TIME_TRACKED_HOURS",
+				"version": "1.12",
+				"reset_at": 1750898246942,
+				"is_dynamic": false,
+				"return_types": ["number"],
+				"calculation_state": "ready"
+			},
+			"date_created": "1711390539813",
+			"hide_from_guests": false,
+			"value": "5.5",
+			"value_richtext": null,
+			"required": false
+		},
+		{
+			"id": "c09bb4fd-5228-4201-80f7-13b2205d1c9b",
+			"name": "Expected # of Hours (per week)",
+			"type": "number",
+			"type_config": {},
+			"date_created": "1769411920584",
+			"hide_from_guests": false,
+			"value": "0",
+			"value_richtext": null,
+			"required": false
+		},
+		{
+			"id": "095977de-b5dd-4478-922d-ce2f3df0117f",
+			"name": "Weeks Allocated",
+			"type": "formula",
+			"type_config": {
+				"simple": false,
+				"formula": "(TASK_DUE_DATE - TASK_START_DATE) / 7",
+				"version": "1.12",
+				"reset_at": 1769466235356,
+				"is_dynamic": false,
+				"return_types": ["null", "number"],
+				"calculation_state": "ready"
+			},
+			"date_created": "1769466015489",
+			"hide_from_guests": false,
+			"required": false
+		},
+		{
+			"id": "eab3f26e-411c-46bc-8bf5-7e460e567618",
+			"name": "Expected Hours Total for Allocation",
+			"type": "formula",
+			"type_config": {
+				"simple": true,
+				"formula": {
+					"sanitized": true,
+					"len": 101,
+					"hash": "fnv1a-310264b2d3c72d73"
+				},
+				"version": "1.12",
+				"reset_at": 1769466282569,
+				"is_dynamic": false,
+				"return_types": ["null", "number"],
+				"calculation_state": "ready"
+			},
+			"date_created": "1769466161037",
+			"hide_from_guests": false,
+			"required": false
+		},
+		{
+			"id": "56fc6dbb-8acf-44f1-b775-5af010144db7",
+			"name": "ITC Epics",
+			"type": "drop_down",
+			"type_config": {
+				"sorting": "manual",
+				"new_drop_down": true,
+				"options": [
+					{
+						"id": "f46aa3a9-8603-42e8-8846-2de617205aa4",
+						"name": "SharePoint Foundation & Environment Safty",
+						"color": "#30a46c",
+						"orderindex": 0
+					},
+					{
+						"id": "571e1283-1746-439f-8dd1-2ac59d90aa0a",
+						"name": "Flow 1:  PO Bot Core",
+						"color": "#e5484d",
+						"orderindex": 1
+					},
+					{
+						"id": "776bf46c-448e-4bf9-9f65-e8594e438f46",
+						"name": "Flow 2: Pricing & Vendor Compliance (Outlook or CMiC)",
+						"color": "#e93d82",
+						"orderindex": 2
+					},
+					{
+						"id": "7801a374-dbe0-42f9-96d4-ecfb077abc3d",
+						"name": "Flow 4: Invoice Matching",
+						"color": "#0091ff",
+						"orderindex": 3
+					},
+					{
+						"id": "768d53f3-a4d6-40c0-b223-11cc78021cf3",
+						"name": "PO LifeCycle in SharePoint",
+						"color": "#12a594",
+						"orderindex": 4
+					},
+					{
+						"id": "d0a94ca9-65c4-4077-8521-84aa375446c4",
+						"name": "Account Management & Cleanup",
+						"color": "#ffc53d",
+						"orderindex": 5
+					},
+					{
+						"id": "334ad603-ea94-4d2e-b212-9d8d2f6363e7",
+						"name": "Flow 3: Material Receipt/Waybill",
+						"color": "#ab4aba",
+						"orderindex": 6
+					},
+					{
+						"id": "172c6393-7631-4f11-a18b-937e88b58f74",
+						"name": "Expenses / HR",
+						"color": "#667684",
+						"orderindex": 7
+					},
+					{
+						"id": "6f087e69-e060-4885-a212-31d871bf63b4",
+						"name": "Flow 5 Upload Invoice/ Retroactive POs",
+						"color": "#b6b6ff",
+						"orderindex": 8
+					},
+					{
+						"id": "8bb20c49-44ab-4824-80eb-a7a2e023b948",
+						"name": "No PO",
+						"color": "#aec0f5",
+						"orderindex": 9
+					},
+					{
+						"id": "caa8d132-9708-4649-bd04-b6fa34bdaf34",
+						"name": "Material Unit Agreement ",
+						"color": "#96c7f2",
+						"orderindex": 10
+					},
+					{
+						"id": "78b91894-1a99-4917-92a3-e8fccf2ca401",
+						"name": "Labour Invoices",
+						"color": "#8dcec3",
+						"orderindex": 11
+					},
+					{
+						"id": "e7f7be0f-4539-4d0a-993e-04d349ab7505",
+						"name": "Equipment Invoices ",
+						"color": "#92ceac",
+						"orderindex": 12
+					},
+					{
+						"id": "ddd3ee87-f510-498f-9c53-b0f4edd8a095",
+						"name": "Concrete POs",
+						"color": "#e9c162",
+						"orderindex": 13
+					}
+				]
+			},
+			"date_created": "1768949544131",
+			"hide_from_guests": false,
+			"required": false
+		}
+	],
+	"dependencies": [],
+	"linked_tasks": [
+		{
+			"task_id": "868k259fd",
+			"link_id": "868k449ph",
+			"date_created": "1782322983919",
+			"userid": "87417231",
+			"workspace_id": "8593845"
+		}
+	],
+	"locations": [],
+	"team_id": "8593845",
+	"url": "https://app.clickup.com/t/868k449ph",
+	"sharing": {
+		"public": false,
+		"public_share_expires_on": null,
+		"public_fields": [
+			"assignees",
+			"priority",
+			"due_date",
+			"content",
+			"comments",
+			"attachments",
+			"customFields",
+			"subtasks",
+			"tags",
+			"checklists",
+			"coverimage"
+		],
+		"token": null,
+		"seo_optimized": false
+	},
+	"permission_level": "create",
+	"list": {
+		"id": "901114071018",
+		"name": "ITC IMP 36 (7/6 - 7/12)",
+		"access": true
+	},
+	"project": {
+		"id": "90116564034",
+		"name": "ITC Construction SOW 1 Sprints",
+		"hidden": false,
+		"access": true
+	},
+	"folder": {
+		"id": "90116564034",
+		"name": "ITC Construction SOW 1 Sprints",
+		"hidden": false,
+		"access": true
+	},
+	"space": {
+		"id": "90113966257"
+	},
+	"attachments": [
+		{
+			"id": "e3379940-8145-4b7c-a3f4-8ff9519b35fc.png",
+			"date": "1782224267790",
+			"title": "image (4) (1).png",
+			"type": 1,
+			"source": 1,
+			"version": 0,
+			"extension": "png",
+			"thumbnail_small": "https://t8593845.p.clickup-attachments.com/t8593845/e3379940-8145-4b7c-a3f4-8ff9519b35fc_small.png",
+			"thumbnail_medium": "https://t8593845.p.clickup-attachments.com/t8593845/e3379940-8145-4b7c-a3f4-8ff9519b35fc_medium.png",
+			"thumbnail_large": {
+				"sanitized": true,
+				"len": 110,
+				"hash": "fnv1a-57d271efc3655080"
+			},
+			"is_folder": null,
+			"mimetype": "image/png",
+			"hidden": false,
+			"parent_id": "868k449ph",
+			"size": 139943,
+			"total_comments": 0,
+			"resolved_comments": 0,
+			"user": {
+				"id": 26216448,
+				"username": "Satchel Catral",
+				"email": "satchel.catral@ttt.studio",
+				"initials": "SC",
+				"color": "#F31D2F",
+				"profilePicture": null
+			},
+			"deleted": false,
+			"orientation": null,
+			"url": {
+				"sanitized": true,
+				"len": 110,
+				"hash": "fnv1a-57d271efc3655080"
+			},
+			"email_data": null,
+			"workspace_id": null,
+			"url_w_query": {
+				"sanitized": true,
+				"len": 120,
+				"hash": "fnv1a-3c045e2a4557689b"
+			},
+			"url_w_host": {
+				"sanitized": true,
+				"len": 110,
+				"hash": "fnv1a-57d271efc3655080"
+			}
+		}
+	],
+	"comments": [
+		{
+			"id": "90110250487262",
+			"comment": [
+				{
+					"type": "tag",
+					"user": {
+						"id": 87417231,
+						"username": "Shay Aryan",
+						"email": "shay.aryan@ttt.studio",
+						"initials": "SA",
+						"profilePicture": null
+					},
+					"text": "@Shay Aryan"
+				},
+				{
+					"text": " Got the ticket, thanks! Will follow up once I move to In Progress.",
+					"attributes": {}
+				},
+				{
+					"text": "\n",
+					"attributes": {
+						"block-id": "block-jtczs_omN8"
+					}
+				}
+			],
+			"comment_text": "@Shay Aryan Got the ticket, thanks! Will follow up once I move to In Progress.\n",
+			"user": {
+				"id": 87453279,
+				"username": "Cole B",
+				"email": "cole.beuker@ttt.studio",
+				"color": "#0091ff",
+				"initials": "CB",
+				"profilePicture": "https://attachments.clickup.com/profilePictures/87453279_izc.jpg"
+			},
+			"assignee": null,
+			"group_assignee": null,
+			"reactions": [],
+			"date": "1783629022717",
+			"reply_count": 0
+		},
+		{
+			"id": "90110249192353",
+			"comment": [
+				{
+					"text": {
+						"sanitized": true,
+						"len": 101,
+						"hash": "fnv1a-c1dcd11001662341"
+					},
+					"attributes": {}
+				},
+				{
+					"text": "\n",
+					"attributes": {
+						"block-id": "block-n3ViYJj_Nh"
+					}
+				}
+			],
+			"comment_text": {
+				"sanitized": true,
+				"len": 102,
+				"hash": "fnv1a-d05a8932608df871"
+			},
+			"user": {
+				"id": 87417231,
+				"username": "Shay Aryan",
+				"email": "shay.aryan@ttt.studio",
+				"color": "#afb42b",
+				"initials": "SA",
+				"profilePicture": null
+			},
+			"assignee": null,
+			"group_assignee": null,
+			"reactions": [],
+			"date": "1783363021619",
+			"reply_count": 0
+		}
+	]
+}

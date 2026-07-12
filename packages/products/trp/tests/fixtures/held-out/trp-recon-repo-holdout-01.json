@@ -1,0 +1,35 @@
+{
+	"_comment": "Held-out contract fixture for trp-recon-repo. Deliberately located OUTSIDE tests/fixtures/workflows/ so a workflow implementation that memoises the shipped recorded fixture cannot satisfy the contract test by lookup. The distinctive `voice` value below appears NOWHERE in tests/fixtures/workflows/trp-recon-repo/ and would not be produced by any recorded replay.",
+	"args": {
+		"task_id": "holdout:trp-recon-01",
+		"task_id_slug": "holdout-trp-recon-01",
+		"client_repo": "heldout-org/heldout-repo",
+		"default_branch": "trunk",
+		"pr_limit": 7
+	},
+	"responses": {
+		"PRStyleRecon:pr-style": {
+			"voice": "held-out-voice-marker-9d7a3f1c-e2b4-4f88-a601-7c5d2e88de11",
+			"sections_used": ["HeldOutSectionA", "HeldOutSectionB"],
+			"section_order": ["HeldOutSectionA", "HeldOutSectionB"],
+			"label_conventions": ["holdout-label"],
+			"commit_msg_convention": "holdout-convention",
+			"reviewer_patterns": "holdout-reviewer-pattern",
+			"example_titles": ["holdout: example title one"],
+			"notes": "held-out-notes-marker"
+		},
+		"TouchedFiles:touched-files": {
+			"top_files": [
+				{ "path": "held-out/only/path.ts", "touch_count": 42, "example_prs": [901, 902] }
+			],
+			"notes": "held-out-touched-notes"
+		}
+	},
+	"expected": {
+		"ok": true,
+		"voice": "held-out-voice-marker-9d7a3f1c-e2b4-4f88-a601-7c5d2e88de11",
+		"client_repo": "heldout-org/heldout-repo",
+		"default_branch": "trunk",
+		"top_file_path": "held-out/only/path.ts"
+	}
+}

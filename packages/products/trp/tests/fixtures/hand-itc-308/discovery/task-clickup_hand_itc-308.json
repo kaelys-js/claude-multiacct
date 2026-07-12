@@ -1,0 +1,16 @@
+{
+	"task_id": "__PLACEHOLDER__",
+	"title": "__PLACEHOLDER__",
+	"description": "__PLACEHOLDER__ description",
+	"name": "__PLACEHOLDER__",
+	"text_content": "__PLACEHOLDER__ description",
+	"status": { "status": "to do", "type": null },
+	"priority": { "priority": "normal" },
+	"assignees": [{ "id": 0, "username": "operator", "email": null }],
+	"custom_fields": [],
+	"comments": [],
+	"attachments": [],
+	"subtasks": [],
+	"updated_at": "2026-07-10T00:00:00Z",
+	"url": "https://app.clickup.com/t/HAND_ITC-308"
+}

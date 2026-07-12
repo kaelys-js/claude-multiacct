@@ -1,0 +1,42 @@
+{
+	"workflow": "trp-fix-task",
+	"files": [
+		{
+			"name": "clickup_hand_synth-01-expected-output.json",
+			"long_string_replacements": 25,
+			"path_leak_replacements": 0,
+			"total_replacements": 25
+		},
+		{
+			"name": "clickup_hand_synth-01-fix-log.txt",
+			"long_string_replacements": 0,
+			"path_leak_replacements": 0,
+			"total_replacements": 0
+		},
+		{
+			"name": "clickup_hand_synth-01-input.json",
+			"long_string_replacements": 1,
+			"path_leak_replacements": 0,
+			"total_replacements": 1
+		},
+		{
+			"name": "clickup_synthetic-spike-solve-01-expected-output.json",
+			"long_string_replacements": 3,
+			"path_leak_replacements": 0,
+			"total_replacements": 3
+		},
+		{
+			"name": "clickup_synthetic-spike-solve-01-fix-log.txt",
+			"long_string_replacements": 0,
+			"path_leak_replacements": 0,
+			"total_replacements": 0
+		},
+		{
+			"name": "clickup_synthetic-spike-solve-01-input.json",
+			"long_string_replacements": 1,
+			"path_leak_replacements": 0,
+			"total_replacements": 1
+		}
+	],
+	"total_replacements": 30
+}

@@ -1,0 +1,125 @@
+{
+	"ok": true,
+	"task_id": "fixture:trp-recon-01",
+	"task_id_slug": "fixture-trp-recon-01",
+	"client_repo": "local/trp",
+	"default_branch": "master",
+	"voice": {
+		"sanitized": true,
+		"len": 225,
+		"hash": "fnv1a-67a27f5ff21e9089"
+	},
+	"sections_used": ["Summary", "Changes", "Rationale", "Test plan", "Rollback plan"],
+	"section_order": ["Summary", "Changes", "Rationale", "Test plan", "Rollback plan"],
+	"label_conventions": [
+		{
+			"sanitized": true,
+			"len": 74,
+			"hash": "fnv1a-b825249a2ca2d1d1"
+		},
+		{
+			"sanitized": true,
+			"len": 145,
+			"hash": "fnv1a-ac77f5749aa4b80b"
+		}
+	],
+	"commit_msg_convention": {
+		"sanitized": true,
+		"len": 398,
+		"hash": "fnv1a-4c4c36e554e27bbf"
+	},
+	"reviewer_patterns": {
+		"sanitized": true,
+		"len": 241,
+		"hash": "fnv1a-736766abb8fc9bd5"
+	},
+	"example_titles": [
+		{
+			"sanitized": true,
+			"len": 85,
+			"hash": "fnv1a-528a161233ccc1a0"
+		},
+		{
+			"sanitized": true,
+			"len": 56,
+			"hash": "fnv1a-71f717a098375c69"
+		},
+		{
+			"sanitized": true,
+			"len": 52,
+			"hash": "fnv1a-c43e72ce9380485f"
+		},
+		{
+			"sanitized": true,
+			"len": 68,
+			"hash": "fnv1a-0033ffe5a2a7207c"
+		},
+		{
+			"sanitized": true,
+			"len": 84,
+			"hash": "fnv1a-0f2e9ef6090024de"
+		}
+	],
+	"notes": {
+		"sanitized": true,
+		"len": 713,
+		"hash": "fnv1a-4c366e51a5299691"
+	},
+	"top_files": [
+		{
+			"path": "scripts/fix-task.sh",
+			"touch_count": 4,
+			"example_prs": []
+		},
+		{
+			"path": "README.md",
+			"touch_count": 4,
+			"example_prs": []
+		},
+		{
+			"path": "AGENTS.md",
+			"touch_count": 4,
+			"example_prs": []
+		},
+		{
+			"path": "workflows/trp-fix-task.js",
+			"touch_count": 3,
+			"example_prs": []
+		},
+		{
+			"path": "scripts/tracker-post-proof.py",
+			"touch_count": 3,
+			"example_prs": []
+		},
+		{
+			"path": "scripts/tracker-fetch-task.py",
+			"touch_count": 3,
+			"example_prs": []
+		},
+		{
+			"path": "scripts/discover-client-ci.py",
+			"touch_count": 3,
+			"example_prs": []
+		},
+		{
+			"path": "workflows/trp-intent-extract.js",
+			"touch_count": 2,
+			"example_prs": []
+		},
+		{
+			"path": "scripts/trp-run-loop.sh",
+			"touch_count": 2,
+			"example_prs": []
+		},
+		{
+			"path": "scripts/repo-router.py",
+			"touch_count": 2,
+			"example_prs": []
+		}
+	],
+	"top_files_notes": {
+		"sanitized": true,
+		"len": 547,
+		"hash": "fnv1a-baac87237f872213"
+	}
+}

@@ -1,0 +1,19 @@
+{
+	"task_id": "clickup:synthetic-spike-solve-01",
+	"client_slug": "",
+	"client_repo": "",
+	"default_branch": "",
+	"pinned_sha": "",
+	"poc_readme": {
+		"sanitized": true,
+		"len": 5108,
+		"hash": "fnv1a-49e70484b1663050"
+	},
+	"poc_evidence_lock": "",
+	"summary_section": "",
+	"pinned_files": [],
+	"clickup_task_id": "",
+	"clickup_task_url": "",
+	"branch_prefix": "security/",
+	"trp_parallel_safe": true
+}

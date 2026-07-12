@@ -1,0 +1,18 @@
+{
+	"mode": "iac",
+	"task_id": "clickup:HAND_ITC-308",
+	"task_id_slug": "clickup_hand_itc-308",
+	"dest_dir": "discovery/proof/clickup_hand_itc-308/",
+	"artefacts": [
+		{
+			"path": "discovery/proof/clickup_hand_itc-308/spike-writeup.md",
+			"kind": "writeup",
+			"bytes": 12526
+		},
+		{
+			"path": "discovery/proof/clickup_hand_itc-308/comment-payload.json",
+			"kind": "payload",
+			"bytes": 6470
+		}
+	]
+}

@@ -1,0 +1,166 @@
+{
+	"_comment": "Held-out fixture for trp-fix-task.contract.test.ts. NOT shipped under tests/fixtures/workflows/ so the parity fixture set stays independent of the contract test. Picks a distinctive SEC id (SEC-42-HOLDOUT) and a simple happy path: solve mode, 1 pinned file, exactly 2 cheap CI commands (both passing), so PreflightAutofix / PreflightRevise do not fire.",
+	"args": {
+		"task_id": "clickup:SEC-42-HOLDOUT",
+		"task_id_slug": "sec-42-holdout",
+		"task_intent": "Add an algorithms allow-list to jwt.verify in the API auth middleware so tokens signed with an unexpected alg are rejected.",
+		"task_raw": "Reviewer flagged that apps/api/src/auth/verify.ts calls jwt.verify without an explicit algorithms option. Add the allow-list and cover with a regression test.",
+		"client_slug": "holdout-client",
+		"client_repo": "example/holdout-monorepo",
+		"default_branch": "main",
+		"pinned_sha": "abc1234def5678",
+		"pinned_files": [
+			{
+				"src_path": "apps/api/src/auth/verify.ts",
+				"sha256": "deadbeefcafefeed",
+				"content_first_200_lines": "import jwt from 'jsonwebtoken';\nexport function verify(token, secret) { return jwt.verify(token, secret); }\n"
+			}
+		],
+		"tracker_task_url": "https://example.com/task/42",
+		"mode": "solve",
+		"trp_parallel_safe": true,
+		"branch_prefix": "security/",
+		"acceptance_criteria": [
+			"jwt.verify calls include an algorithms allow-list",
+			"asymmetric-alg tokens are rejected by the verifier"
+		],
+		"trp_preflight_revise_max": 2,
+		"trp_recon_top_n": 1
+	},
+	"responses": {
+		"TaskRecon:pr-style": {
+			"voice": "Concise, code-first, one-paragraph summary.",
+			"sections_used": ["Summary", "Changes", "Testing", "Rollback"],
+			"section_order": ["Summary", "Changes", "Testing", "Rollback"],
+			"label_conventions": ["security", "bug"],
+			"commit_msg_convention": "type(scope): summary",
+			"reviewer_patterns": "CODEOWNERS-based",
+			"example_titles": [
+				"security(api): pin jwt algorithm allow-list",
+				"fix(api): guard verifier fallthrough"
+			],
+			"notes": "Small PRs. Rebase before merge."
+		},
+		"DesignFix:design": {
+			"files_to_modify": [
+				{
+					"path": "apps/api/src/auth/verify.ts",
+					"full_content": "import jwt from 'jsonwebtoken';\nexport function verify(token, secret) {\n  return jwt.verify(token, secret, { algorithms: ['HS256'] });\n}\n",
+					"rationale": "Pin the algorithms allow-list so alg=none / asymmetric-alg tokens are rejected."
+				},
+				{
+					"path": "apps/api/src/auth/verify.test.ts",
+					"full_content": "import { describe, it, expect } from 'vitest';\nimport { verify } from './verify';\ndescribe('verify', () => {\n  it('rejects alg=none tokens', () => {\n    expect(() => verify('bad.token.here', 'secret')).toThrow();\n  });\n});\n",
+					"rationale": "Regression test that fails without the algorithms allow-list."
+				}
+			],
+			"test_additions": [
+				{
+					"path": "apps/api/src/auth/verify.test.ts",
+					"full_content": "import { describe, it, expect } from 'vitest';\nimport { verify } from './verify';\ndescribe('verify', () => {\n  it('rejects alg=none tokens', () => {\n    expect(() => verify('bad.token.here', 'secret')).toThrow();\n  });\n});\n",
+					"fails_without_fix": "Without the allow-list, jwt.verify accepts the alg=none token and the throw assertion fails."
+				}
+			],
+			"branch_name": "security/sec-42-holdout-jwt-algorithms-allowlist",
+			"commit_message": "security(api): pin jwt.verify algorithms allow-list [SEC-42-HOLDOUT]",
+			"pr_title": "security(SEC-42-HOLDOUT): pin jwt.verify algorithms allow-list",
+			"pr_body_sections": {
+				"summary": "Pin the algorithms allow-list on jwt.verify so tokens signed with an unexpected alg are rejected.",
+				"fix": "apps/api/src/auth/verify.ts passes { algorithms: ['HS256'] } to jwt.verify.",
+				"test_plan": "pnpm --filter api run test — new verify.test.ts asserts alg=none tokens throw.",
+				"rollback_plan": "git revert the merge commit; no data migrations. No user re-auth required.",
+				"references": "Private advisory SEC-42-HOLDOUT."
+			},
+			"codeowners_paths_to_query": [
+				"apps/api/src/auth/verify.ts",
+				"apps/api/src/auth/verify.test.ts"
+			],
+			"fix_item_coverage": [
+				{
+					"item": "jwt.verify calls include an algorithms allow-list",
+					"status": "covered",
+					"files": ["apps/api/src/auth/verify.ts"],
+					"evidence": "verify.ts passes { algorithms: ['HS256'] } explicitly."
+				},
+				{
+					"item": "asymmetric-alg tokens are rejected by the verifier",
+					"status": "covered",
+					"files": ["apps/api/src/auth/verify.ts", "apps/api/src/auth/verify.test.ts"],
+					"evidence": "jsonwebtoken rejects tokens whose alg is not in the allow-list; regression test covers alg=none."
+				}
+			]
+		},
+		"PreflightScratch:preflight-workspaces": {
+			"workspaces": ["api"]
+		},
+		"PreflightScratch:preflight-apply": {
+			"applied": true,
+			"changed_files": ["apps/api/src/auth/verify.ts", "apps/api/src/auth/verify.test.ts"],
+			"errors": []
+		},
+		"PreflightInstall:preflight-install": {
+			"installed": true,
+			"skipped": false,
+			"package_manager": "pnpm",
+			"wall_seconds": 42,
+			"stderr_tail": ""
+		},
+		"PreflightClassify:preflight-classify": {
+			"cheap": ["pnpm --filter api run lint", "pnpm --filter api run typecheck"],
+			"expensive": ["pnpm --filter api run test"]
+		},
+		"PreflightCheap:preflight:pnpm --filter api run lint": {
+			"command": "pnpm --filter api run lint",
+			"exit_code": 0,
+			"wall_seconds": 12,
+			"stderr_tail": ""
+		},
+		"PreflightCheap:preflight:pnpm --filter api run typecheck": {
+			"command": "pnpm --filter api run typecheck",
+			"exit_code": 0,
+			"wall_seconds": 18,
+			"stderr_tail": ""
+		},
+		"Adversarial:adversarial": {
+			"verdict": "SHIP",
+			"refute_attempts": [
+				{
+					"claim": "Patch delivers the task intent: jwt.verify pins the algorithms allow-list",
+					"outcome": "CONFIRMED",
+					"evidence": "apps/api/src/auth/verify.ts line 3 passes { algorithms: ['HS256'] } to jwt.verify explicitly."
+				},
+				{
+					"claim": "Regression test would fail on the pinned pre-fix source",
+					"outcome": "CONFIRMED",
+					"evidence": "verify.test.ts asserts throw on alg=none; pre-fix verify.ts has no allow-list so jwt.verify would not throw."
+				}
+			],
+			"blockers": [],
+			"nice_to_haves": ["Consider RS256 as well if the service also verifies asymmetric tokens."]
+		},
+		"Adversarial:semantic-adversarial": {
+			"findings": []
+		},
+		"Adversarial:completeness-refuter": {
+			"refuted": false,
+			"reason": "all items closed by the bundle",
+			"evidence": "verify.ts passes algorithms allow-list and verify.test.ts covers alg=none rejection end-to-end.",
+			"per_item": [
+				{
+					"item_index": "1",
+					"item_text": "jwt.verify calls include an algorithms allow-list",
+					"claimed_coverage": "covered",
+					"refuted": false,
+					"evidence": "apps/api/src/auth/verify.ts line 3 passes { algorithms: ['HS256'] } to jwt.verify."
+				},
+				{
+					"item_index": "2",
+					"item_text": "asymmetric-alg tokens are rejected by the verifier",
+					"claimed_coverage": "covered",
+					"refuted": false,
+					"evidence": "verify.test.ts asserts throw on alg=none; jsonwebtoken rejects out-of-list algs at verify time."
+				}
+			]
+		}
+	}
+}

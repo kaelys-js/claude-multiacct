@@ -1,0 +1,60 @@
+{
+	"id": "synth_spike_full_01",
+	"custom_id": "HAND_SYNTH-1004",
+	"name": "[SPIKE+FIX+FOLLOWUP] Retry logic audit + fix + follow-up implementation ticket",
+	"text_content": {
+		"sanitized": true,
+		"len": 1984,
+		"hash": "fnv1a-18af541c4021a71e"
+	},
+	"description": "See text_content.",
+	"status": {
+		"id": "c90116564034_open",
+		"status": "todo",
+		"color": "#8d8d8d",
+		"orderindex": 0,
+		"type": "open"
+	},
+	"date_created": "1783000000000",
+	"date_updated": "1783000000000",
+	"creator": {
+		"id": 26216448,
+		"username": "Satchel Catral",
+		"email": "satchel.catral@ttt.studio"
+	},
+	"assignees": [
+		{
+			"id": 87453279,
+			"username": "Cole B",
+			"email": "cole.beuker@ttt.studio"
+		}
+	],
+	"custom_fields": [
+		{
+			"id": "task-class-hint",
+			"name": "Task Class",
+			"type": "drop_down",
+			"value": "bugfix"
+		},
+		{
+			"id": "expected-mode-hint",
+			"name": "Expected Mode",
+			"type": "short_text",
+			"value": "spike-full"
+		}
+	],
+	"tags": [
+		{
+			"name": "spike"
+		},
+		{
+			"name": "refactor"
+		}
+	],
+	"team_id": "8593845",
+	"url": "https://app.clickup.com/t/synth_spike_full_01",
+	"list": {
+		"id": "901114071018",
+		"name": "ITC Backlog (synthetic)"
+	}
+}

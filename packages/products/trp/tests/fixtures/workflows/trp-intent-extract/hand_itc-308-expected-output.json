@@ -1,0 +1,5 @@
+{
+	"detected_mode": "spike-writeup",
+	"confidence": "high",
+	"rationale": "derived from ticket shape + filename convention"
+}

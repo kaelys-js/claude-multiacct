@@ -14,6 +14,7 @@
 	"MD013": false, // line-length
 	"MD012": false, // multiple consecutive blank lines
 	"MD009": false, // trailing spaces (oxfmt handles)
+	"MD010": { "code_blocks": false }, // allow tabs in fenced code blocks (editorconfig sets tab indent globally)
 
 	// Structure & correctness (kept on):
 	"MD003": { "style": "atx" }, // consistent heading style

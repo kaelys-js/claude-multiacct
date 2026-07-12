@@ -1,0 +1,60 @@
+{
+	"id": "synth_spike_solve_01",
+	"custom_id": "HAND_SYNTH-1003",
+	"name": "[SPIKE+FIX] Investigate JWT signing key rotation and implement zero-downtime rollover",
+	"text_content": {
+		"sanitized": true,
+		"len": 1479,
+		"hash": "fnv1a-00421b741813b6e3"
+	},
+	"description": "See text_content.",
+	"status": {
+		"id": "c90116564034_open",
+		"status": "todo",
+		"color": "#8d8d8d",
+		"orderindex": 0,
+		"type": "open"
+	},
+	"date_created": "1783000000000",
+	"date_updated": "1783000000000",
+	"creator": {
+		"id": 26216448,
+		"username": "Satchel Catral",
+		"email": "satchel.catral@ttt.studio"
+	},
+	"assignees": [
+		{
+			"id": 87453279,
+			"username": "Cole B",
+			"email": "cole.beuker@ttt.studio"
+		}
+	],
+	"custom_fields": [
+		{
+			"id": "task-class-hint",
+			"name": "Task Class",
+			"type": "drop_down",
+			"value": "bugfix"
+		},
+		{
+			"id": "expected-mode-hint",
+			"name": "Expected Mode",
+			"type": "short_text",
+			"value": "spike-solve"
+		}
+	],
+	"tags": [
+		{
+			"name": "spike"
+		},
+		{
+			"name": "auth"
+		}
+	],
+	"team_id": "8593845",
+	"url": "https://app.clickup.com/t/synth_spike_solve_01",
+	"list": {
+		"id": "901114071018",
+		"name": "ITC Backlog (synthetic)"
+	}
+}

@@ -1,0 +1,61 @@
+{
+	"id": "synth_solve_01",
+	"custom_id": "HAND_SYNTH-1001",
+	"client_repo": "tttstudios/handled-monorepo-poc",
+	"name": "[BUG] Rate-limit missing on /submit-retroactive purchase order upload",
+	"text_content": {
+		"sanitized": true,
+		"len": 1049,
+		"hash": "fnv1a-35630df72093495e"
+	},
+	"description": "See text_content.",
+	"status": {
+		"id": "c90116564034_open",
+		"status": "todo",
+		"color": "#8d8d8d",
+		"orderindex": 0,
+		"type": "open"
+	},
+	"date_created": "1783000000000",
+	"date_updated": "1783000000000",
+	"creator": {
+		"id": 26216448,
+		"username": "Satchel Catral",
+		"email": "satchel.catral@ttt.studio"
+	},
+	"assignees": [
+		{
+			"id": 87453279,
+			"username": "Cole B",
+			"email": "cole.beuker@ttt.studio"
+		}
+	],
+	"custom_fields": [
+		{
+			"id": "task-class-hint",
+			"name": "Task Class",
+			"type": "drop_down",
+			"value": "bugfix"
+		},
+		{
+			"id": "expected-mode-hint",
+			"name": "Expected Mode",
+			"type": "short_text",
+			"value": "solve"
+		}
+	],
+	"tags": [
+		{
+			"name": "bug"
+		},
+		{
+			"name": "rate-limit"
+		}
+	],
+	"team_id": "8593845",
+	"url": "https://app.clickup.com/t/synth_solve_01",
+	"list": {
+		"id": "901114071018",
+		"name": "ITC Backlog (synthetic)"
+	}
+}
