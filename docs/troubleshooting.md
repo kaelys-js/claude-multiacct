@@ -14,16 +14,19 @@ killall Dock                      # if Dock cached the old routing
 
 ## Sidebar in the mirror shows no sessions
 
-Metadata symlinks aren't in place. In the normal happy path, the `com.user.claude-metadata-symlink` launchd agent installs these automatically the moment Desktop creates the per-account UUID subdir on sign-in. Sessions should appear within seconds. Check via:
+Metadata symlinks aren't in place. In the normal happy path, the `com.user.claude-metadata-symlink` launchd agent installs these automatically the moment OAuth sign-in completes — it watches the mirror's `<userData>/config.json` (which Desktop writes on token cache) and derives the required UUIDs from `lastKnownAccountUuid` + the newest `dxt:allowlistLastUpdated:<orgUuid>` timestamp. Sessions should appear within seconds of sign-in, with no "open Code inside Desktop first" step required. Check via:
 ```sh
 ls -la "~/Library/Application Support/Claude-<Titlecase>/claude-code-sessions/"
 ```
 
-If you see a UUID dir but no symlink inside pointing at the primary's UUID dir, the agent either wasn't loaded or hasn't fired yet. Confirm the agent is loaded:
+If the symlink IS in place but the sidebar is still empty, Claude Desktop's React sidebar may have cached the pre-symlink state. Quit and relaunch the mirror (Cmd-Q, then click the mirror's Dock icon) to force it to re-read the metadata dir.
+
+If you don't see a UUID dir at all, or see one but no symlink inside pointing at the primary's UUID dir, the agent either wasn't loaded or hasn't fired yet. Confirm the agent is loaded:
 ```sh
 claude-multiacct doctor          # reports all three launchd agents' state
 tail ~/Library/Logs/claude-multiacct/metadata-watcher.log
 ```
+The log records whether UUIDs were resolved on-disk (post-Code-use) or derived from `config.json` (post-OAuth pre-Code-use); a line ending `(uuids derived from config.json)` confirms the derivation path fired.
 
 Manual fallback (also fixes the edge cases where the agent hasn't been loaded — e.g. immediately after a macOS update that clears LaunchAgents):
 ```sh

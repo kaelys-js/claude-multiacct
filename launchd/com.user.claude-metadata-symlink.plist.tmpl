@@ -2,22 +2,27 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
   com.user.claude-metadata-symlink — WatchPaths on every configured mirror's
-  <userData>/claude-code-sessions and <userData>/local-agent-mode-sessions.
-  Claude Desktop touches these dirs the moment the user signs in on a mirror
-  (creating the per-account UUID subdir), which fires this agent. On trigger,
-  runs bin/claude-metadata-watcher.sh which iterates every mirror and installs
-  any missing per-account-folder symlinks so the mirror's desktop UI resolves
-  to the primary's session store.
+  <userData>/claude-code-sessions, <userData>/local-agent-mode-sessions, and
+  <userData>/config.json. The dirs get an mtime bump the moment Claude Desktop
+  creates the per-account UUID subdir on Code first-use. config.json gets an
+  mtime bump on OAuth sign-in itself (Desktop caches tokens + writes
+  lastKnownAccountUuid). Watching all three lets us install the metadata
+  symlinks the moment the user signs in, without any "open Code once inside
+  Desktop then quit" manual step.
 
-  Without this agent, a fresh mirror install requires the user to (1) sign in,
-  (2) open a Code session, (3) quit, (4) manually run `claude-multiacct repair
-  <label>` — the whole point is to remove that manual step.
+  On trigger, runs bin/claude-metadata-watcher.sh which iterates every mirror
+  and installs any missing per-account-folder symlinks so the mirror's desktop
+  UI resolves to the primary's session store. UUIDs are resolved via on-disk
+  find when the dirs exist, and via config.json (lastKnownAccountUuid +
+  newest-timestamp dxt:allowlistLastUpdated:<orgUuid>) otherwise — see the
+  header comment in lib/metadata-symlinks.sh for detail.
 
   Template placeholders (substituted at install time by lib/install-launchd.sh):
     __WATCH_BIN__            — full path to bin/claude-metadata-watcher.sh
-    __WATCHPATHS_ENTRIES__   — one <string>…</string> per watched dir (two per
-                               mirror: claude-code-sessions and local-agent-
-                               mode-sessions). Injected via `sed r file; d`.
+    __WATCHPATHS_ENTRIES__   — one <string>…</string> per watched path (three
+                               per mirror: claude-code-sessions, local-agent-
+                               mode-sessions, and config.json). Injected via
+                               `sed r file; d`.
     __LOG_PATH__             — full path to the log file
 
   ProcessType=Background + Nice=10 + LowPriorityIO=true: install-time symlink

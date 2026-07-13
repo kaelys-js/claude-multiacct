@@ -102,8 +102,16 @@ uninstall_agent() {
 }
 
 # Write one <string>PATH</string> line per mirror WatchPath into $entries_file.
-# The metadata-symlink agent watches two dirs per mirror: claude-code-sessions
-# and local-agent-mode-sessions. Returns the count of mirrors emitted.
+# The metadata-symlink agent watches THREE paths per mirror:
+#   - <userData>/claude-code-sessions       — mtime-changes when Desktop creates
+#     the per-account UUID subdir on Code first-use inside Desktop.
+#   - <userData>/local-agent-mode-sessions  — same but for agent-mode.
+#   - <userData>/config.json                — mtime-changes on OAuth sign-in
+#     (Desktop caches tokens + writes lastKnownAccountUuid), which happens
+#     BEFORE Code first-use. Watching this file is what lets the watcher
+#     install the metadata symlinks the moment sign-in completes, no manual
+#     "click into Code once" step required.
+# Returns the count of mirrors emitted.
 build_metadata_watchpaths() {
   local entries_file="$1"
   : >"$entries_file"
@@ -113,8 +121,13 @@ build_metadata_watchpaths() {
     local row; row="$(cma_resolve_instance "$label")"
     local _l _e _cdir m_udata _cli _app _bid
     IFS=$'\t' read -r _l _e _cdir m_udata _cli _app _bid <<<"$row"
-    printf '        <string>%s/claude-code-sessions</string>\n'      "$m_udata" >>"$entries_file"
-    printf '        <string>%s/local-agent-mode-sessions</string>\n' "$m_udata" >>"$entries_file"
+    # Group the three per-mirror entries so shellcheck-SC2129 stays clean and
+    # the file is opened once per mirror instead of thrice.
+    {
+      printf '        <string>%s/claude-code-sessions</string>\n'      "$m_udata"
+      printf '        <string>%s/local-agent-mode-sessions</string>\n' "$m_udata"
+      printf '        <string>%s/config.json</string>\n'               "$m_udata"
+    } >>"$entries_file"
     count=$((count + 1))
   done < <(cma_list_labels)
   printf '%s' "$count"
