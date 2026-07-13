@@ -8,9 +8,10 @@
 #   init                              detect primary + write example instances.yaml
 #   add-instance <label> --email <e>  install a new mirror instance
 #   remove-instance <label> [--keep-userdata]
-#   list                              show all instances + health
+#   list [--tsv]                      show all instances + health (--tsv for machine)
 #   repair [<label>]                  re-run install steps for one or all instances
 #   sync-now                          manually trigger primary → mirrors sync
+#   sync-log [--tail]                 print the sessions-sync log (--tail follows it)
 #   doctor                            deep diagnostic report
 #   qa {lint|test}                    dev helpers (shellcheck + bats)
 
@@ -41,9 +42,10 @@ usage:
   claude-multiacct init
   claude-multiacct add-instance <label> --email <email>
   claude-multiacct remove-instance <label> [--keep-userdata] [--keep-configdir]
-  claude-multiacct list
+  claude-multiacct list [--tsv]
   claude-multiacct repair [<label>]
   claude-multiacct sync-now
+  claude-multiacct sync-log [--tail]
   claude-multiacct doctor
   claude-multiacct qa {lint|test}
 
@@ -194,7 +196,10 @@ cmd_remove_instance() {
 
 cmd_list() {
   cma_require_config
-  "$CMA_LIB/discover.sh"
+  # Forward any flags (currently --tsv) through to discover.sh. The forwarded
+  # arg is validated inside discover.sh; unknown flags there fall out of the
+  # `--tsv`-only case and get treated as a label (which discover ignores).
+  "$CMA_LIB/discover.sh" "$@"
 }
 
 cmd_repair() {
@@ -220,6 +225,27 @@ cmd_sync_now() {
   cma_say "running sync manually (primary → mirrors)"
   "$CMA_BIN/claude-sessions-sync.sh"
   cma_ok "sync complete — see $CMA_LOG_DIR/sessions-sync.log"
+}
+
+# sync-log — QoL wrapper over `cat` / `tail -f` on the sync worker's log file.
+# The log is where every sync (launchd-triggered or manual) records its
+# progress; users with drifted mirrors reach for it first.
+cmd_sync_log() {
+  local follow=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --tail) follow=1; shift ;;
+      --*)    cma_die "sync-log: unknown flag: $1" ;;
+      *)      cma_die "sync-log: unexpected argument: $1" ;;
+    esac
+  done
+  local log="$CMA_LOG_DIR/sessions-sync.log"
+  [[ -f "$log" ]] || cma_die "sync-log: log not found at $log — has the sync worker run yet?"
+  if [[ $follow -eq 1 ]]; then
+    exec tail -f "$log"
+  else
+    cat "$log"
+  fi
 }
 
 cmd_doctor() {
@@ -298,6 +324,7 @@ main() {
     list)              cmd_list "$@" ;;
     repair)            cmd_repair "$@" ;;
     sync-now)          cmd_sync_now "$@" ;;
+    sync-log)          cmd_sync_log "$@" ;;
     doctor)            cmd_doctor "$@" ;;
     qa)                cmd_qa "$@" ;;
     *)                 usage; cma_die "unknown subcommand: $cmd" ;;

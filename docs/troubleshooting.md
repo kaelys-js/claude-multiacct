@@ -73,12 +73,15 @@ claude-multiacct repair <label>   # finishes the metadata symlinks after first l
 ```sh
 claude-multiacct remove-instance <label>
 ```
-By default this preserves the mirror's `userData` (so its OAuth cookies survive if you want to restore later). To delete everything:
-```sh
-claude-multiacct remove-instance <label> --keep-userdata=false   # Explicit — not implemented yet; see below
-```
+By default this removes the mirror's `configDir` and `userData`, along with the CLI launcher and the `.app` bundle. Every path is snapshotted into `~/.claude-multiacct-backups/<timestamp>/` before deletion so you can recover. The mirror's entry is also stripped from `instances.yaml`.
 
-Actually the CLI accepts `--keep-userdata` and `--keep-configdir` as OPT-IN preserves. Default is remove everything. If you want to preserve one, pass the flag.
+The `--keep-userdata` and `--keep-configdir` flags are opt-in preserves — pass either (or both) to keep that tree in place. Preserving `userData` keeps the account's OAuth cookies, which is what you want if you plan to reinstall the same account later.
+
+```sh
+claude-multiacct remove-instance <label> --keep-userdata               # keep OAuth cookies
+claude-multiacct remove-instance <label> --keep-configdir              # keep ~/.claude-<label>
+claude-multiacct remove-instance <label> --keep-userdata --keep-configdir
+```
 
 ## Config drift — `instances.yaml` doesn't reflect on-disk state
 

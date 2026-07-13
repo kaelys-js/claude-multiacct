@@ -9,6 +9,10 @@
 # Tests are hermetic: each test spins up a fresh $HOME under $BATS_TEST_TMPDIR.
 # The real ~/.config/claude-multiacct is never touched.
 
+# `run !` and `run --separate-stderr` require bats-core >= 1.5.0. Declaring the
+# minimum silences BW02 warnings when a matching bats runs the suite.
+bats_require_minimum_version 1.5.0
+
 setup() {
   # Repo root two levels up from this test file.
   REPO="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
@@ -185,4 +189,114 @@ setup() {
   [ "$status" -ne 0 ]
   # Symlink was NOT touched.
   [ "$(readlink "$HOME/.local/bin/claude-multiacct")" = "/usr/bin/true" ]
+}
+
+@test "repair <label> re-runs install for existing instance" {
+  "$CMA" init
+  "$CMA" add-instance b --email test-b@example.com
+  run "$CMA" repair b
+  [ "$status" -eq 0 ]
+  # Artifacts still present after repair (repair is an install redo, not a wipe).
+  [ -d "$HOME/.claude-b" ]
+  [ -x "$HOME/.local/bin/claude-account-b" ]
+  [ -d "$HOME/Applications/Claude Account B.app" ]
+}
+
+@test "repair is idempotent — second run leaves identical on-disk state" {
+  "$CMA" init
+  "$CMA" add-instance b --email test-b@example.com
+  # Baseline: repair once, then snapshot the on-disk layout across every
+  # tree install-instance touches. The idempotency contract is that a
+  # subsequent repair produces the same file listing (byte-identical paths).
+  "$CMA" repair b
+  local trees=(
+    "$HOME/.claude-b"
+    "$HOME/Library/Application Support/Claude-B"
+    "$HOME/.local/bin"
+    "$HOME/Applications"
+  )
+  local snap1; snap1="$(find "${trees[@]}" 2>/dev/null | sort)"
+  run "$CMA" repair b
+  [ "$status" -eq 0 ]
+  local snap2; snap2="$(find "${trees[@]}" 2>/dev/null | sort)"
+  # A drift here means repair is re-creating or renaming something on each
+  # run — a live bug that would compound over time.
+  [ "$snap1" = "$snap2" ]
+}
+
+@test "repair with no args repairs every configured instance" {
+  "$CMA" init
+  "$CMA" add-instance b --email test-b@example.com
+  "$CMA" add-instance c --email test-c@example.com
+  run "$CMA" repair
+  [ "$status" -eq 0 ]
+  # Both instances still installed after a bulk repair.
+  [ -d "$HOME/.claude-b" ]
+  [ -d "$HOME/.claude-c" ]
+  [ -x "$HOME/.local/bin/claude-account-b" ]
+  [ -x "$HOME/.local/bin/claude-account-c" ]
+  [ -d "$HOME/Applications/Claude Account B.app" ]
+  [ -d "$HOME/Applications/Claude Account C.app" ]
+}
+
+@test "list --tsv emits machine-parseable TSV row for each instance" {
+  "$CMA" init
+  "$CMA" add-instance b --email test-b@example.com
+  # --separate-stderr isolates stdout so we assert on the TSV row alone —
+  # the human report (cma_say / cma_ok / cma_warn) is on stderr and would
+  # otherwise be interleaved.
+  run --separate-stderr "$CMA" list --tsv
+  [ "$status" -eq 0 ]
+  # Row shape from discover.sh: label<TAB>health<TAB>issues
+  # Health is "ok" or "degraded" depending on whether the mirror has been
+  # logged in — under a scratch $HOME it will be "degraded", which is fine;
+  # the test asserts the ROW SHAPE, not the health verdict.
+  [[ "$output" == b$'\t'* ]]
+  # Health field is either ok or degraded — never blank.
+  [[ "$output" == *$'\t'ok$'\t'* ]] || [[ "$output" == *$'\t'degraded$'\t'* ]]
+}
+
+@test "sync-log prints the log file when it exists" {
+  "$CMA" init
+  mkdir -p "$CMA_LOG_DIR"
+  # Seed a canary so we can prove sync-log emitted the file's contents.
+  printf 'sync-log-canary-line\n' > "$CMA_LOG_DIR/sessions-sync.log"
+  run "$CMA" sync-log
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"sync-log-canary-line"* ]]
+}
+
+@test "sync-log exits non-zero with a clear message when the log is absent" {
+  "$CMA" init
+  # No log file seeded — the worker never ran.
+  run "$CMA" sync-log
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"log not found"* ]]
+}
+
+@test "sync-log --tail flag is accepted (tail stub short-circuits the follow)" {
+  "$CMA" init
+  mkdir -p "$CMA_LOG_DIR"
+  printf 'sync-log-canary-line\n' > "$CMA_LOG_DIR/sessions-sync.log"
+  # `exec tail -f` would block indefinitely. Stub tail on PATH so the flag's
+  # code path runs to a clean exit — the test proves parsing + dispatch,
+  # not follow semantics.
+  local stub_dir; stub_dir="$BATS_TEST_TMPDIR/tail-stub"
+  mkdir -p "$stub_dir"
+  cat >"$stub_dir/tail" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  chmod +x "$stub_dir/tail"
+  PATH="$stub_dir:$PATH" run "$CMA" sync-log --tail
+  [ "$status" -eq 0 ]
+}
+
+@test "sync-log rejects unknown flags" {
+  "$CMA" init
+  mkdir -p "$CMA_LOG_DIR"
+  printf 'seed\n' > "$CMA_LOG_DIR/sessions-sync.log"
+  run "$CMA" sync-log --bogus
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"unknown flag"* ]]
 }
