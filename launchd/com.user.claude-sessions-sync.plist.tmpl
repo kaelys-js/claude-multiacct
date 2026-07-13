@@ -16,6 +16,11 @@
 
   Nice=10 + ThrottleInterval=120 prevents thrash if Chromium touches Local State
   in bursts. 5-second grace inside the script gives Chromium time to flush.
+
+  StartInterval=21600 (6h) is a safety net for the case where the primary crashes
+  and Local State never gets rewritten — WatchPaths would miss the event forever.
+  The sync worker hard-skips when any Claude Desktop is running, so a periodic
+  wake while both apps are open is a cheap no-op.
 -->
 <plist version="1.0">
 <dict>
@@ -47,6 +52,9 @@
 
     <key>ThrottleInterval</key>
     <integer>120</integer>
+
+    <key>StartInterval</key>
+    <integer>21600</integer>
 
     <key>RunAtLoad</key>
     <false/>

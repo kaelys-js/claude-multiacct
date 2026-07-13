@@ -116,7 +116,9 @@ setup() {
   run "$CMA" remove-instance b
   [ "$status" -eq 0 ]
   # instances.yaml no longer contains the entry.
-  ! grep -q "test-b@example.com" "$HOME/.config/claude-multiacct/instances.yaml"
+  # NOTE: bare `!` doesn't fail a bats test (SC2314 / [[bats-vacuous-asserts]] memory);
+  # use `run ! ...` so a match failure actually surfaces as $status != 0.
+  run ! grep -q "test-b@example.com" "$HOME/.config/claude-multiacct/instances.yaml"
   # Artifacts removed by default (default is delete configDir + userData).
   [ ! -e "$HOME/.local/bin/claude-account-b" ]
   [ ! -d "$HOME/Applications/Claude Account B.app" ]
@@ -147,4 +149,40 @@ setup() {
   # Doctor is diagnostic; it exits 0 even when it reports drift.
   [ "$status" -eq 0 ] || [ "$status" -eq 1 ]
   [[ "$output" == *"claude-multiacct doctor"* ]]
+}
+
+@test "install symlinks CLI into ~/.local/bin (idempotent, invocable)" {
+  run "$CMA" install
+  [ "$status" -eq 0 ]
+  [ -L "$HOME/.local/bin/claude-multiacct" ]
+  target="$(readlink "$HOME/.local/bin/claude-multiacct")"
+  [ "$target" = "$REPO/bin/claude-multiacct" ]
+  # Second run is a safe no-op.
+  run "$CMA" install
+  [ "$status" -eq 0 ]
+  [ -L "$HOME/.local/bin/claude-multiacct" ]
+  # Symlink must be invocable — BASH_SOURCE resolution has to follow the symlink
+  # back to $REPO so `. "$CMA_LIB/common.sh"` finds ../lib. Regression guard.
+  run "$HOME/.local/bin/claude-multiacct" --help
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"claude-multiacct — manage"* ]]
+}
+
+@test "uninstall removes the CLI symlink" {
+  "$CMA" install
+  run "$CMA" uninstall
+  [ "$status" -eq 0 ]
+  [ ! -e "$HOME/.local/bin/claude-multiacct" ]
+  # Second run when nothing to remove is still a safe no-op.
+  run "$CMA" uninstall
+  [ "$status" -eq 0 ]
+}
+
+@test "install refuses to clobber a foreign symlink" {
+  # Foreign symlink pre-existing — install must refuse rather than overwrite.
+  ln -s /usr/bin/true "$HOME/.local/bin/claude-multiacct"
+  run "$CMA" install
+  [ "$status" -ne 0 ]
+  # Symlink was NOT touched.
+  [ "$(readlink "$HOME/.local/bin/claude-multiacct")" = "/usr/bin/true" ]
 }

@@ -9,21 +9,27 @@
 # ── Paths ──────────────────────────────────────────────────────────────────
 
 # Repo root: this file lives at $REPO_ROOT/lib/common.sh
+# shellcheck disable=SC2034  # read from every caller (bin/*, lib/*) via `$CMA_REPO_ROOT`
 CMA_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-export CMA_REPO_ROOT
 
 # User-level config directory follows the XDG spec.
 CMA_CONFIG_DIR="${CMA_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/claude-multiacct}"
 CMA_CONFIG_FILE="$CMA_CONFIG_DIR/instances.yaml"
-export CMA_CONFIG_DIR CMA_CONFIG_FILE
 
 # Log dir.
 CMA_LOG_DIR="${CMA_LOG_DIR:-$HOME/Library/Logs/claude-multiacct}"
-export CMA_LOG_DIR
 
 # Backup dir (snapshots before destructive writes).
 CMA_BACKUP_DIR="${CMA_BACKUP_DIR:-$HOME/.claude-multiacct-backups}"
-export CMA_BACKUP_DIR
+
+# These derived paths are DELIBERATELY NOT exported. Each subprocess sources
+# common.sh at the top and re-derives from HOME/XDG_CONFIG_HOME, so exporting
+# would let the outer process's derived value leak into a subprocess whose
+# HOME has been overridden (e.g. bats tests under a scratch $HOME), producing
+# an inconsistent CMA_CONFIG_DIR that doesn't match the child's HOME. A user
+# who WANTS to override any of these can still `export CMA_CONFIG_DIR=... claude-multiacct …`
+# in their shell — subprocesses will inherit the explicit export, and the
+# `${VAR:-…}` idiom above honours it.
 
 # ── Logging ────────────────────────────────────────────────────────────────
 

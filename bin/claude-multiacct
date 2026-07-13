@@ -3,6 +3,8 @@
 # under different accounts on the same Mac. Dispatcher over lib/*.sh.
 #
 # Subcommands:
+#   install                           symlink this CLI into ~/.local/bin
+#   uninstall                         remove the ~/.local/bin symlink
 #   init                              detect primary + write example instances.yaml
 #   add-instance <label> --email <e>  install a new mirror instance
 #   remove-instance <label> [--keep-userdata]
@@ -14,8 +16,18 @@
 
 set -euo pipefail
 
-CMA_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)"
-CMA_BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Resolve symlinks so `install` links in ~/.local/bin still find ../lib.
+# Pure-bash loop (no realpath dependency); handles chained symlinks + relative
+# link targets. Terminates once BASH_SOURCE hits a real file.
+_cma_self="${BASH_SOURCE[0]}"
+while [[ -L "$_cma_self" ]]; do
+  _cma_link="$(readlink "$_cma_self")"
+  [[ "$_cma_link" != /* ]] && _cma_link="$(cd "$(dirname "$_cma_self")" && pwd)/$_cma_link"
+  _cma_self="$_cma_link"
+done
+CMA_LIB="$(cd "$(dirname "$_cma_self")/../lib" && pwd)"
+CMA_BIN="$(cd "$(dirname "$_cma_self")" && pwd)"
+unset _cma_self _cma_link
 # shellcheck source=../lib/common.sh
 . "$CMA_LIB/common.sh"
 
@@ -24,6 +36,8 @@ usage() {
 claude-multiacct — manage multiple Claude Desktop instances on one Mac
 
 usage:
+  claude-multiacct install
+  claude-multiacct uninstall
   claude-multiacct init
   claude-multiacct add-instance <label> --email <email>
   claude-multiacct remove-instance <label> [--keep-userdata] [--keep-configdir]
@@ -37,6 +51,51 @@ labels: lowercase [a-z0-9-]+, no leading/trailing hyphen. 'primary' is reserved.
 config: $CMA_CONFIG_FILE
 docs:   see README.md and docs/ under $CMA_REPO_ROOT
 USAGE
+}
+
+# The install subcommand places a symlink into ~/.local/bin so the CLI works
+# from any shell without needing the repo dir on PATH. Chezmoi-safe: ~/.local/bin
+# is not an `exact_` chezmoi dir on any of our machines, and mac-mini-config
+# autosync uses `re-add` (managed files only), so the symlink won't be swept.
+CMA_INSTALL_TARGET="$HOME/.local/bin/claude-multiacct"
+
+cmd_install() {
+  local self="$CMA_BIN/claude-multiacct"
+  mkdir -p "$(dirname "$CMA_INSTALL_TARGET")"
+
+  if [[ -L "$CMA_INSTALL_TARGET" ]]; then
+    local existing; existing="$(readlink "$CMA_INSTALL_TARGET")"
+    if [[ "$existing" == "$self" ]]; then
+      cma_ok "already installed at $CMA_INSTALL_TARGET"
+      return 0
+    fi
+    cma_die "install: $CMA_INSTALL_TARGET is a symlink to $existing (not this repo). Remove it manually or run \`uninstall\` there."
+  fi
+  if [[ -e "$CMA_INSTALL_TARGET" ]]; then
+    cma_die "install: $CMA_INSTALL_TARGET exists and is NOT a symlink. Remove it manually if you're sure it's not something you want."
+  fi
+
+  ln -s "$self" "$CMA_INSTALL_TARGET"
+  cma_ok "linked $CMA_INSTALL_TARGET → $self"
+  cma_dim "  ensure ~/.local/bin is on your PATH"
+}
+
+cmd_uninstall() {
+  local self="$CMA_BIN/claude-multiacct"
+
+  if [[ ! -e "$CMA_INSTALL_TARGET" ]] && [[ ! -L "$CMA_INSTALL_TARGET" ]]; then
+    cma_ok "not installed — nothing to remove"
+    return 0
+  fi
+  if [[ ! -L "$CMA_INSTALL_TARGET" ]]; then
+    cma_die "uninstall: $CMA_INSTALL_TARGET is not a symlink — refusing to touch it"
+  fi
+  local existing; existing="$(readlink "$CMA_INSTALL_TARGET")"
+  if [[ "$existing" != "$self" ]]; then
+    cma_die "uninstall: $CMA_INSTALL_TARGET points at $existing, not this repo — refusing to remove"
+  fi
+  rm -f "$CMA_INSTALL_TARGET"
+  cma_ok "removed $CMA_INSTALL_TARGET"
 }
 
 cmd_init() {
@@ -197,15 +256,26 @@ cmd_qa() {
   local sub="${1:-}"
   case "$sub" in
     lint)
+      # -P bin -P lib resolves the source directives in bin/claude-multiacct
+      # (source=../lib/common.sh) and lib/*.sh (source=./common.sh) so SC1091
+      # doesn't fire. bats files are shellcheckable too — they're bash + a bats
+      # preamble shellcheck tolerates fine.
       cma_require shellcheck
       cma_say "shellcheck bin/ lib/ tests/"
-      shellcheck -x "$CMA_BIN"/* "$CMA_LIB"/* "$CMA_REPO_ROOT/tests"/*.bats 2>&1 || return $?
+      shellcheck -x -P "$CMA_BIN" -P "$CMA_LIB" "$CMA_BIN"/* "$CMA_LIB"/* "$CMA_REPO_ROOT/tests"/*.bats 2>&1 || return $?
       cma_ok "shellcheck clean"
-      if command -v gitleaks >/dev/null 2>&1; then
-        cma_say "gitleaks"
-        gitleaks detect --no-git --source "$CMA_REPO_ROOT" --config "$CMA_REPO_ROOT/.gitleaks.toml" --no-banner 2>&1
-        cma_ok "gitleaks clean"
-      fi
+
+      # gitleaks + yamllint are now REQUIRED (not optional). Both are pinned in
+      # mise.toml — a missing tool means the caller hasn't run `mise install`.
+      cma_require gitleaks
+      cma_say "gitleaks"
+      gitleaks detect --no-git --source "$CMA_REPO_ROOT" --config "$CMA_REPO_ROOT/.gitleaks.toml" --no-banner 2>&1 || return $?
+      cma_ok "gitleaks clean"
+
+      cma_require yamllint
+      cma_say "yamllint config/"
+      yamllint "$CMA_REPO_ROOT/config"/*.yaml 2>&1 || return $?
+      cma_ok "yamllint clean"
       ;;
     test)
       cma_require bats
@@ -220,6 +290,8 @@ main() {
   local cmd="${1:-}"; shift || true
   case "$cmd" in
     ""|-h|--help|help) usage ;;
+    install)           cmd_install "$@" ;;
+    uninstall)         cmd_uninstall "$@" ;;
     init)              cmd_init "$@" ;;
     add-instance)      cmd_add_instance "$@" ;;
     remove-instance)   cmd_remove_instance "$@" ;;
