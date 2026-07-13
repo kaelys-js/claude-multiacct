@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.user.claude-metadata-symlink — WatchPaths on every configured mirror's
+  <userData>/claude-code-sessions and <userData>/local-agent-mode-sessions.
+  Claude Desktop touches these dirs the moment the user signs in on a mirror
+  (creating the per-account UUID subdir), which fires this agent. On trigger,
+  runs bin/claude-metadata-watcher.sh which iterates every mirror and installs
+  any missing per-account-folder symlinks so the mirror's desktop UI resolves
+  to the primary's session store.
+
+  Without this agent, a fresh mirror install requires the user to (1) sign in,
+  (2) open a Code session, (3) quit, (4) manually run `claude-multiacct repair
+  <label>` — the whole point is to remove that manual step.
+
+  Template placeholders (substituted at install time by lib/install-launchd.sh):
+    __WATCH_BIN__            — full path to bin/claude-metadata-watcher.sh
+    __WATCHPATHS_ENTRIES__   — one <string>…</string> per watched dir (two per
+                               mirror: claude-code-sessions and local-agent-
+                               mode-sessions). Injected via `sed r file; d`.
+    __LOG_PATH__             — full path to the log file
+
+  ProcessType=Background + Nice=10 + LowPriorityIO=true: install-time symlink
+  work is tiny (<50ms) but keep it out of foreground user-work I/O anyway.
+
+  ThrottleInterval=15 coalesces the burst of dir mutations Desktop performs
+  while setting up the account+org UUID subtree on sign-in.
+
+  RunAtLoad=false: reloading the agent doesn't imply mirrors changed state;
+  we only care about mtime-change events under the WatchPaths.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.user.claude-metadata-symlink</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__WATCH_BIN__</string>
+    </array>
+
+    <key>WatchPaths</key>
+    <array>
+__WATCHPATHS_ENTRIES__
+    </array>
+
+    <key>StandardOutPath</key>
+    <string>__LOG_PATH__</string>
+    <key>StandardErrorPath</key>
+    <string>__LOG_PATH__</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>Nice</key>
+    <integer>10</integer>
+    <key>LowPriorityIO</key>
+    <true/>
+
+    <key>ThrottleInterval</key>
+    <integer>15</integer>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>

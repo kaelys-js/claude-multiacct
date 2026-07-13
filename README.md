@@ -43,8 +43,10 @@ bin/claude-multiacct install
 #    signed into the PRIMARY account you want it to boot into by default (once).
 
 # 4. Bootstrap. Detects the primary from ~/.claude/.claude.json + writes
-#    ~/.config/claude-multiacct/instances.yaml + installs BOTH launchd agents
-#    (sessions-sync + clone-refresh).
+#    ~/.config/claude-multiacct/instances.yaml + installs the two launchd
+#    agents that don't depend on any mirrors existing yet (sessions-sync +
+#    clone-refresh). The third agent (metadata-symlink) gets installed by
+#    the first `add-instance` below.
 claude-multiacct init
 
 # 5. Add every mirror instance you want. Each mirror clones /Applications/Claude.app
@@ -53,13 +55,17 @@ claude-multiacct init
 claude-multiacct add-instance b --email you@example.com
 claude-multiacct add-instance work --email work@example.com
 
-# 6. Launch the new instance + sign in (once).
+# 6. Launch the new instance + sign in (once). The launchd metadata-symlink
+#    agent watches the per-mirror session dirs; the moment Desktop creates the
+#    per-account UUID subdir on sign-in, the agent installs the missing
+#    session-metadata symlinks — no manual step required. Sidebar sessions
+#    should appear within seconds of sign-in.
 open ~/Applications/Claude\ Account\ B.app
-# → sign in to Account B via the normal Claude Desktop UI, wait for it to load, quit.
+# → sign in to Account B via the normal Claude Desktop UI. Sessions appear.
 
-# 7. Re-run repair. The metadata symlinks that share desktop-UI + agent-mode
-#    session state can only be installed AFTER the mirror creates its per-account
-#    UUID dir (which happens on first login).
+# 7. (Optional fallback) if the metadata symlinks didn't appear — e.g. the
+#    launchd agent hadn't been loaded, or you're on an older macOS release —
+#    run repair to install them by hand.
 claude-multiacct repair b
 
 # 8. Confirm health.
@@ -90,10 +96,11 @@ See [docs/sync-model.md](docs/sync-model.md) for the full four-layer breakdown. 
 
 ```
 bin/
-  claude-multiacct          # the CLI (install / uninstall / init / add-instance / remove-instance /
-                            #  list [--tsv] / repair / sync-now / sync-log / refresh-clones / doctor / qa)
-  claude-sessions-sync.sh   # sessions rsync worker (called by launchd + `sync-now`)
-  claude-clone-refresh.sh   # clone-refresh worker (called by launchd on Claude Desktop update)
+  claude-multiacct              # the CLI (install / uninstall / init / add-instance / remove-instance /
+                                #  list [--tsv] / repair / sync-now / sync-log / refresh-clones / doctor / qa)
+  claude-sessions-sync.sh       # sessions rsync worker (called by launchd + `sync-now`)
+  claude-clone-refresh.sh       # clone-refresh worker (called by launchd on Claude Desktop update)
+  claude-metadata-watcher.sh    # metadata-symlink worker (called by launchd on mirror sign-in)
 lib/
   common.sh                 # shared functions (logging, config parsing, path helpers)
   install-instance.sh       # per-instance idempotent installer
@@ -101,11 +108,12 @@ lib/
   build-cli-launcher.sh     # writes ~/.local/bin/claude-account-<label>
   build-clone-app.sh        # clones Claude.app → Claude Account <Title>.app + rewrites Info.plist + wraps MacOS/Claude + codesigns
   metadata-symlinks.sh      # per-account-folder metadata symlinks
-  install-launchd.sh        # renders + bootstraps both WatchPaths agents
+  install-launchd.sh        # renders + bootstraps all three WatchPaths agents
   discover.sh               # on-disk health inspection (used by list + doctor)
 launchd/
-  com.user.claude-sessions-sync.plist.tmpl   # sessions rsync agent template
-  com.user.claude-clone-refresh.plist.tmpl   # clone refresh agent template (fires on Claude.app Info.plist mtime)
+  com.user.claude-sessions-sync.plist.tmpl     # sessions rsync agent template
+  com.user.claude-clone-refresh.plist.tmpl     # clone refresh agent template (fires on Claude.app Info.plist mtime)
+  com.user.claude-metadata-symlink.plist.tmpl  # metadata-symlink agent template (fires on mirror sign-in)
 config/
   instances.example.yaml    # scaffold copied by init
 docs/
@@ -117,6 +125,7 @@ tests/
   smoke.bats                # 23 tests — install/uninstall/list/repair/sync-log/doctor under a scratch $HOME
   sync-worker.bats          #  5 tests — hermetic coverage of bin/claude-sessions-sync.sh
   clone-app.bats            # 12 tests — hermetic coverage of lib/build-clone-app.sh (uses a fake Claude.app fixture)
+  metadata-watcher.bats     #  6 tests — hermetic coverage of bin/claude-metadata-watcher.sh + pre-created watch targets
 ```
 
 ## Quality gates
@@ -133,7 +142,7 @@ Both must pass on `main`. `.gitleaks.toml` covers OAuth-adjacent paths that the 
 - **Mirror's Dock icon coalesces with the primary** → see [docs/dock-icon-fix.md](docs/dock-icon-fix.md). Root cause: macOS Dock groups by `CFBundleIdentifier`; the fix is a per-instance clone of Claude.app with a rewritten bundle-id. `claude-multiacct repair <label>` (single mirror) or `claude-multiacct refresh-clones` (all mirrors) rebuilds. `claude-multiacct doctor` catches bundle-id or Claude-version drift.
 - **Claude Desktop updated but mirror shows old version** → the `com.user.claude-clone-refresh` WatchPaths agent auto-refreshes on Squirrel updates. If it hasn't fired (e.g. mirror was running at update-time), run `claude-multiacct refresh-clones` manually after quitting the mirror(s).
 - **launchd agent missing after macOS update** → `claude-multiacct repair` re-installs both plists and re-loads them.
-- **Mirror instance never logged in yet** → `metadata-symlinks.sh` skips the desktop-UI-metadata symlinks with a warning; run `claude-multiacct repair <label>` after first login + quit.
+- **Mirror instance never logged in yet** → `metadata-symlinks.sh` skips the desktop-UI-metadata symlinks with a warning. Once the user signs in, the `com.user.claude-metadata-symlink` launchd agent fires on the per-account UUID subdir creation and installs the symlinks automatically. Fallback: `claude-multiacct repair <label>` if the agent hasn't been loaded.
 
 ## Engineering
 

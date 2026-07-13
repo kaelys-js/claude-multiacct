@@ -14,12 +14,18 @@ killall Dock                      # if Dock cached the old routing
 
 ## Sidebar in the mirror shows no sessions
 
-Metadata symlinks aren't in place. Check via:
+Metadata symlinks aren't in place. In the normal happy path, the `com.user.claude-metadata-symlink` launchd agent installs these automatically the moment Desktop creates the per-account UUID subdir on sign-in. Sessions should appear within seconds. Check via:
 ```sh
 ls -la "~/Library/Application Support/Claude-<Titlecase>/claude-code-sessions/"
 ```
 
-If you see a UUID dir but no symlink inside pointing at the primary's UUID dir, the mirror wasn't logged in when we installed. Log in via the mirror once, quit, then:
+If you see a UUID dir but no symlink inside pointing at the primary's UUID dir, the agent either wasn't loaded or hasn't fired yet. Confirm the agent is loaded:
+```sh
+claude-multiacct doctor          # reports all three launchd agents' state
+tail ~/Library/Logs/claude-multiacct/metadata-watcher.log
+```
+
+Manual fallback (also fixes the edge cases where the agent hasn't been loaded — e.g. immediately after a macOS update that clears LaunchAgents):
 ```sh
 claude-multiacct repair <label>
 ```
@@ -63,7 +69,7 @@ claude-multiacct sync-now
 ```sh
 claude-multiacct add-instance <label> --email <email>
 ```
-Then launch that instance and sign in once. Then:
+Then launch that instance and sign in once. The `com.user.claude-metadata-symlink` launchd agent will install the session-metadata symlinks the moment Desktop creates the per-account UUID subdir on sign-in — no further step required. Fallback if the agent didn't fire (rare):
 ```sh
 claude-multiacct repair <label>   # finishes the metadata symlinks after first login
 ```
@@ -110,9 +116,11 @@ for label in $(yq -r '.instances[].label' ~/.config/claude-multiacct/instances.y
   claude-multiacct remove-instance "$label" --keep-userdata --keep-configdir
 done
 
-# Remove the launchd agent.
-launchctl bootout "gui/$(id -u)/com.user.claude-sessions-sync" 2>/dev/null || true
-rm -f ~/Library/LaunchAgents/com.user.claude-sessions-sync.plist
+# Remove the launchd agents.
+for agent in com.user.claude-sessions-sync com.user.claude-clone-refresh com.user.claude-metadata-symlink; do
+  launchctl bootout "gui/$(id -u)/$agent" 2>/dev/null || true
+  rm -f "$HOME/Library/LaunchAgents/$agent.plist"
+done
 
 # Remove config.
 rm -rf ~/.config/claude-multiacct

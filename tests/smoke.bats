@@ -113,6 +113,12 @@ BIN
   [ -x "$HOME/Applications/Claude Account B.app/Contents/MacOS/Claude" ]
   [ -f "$HOME/Applications/Claude Account B.app/Contents/MacOS/Claude.real" ]
   [ -f "$HOME/Applications/Claude Account B.app/Contents/Info.plist" ]
+  # userData session subdirs are pre-created so launchd's metadata-symlink
+  # WatchPaths arm on paths that exist — mkdir-on-signin then reliably fires
+  # the agent. Dedicated coverage lives in metadata-watcher.bats; this line
+  # is the regression guard on install-instance.sh's pre-create block.
+  [ -d "$HOME/Library/Application Support/Claude-B/claude-code-sessions" ]
+  [ -d "$HOME/Library/Application Support/Claude-B/local-agent-mode-sessions" ]
 }
 
 @test "add-instance refuses duplicate label" {

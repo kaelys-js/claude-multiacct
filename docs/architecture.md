@@ -59,6 +59,18 @@ Four layers of state need to move between instances, each with different sharing
 
 Layer 5 (Cookies / Preferences / Network Persistent State / Crashpad) is per-instance always — sharing would break OAuth or corrupt window state.
 
+## launchd agents
+
+Three `launchd` `LaunchAgents` back the runtime behaviour:
+
+1. **`com.user.claude-sessions-sync`** — `WatchPaths` on the primary's `<userData>/Local State`. Chromium rewrites this file on app-close, which fires the agent; it then rsyncs layer-4 stores (IndexedDB / Local Storage / Session Storage) primary → every mirror. Refuses to run if any Claude Desktop process is still up.
+
+2. **`com.user.claude-clone-refresh`** — `WatchPaths` on `/Applications/Claude.app/Contents/Info.plist`. Squirrel writes to this file at update-end; on mtime change the agent invokes `bin/claude-clone-refresh.sh` which rebuilds every mirror's clone.
+
+3. **`com.user.claude-metadata-symlink`** — `WatchPaths` on every configured mirror's `<userData>/claude-code-sessions/` AND `<userData>/local-agent-mode-sessions/`. Both dirs are pre-created empty at `add-instance` time so the WatchPaths trigger is armed on paths that already exist. The moment Claude Desktop creates the per-account UUID subdir on first sign-in, the agent fires; `bin/claude-metadata-watcher.sh` then iterates every mirror and invokes `lib/metadata-symlinks.sh` on it, installing the layer-2 and layer-3 per-account-folder symlinks. Already-installed symlinks no-op; mirrors not yet signed in skip cleanly and get retried on the next fire. ThrottleInterval=15 coalesces Desktop's setup-time write bursts. Skipped entirely (agent uninstalled) when zero mirrors are configured.
+
+`claude-multiacct doctor` reports the loaded state of all three agents. `claude-multiacct repair` re-renders and re-installs all three plists.
+
 ## Config file of record
 
 `~/.config/claude-multiacct/instances.yaml` lists every instance and any per-instance path overrides. Every runtime action (`add-instance`, `remove-instance`, `repair`, `sync-now`, `doctor`) reads this file and never persists derived state elsewhere. Snapshot-before-write: any change to `instances.yaml` creates a backup under `~/.claude-multiacct-backups/<timestamp>-config/`.

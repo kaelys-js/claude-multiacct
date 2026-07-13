@@ -329,9 +329,9 @@ cmd_doctor() {
     return 1
   fi
 
-  # Launchd agent state. Both agents get the same treatment.
+  # Launchd agent state. All three agents get the same treatment.
   local label
-  for label in com.user.claude-sessions-sync com.user.claude-clone-refresh; do
+  for label in com.user.claude-sessions-sync com.user.claude-clone-refresh com.user.claude-metadata-symlink; do
     if launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; then
       cma_ok "launchd agent $label loaded"
       launchctl print "gui/$(id -u)/$label" 2>/dev/null | grep -E 'state|last exit code|watch paths' | sed 's/^/  /' >&2 || true

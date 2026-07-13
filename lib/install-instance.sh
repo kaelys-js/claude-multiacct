@@ -88,6 +88,13 @@ JSON
 
   # ── 2. userData dir (Claude Desktop auto-creates on launch, but pre-create) ──
   mkdir -p "$udata"
+  # Pre-create the two session subdirs Claude Desktop populates on first sign-in.
+  # Load-bearing: the launchd metadata-symlink agent watches these paths, and
+  # WatchPaths must be armed on paths that already exist for the trigger to be
+  # observable across Desktop version + macOS variants. Empty dirs are safe —
+  # Desktop populates them as it always does on sign-in.
+  mkdir -p "$udata/claude-code-sessions"
+  mkdir -p "$udata/local-agent-mode-sessions"
 
   # ── 3. CLI launcher ───────────────────────────────────────────────────
   "$LIB/build-cli-launcher.sh" "$label" "$cdir" "$udata" "$cli"
@@ -107,7 +114,8 @@ JSON
 
   cma_ok "install-instance: label=$label complete"
   cma_dim "  next: launch \`$cli\` (or click \"$(basename "$app")\") + sign in with $email"
-  cma_dim "  after first login + quit: re-run \`claude-multiacct repair $label\` to finish the metadata symlinks"
+  cma_dim "  the launchd metadata-symlink agent will install the session-metadata symlinks on first sign-in"
+  cma_dim "  (fallback: re-run \`claude-multiacct repair $label\` if the agent hasn't fired)"
 }
 
 main "$@"

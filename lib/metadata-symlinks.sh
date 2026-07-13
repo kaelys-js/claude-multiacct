@@ -85,14 +85,19 @@ main() {
   local m_lams="$m_udata/local-agent-mode-sessions"
 
   if [[ ! -d "$m_ccs" ]]; then
-    cma_warn "  claude-code-sessions/ missing under mirror userData — has Claude '$label' been launched + logged in yet?"
-    cma_dim "  run \`claude-account-$label\` (or click the .app icon), sign in, quit, then re-run \`claude-multiacct repair $label\`"
+    cma_warn "  claude-code-sessions/ missing under mirror userData — not logged in yet, will retry on next Desktop event"
     return 0
   fi
 
   # Find the mirror's account UUID under its userData (there should be exactly one).
-  local m_acct; m_acct="$(find "$m_ccs" -mindepth 1 -maxdepth 1 -type d ! -name '.*' 2>/dev/null | head -1)"
-  [[ -n "$m_acct" ]] || { cma_warn "  no account UUID under $m_ccs — mirror not logged in yet"; return 0; }
+  # `find -L`: after the first successful run, the org UUID under this acct is a
+  # SYMLINK (pointing at the primary's org dir), and BSD `find -type d` without
+  # `-L` won't match a symlink. `-L` makes find follow symlinks so an already-
+  # symlinked layout still discovers the acct/org pair — the watcher then
+  # observes "already correct" instead of "not logged in yet". Load-bearing for
+  # idempotency under repeated launchd fires.
+  local m_acct; m_acct="$(find -L "$m_ccs" -mindepth 1 -maxdepth 1 -type d ! -name '.*' 2>/dev/null | head -1)"
+  [[ -n "$m_acct" ]] || { cma_warn "  not logged in yet (no account UUID under $m_ccs) — will retry on next Desktop event"; return 0; }
   local m_acct_uuid; m_acct_uuid="$(basename "$m_acct")"
 
   # Same discovery for primary.
@@ -101,8 +106,10 @@ main() {
   IFS=$'\t' read -r p_acct_uuid p_org_uuid <<<"$p_uuids"
 
   # Under the mirror's acct dir, find its org UUID (there should also be exactly one).
-  local m_org; m_org="$(find "$m_acct" -mindepth 1 -maxdepth 1 -type d ! -name '.*' 2>/dev/null | head -1)"
-  [[ -n "$m_org" ]] || { cma_warn "  no org UUID under $m_acct — mirror not logged in yet"; return 0; }
+  # `-L`: see the note on the acct-level find above — after the first successful
+  # run this entry is a symlink, and BSD find without -L would skip it.
+  local m_org; m_org="$(find -L "$m_acct" -mindepth 1 -maxdepth 1 -type d ! -name '.*' 2>/dev/null | head -1)"
+  [[ -n "$m_org" ]] || { cma_warn "  not logged in yet (no org UUID under $m_acct) — will retry on next Desktop event"; return 0; }
   local m_org_uuid; m_org_uuid="$(basename "$m_org")"
 
   # Symlink: mirror's <acct>/<org> → primary's <acct>/<org>.
@@ -111,8 +118,11 @@ main() {
 
   # ── Agent-mode subagent metadata symlink ──────────────────────────────
   # Same shape but only account-scoped (no org-level partition below).
+  # `-L`: same reason as the claude-code-sessions finds above — after the
+  # first successful run the acct dir here IS the symlink; -L lets us
+  # rediscover it and no-op via symlink_atomic instead of silently missing it.
   if [[ -d "$m_lams" ]]; then
-    local m_lams_acct; m_lams_acct="$(find "$m_lams" -mindepth 1 -maxdepth 1 -type d ! -name '.*' 2>/dev/null | head -1)"
+    local m_lams_acct; m_lams_acct="$(find -L "$m_lams" -mindepth 1 -maxdepth 1 -type d ! -name '.*' 2>/dev/null | head -1)"
     if [[ -n "$m_lams_acct" ]]; then
       local m_lams_acct_uuid; m_lams_acct_uuid="$(basename "$m_lams_acct")"
       symlink_atomic "$m_lams/$m_lams_acct_uuid" \
