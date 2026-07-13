@@ -15,31 +15,63 @@ Claude Desktop stores OAuth per-userData directory. `--user-data-dir` lets you p
 - **Per-instance state that must stay isolated** (Cookies / Preferences / Network Persistent State / Crashpad) is left untouched, per instance.
 - **Repair + diagnostics**: idempotent `repair` + a `doctor` subcommand that walks every layer and reports what's healthy vs drifted.
 
+## Prerequisites
+
+Fresh Mac? Get these first:
+
+```sh
+xcode-select --install                   # git + build tools
+curl https://mise.run | sh               # mise (pins the toolchain)
+brew install gh                          # GitHub CLI (or use SSH — either works for a private clone)
+gh auth login                            # authorise the account with access to kaelys-js/claude-multiacct
+```
+
 ## Quick start
 
 ```sh
 # 1. Clone + install the toolchain (self-contained via mise).
-git clone git@github.com:kaelys-js/claude-multiacct.git ~/Documents/work/@personal/claude-multiacct
+gh repo clone kaelys-js/claude-multiacct ~/Documents/work/@personal/claude-multiacct
 cd ~/Documents/work/@personal/claude-multiacct
-mise install                              # pins shellcheck, bats, gitleaks, yq
-export PATH="$PWD/bin:$PATH"              # or symlink bin/claude-multiacct into ~/.local/bin/
+mise install                              # pins shellcheck, bats, gitleaks, yq, yamllint
 
-# 2. Bootstrap. Detects the running Claude Desktop primary + writes ~/.config/claude-multiacct/instances.yaml.
+# 2. Put the CLI on PATH (idempotent; symlinks into ~/.local/bin/claude-multiacct).
+bin/claude-multiacct install
+# Ensure ~/.local/bin is on PATH — add to ~/.zshrc if not:
+#   export PATH="$HOME/.local/bin:$PATH"
+
+# 3. Make sure Claude Desktop is installed at /Applications/Claude.app and you've
+#    signed into the PRIMARY account you want it to boot into by default (once).
+
+# 4. Bootstrap. Detects the primary from ~/.claude/.claude.json + writes
+#    ~/.config/claude-multiacct/instances.yaml + installs BOTH launchd agents
+#    (sessions-sync + clone-refresh).
 claude-multiacct init
 
-# 3. Add every mirror instance you want.
+# 5. Add every mirror instance you want. Each mirror clones /Applications/Claude.app
+#    (~745 MB, ~30-60s per clone) into ~/Applications/Claude Account <Title>.app
+#    with its own bundle-id + shell-wrapped MacOS/Claude.
 claude-multiacct add-instance b --email you@example.com
 claude-multiacct add-instance work --email work@example.com
 
-# 4. Launch the new instance + sign in (once).
+# 6. Launch the new instance + sign in (once).
 open ~/Applications/Claude\ Account\ B.app
-# → sign in to Account B via the normal Claude Desktop UI
+# → sign in to Account B via the normal Claude Desktop UI, wait for it to load, quit.
 
-# 5. After the first launch + login, re-run repair to finish the metadata symlinks.
+# 7. Re-run repair. The metadata symlinks that share desktop-UI + agent-mode
+#    session state can only be installed AFTER the mirror creates its per-account
+#    UUID dir (which happens on first login).
 claude-multiacct repair b
 
-# 6. Confirm health.
+# 8. Confirm health.
 claude-multiacct doctor
+```
+
+## Uninstall
+
+```sh
+claude-multiacct remove-instance <label>   # tears down configDir + userData + clone + launcher (snapshots first)
+claude-multiacct uninstall                 # removes the ~/.local/bin symlink
+# Nuke every trace (launchd + config + backups): see docs/troubleshooting.md → "Complete reset".
 ```
 
 ## Sharing model
@@ -58,7 +90,8 @@ See [docs/sync-model.md](docs/sync-model.md) for the full four-layer breakdown. 
 
 ```
 bin/
-  claude-multiacct          # the CLI (init / add-instance / remove-instance / list / repair / refresh-clones / sync-now / doctor / qa)
+  claude-multiacct          # the CLI (install / uninstall / init / add-instance / remove-instance /
+                            #  list [--tsv] / repair / sync-now / sync-log / refresh-clones / doctor / qa)
   claude-sessions-sync.sh   # sessions rsync worker (called by launchd + `sync-now`)
   claude-clone-refresh.sh   # clone-refresh worker (called by launchd on Claude Desktop update)
 lib/
@@ -81,7 +114,9 @@ docs/
   dock-icon-fix.md          # why Dock launch silently fails on unsigned bundles + the fix
   troubleshooting.md        # symptom → diagnosis table
 tests/
-  smoke.bats                # hermetic install/uninstall under a scratch $HOME
+  smoke.bats                # 23 tests — install/uninstall/list/repair/sync-log/doctor under a scratch $HOME
+  sync-worker.bats          #  5 tests — hermetic coverage of bin/claude-sessions-sync.sh
+  clone-app.bats            # 12 tests — hermetic coverage of lib/build-clone-app.sh (uses a fake Claude.app fixture)
 ```
 
 ## Quality gates
