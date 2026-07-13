@@ -22,8 +22,9 @@
  */
 
 import { statSync } from "node:fs";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { sh, stdioJournal } from "@foundation/shell";
 
 // ─── Stage 1 — Argument parsing + fix-src validation ─────────────
 
@@ -103,10 +104,120 @@ export function parseArgs(argv: readonly string[]): ParseOutcome {
 	return { kind: "ok", args: { fixSrc, withDocker, dryRun } };
 }
 
+function isFile(path: string): boolean {
+	try {
+		return statSync(path).isFile();
+	} catch {
+		return false;
+	}
+}
+
+// ─── Stage 2 — run() helper + PM detect + frozen install ─────────
+
+// `set -euo pipefail` in bash aborts the whole script on any non-zero
+// exit. Since we do not have that semantics for free in Node, `run()`
+// throws `RunError` on non-zero exit and `main()` catches it, mapping
+// the exit code back to the process. Signal-terminated children (which
+// the bash version would see as 128 + N) surface as -1 from execa, so
+// we normalise those to 1.
+class RunError extends Error {
+	readonly exitCode: number;
+	readonly line: string;
+	constructor(exitCode: number, line: string) {
+		super(`command failed (exit ${exitCode}): ${line}`);
+		this.exitCode = exitCode;
+		this.line = line;
+	}
+}
+
+type RunOptions = {
+	readonly cwd?: string;
+	readonly dryRun: boolean;
+};
+
+// Bash `run` function: echo the command with a leading `+ `, then execute
+// unless DRY_RUN=1. Every side effect in the bash source flows through
+// `run`, so dry-run coverage is total; the TS port preserves that.
+async function run(cmd: string, args: readonly string[], opts: RunOptions): Promise<void> {
+	const line = args.length === 0 ? cmd : `${cmd} ${args.join(" ")}`;
+	process.stdout.write(`+ ${line}\n`);
+	if (opts.dryRun) {
+		return;
+	}
+	const result = await sh(cmd, args, {
+		cwd: opts.cwd,
+		journal: stdioJournal(),
+		timeout: 0,
+		rejectOnError: false,
+	});
+	if (result.exitCode !== 0) {
+		const code = result.exitCode > 0 ? result.exitCode : 1;
+		throw new RunError(code, line);
+	}
+}
+
+export type PackageManager = "pnpm" | "yarn" | "bun" | "npm" | "none";
+
+// Detect package manager by lockfile. Order matters — pnpm before npm
+// because some repos keep a stale package-lock.json alongside
+// pnpm-lock.yaml (mirrors the bash source comment).
+export function detectPm(fixSrc: string): PackageManager {
+	if (isFile(join(fixSrc, "pnpm-lock.yaml"))) {
+		return "pnpm";
+	}
+	if (isFile(join(fixSrc, "yarn.lock"))) {
+		return "yarn";
+	}
+	if (isFile(join(fixSrc, "bun.lockb")) || isFile(join(fixSrc, "bun.lock"))) {
+		return "bun";
+	}
+	if (isFile(join(fixSrc, "package-lock.json"))) {
+		return "npm";
+	}
+	return "none";
+}
+
+// Frozen + ignore-scripts. Ignore-scripts blocks postinstall from running
+// arbitrary code out of node_modules (SR8 supply-chain posture). npm has
+// no `--frozen-lockfile`; `npm ci` is the equivalent lockfile-strict form.
+function installCommand(pm: Exclude<PackageManager, "none">): {
+	readonly cmd: string;
+	readonly args: readonly string[];
+} {
+	switch (pm) {
+		case "pnpm": {
+			return { cmd: "pnpm", args: ["install", "--frozen-lockfile", "--ignore-scripts"] };
+		}
+		case "yarn": {
+			return { cmd: "yarn", args: ["install", "--frozen-lockfile", "--ignore-scripts"] };
+		}
+		case "bun": {
+			return { cmd: "bun", args: ["install", "--frozen-lockfile", "--ignore-scripts"] };
+		}
+		case "npm": {
+			return { cmd: "npm", args: ["ci", "--ignore-scripts"] };
+		}
+	}
+}
+
+// Runs the PM install branch. Prints `SKIP: no lockfile ...` to stderr
+// (parity with the bash `>&2` redirect) and returns without executing
+// when no lockfile is present; otherwise prints `PM: <pm>` to stdout
+// and hands off to `run()` inside the fix-src cwd.
+async function installStage(fixSrc: string, dryRun: boolean): Promise<void> {
+	const pm = detectPm(fixSrc);
+	if (pm === "none") {
+		process.stderr.write(`SKIP: no lockfile in ${fixSrc} — nothing to install.\n`);
+		return;
+	}
+	process.stdout.write(`PM: ${pm}\n`);
+	const { cmd, args } = installCommand(pm);
+	await run(cmd, args, { cwd: fixSrc, dryRun });
+}
+
 // ─── Main + CLI invocation guard ──────────────────────────────────
 
 export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<number> {
-	await Promise.resolve();
 	const outcome = parseArgs(argv);
 	if (outcome.kind === "help") {
 		process.stdout.write(`${USAGE}\n`);
@@ -115,8 +226,16 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
 	if (outcome.kind === "err") {
 		return outcome.exitCode;
 	}
-	// outcome.kind === "ok" here. Install + compose stages land in later
-	// commits; until then a valid invocation is a no-op that returns 0.
+	try {
+		await installStage(outcome.args.fixSrc, outcome.args.dryRun);
+	} catch (error) {
+		if (error instanceof RunError) {
+			return error.exitCode;
+		}
+		throw error;
+	}
+	// Compose stage lands in the next commit; a valid invocation with a
+	// successful install currently exits 0.
 	return 0;
 }
 
