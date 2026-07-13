@@ -215,6 +215,52 @@ async function installStage(fixSrc: string, dryRun: boolean): Promise<void> {
 	await run(cmd, args, { cwd: fixSrc, dryRun });
 }
 
+// ─── Stage 3 — Docker compose detect + optional `up -d` ──────────
+
+// First match wins, mirroring the bash `for candidate in ...` loop. The
+// list is authored in the same order the source declares so an operator
+// diffing the two versions can compare at a glance.
+const COMPOSE_CANDIDATES: readonly string[] = [
+	"docker-compose.yml",
+	"docker-compose.yaml",
+	"compose.yml",
+	"compose.yaml",
+	"docker-compose-test.yml",
+	"docker-compose.test.yml",
+];
+
+// Empty string signals "no compose file", matching the bash sentinel
+// `COMPOSE_FILE=""`. Callers check the string, not a separate flag.
+export function findComposeFile(fixSrc: string): string {
+	for (const candidate of COMPOSE_CANDIDATES) {
+		if (isFile(join(fixSrc, candidate))) {
+			return candidate;
+		}
+	}
+	return "";
+}
+
+// Reports what would be started; when `--with-docker` is set and a
+// compose file was found, invokes `docker compose -f <file> up -d` via
+// `run()` inside the fix-src cwd. Non-zero from docker propagates as a
+// `RunError` for `main()` to translate into an exit code.
+async function composeStage(fixSrc: string, withDocker: boolean, dryRun: boolean): Promise<void> {
+	const composeFile = findComposeFile(fixSrc);
+	if (!composeFile) {
+		process.stdout.write("COMPOSE: none found.\n");
+		return;
+	}
+	process.stdout.write(`COMPOSE: ${composeFile}\n`);
+	if (!withDocker) {
+		process.stdout.write("COMPOSE: --with-docker not set; skipping 'up -d'.\n");
+		return;
+	}
+	await run("docker", ["compose", "-f", composeFile, "up", "-d"], {
+		cwd: fixSrc,
+		dryRun,
+	});
+}
+
 // ─── Main + CLI invocation guard ──────────────────────────────────
 
 export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<number> {
@@ -226,16 +272,16 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
 	if (outcome.kind === "err") {
 		return outcome.exitCode;
 	}
+	const { fixSrc, withDocker, dryRun } = outcome.args;
 	try {
-		await installStage(outcome.args.fixSrc, outcome.args.dryRun);
+		await installStage(fixSrc, dryRun);
+		await composeStage(fixSrc, withDocker, dryRun);
 	} catch (error) {
 		if (error instanceof RunError) {
 			return error.exitCode;
 		}
 		throw error;
 	}
-	// Compose stage lands in the next commit; a valid invocation with a
-	// successful install currently exits 0.
 	return 0;
 }
 
