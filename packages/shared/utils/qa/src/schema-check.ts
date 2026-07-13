@@ -223,11 +223,15 @@ const COVERAGE_EXCLUDED_PREFIXES: readonly string[] = [
 const COVERAGE_EXCLUDED_EXACT = new Set(["pnpm-lock.yaml", "mise.lock"]);
 
 // Whether a tracked config file is exempt from the schema-coverage requirement.
+// Test fixtures under any `**/tests/fixtures/` directory are data files, not repo
+// config — the coverage gate exists to catch un-schemad config, not to force a
+// `$schema` marker into every fixture input/output byte-for-byte on disk.
 function isCoverageExcluded(file: string): boolean {
 	if (
 		COVERAGE_EXCLUDED_EXACT.has(file) ||
 		file.endsWith(".lock") ||
-		file.endsWith(".schema.json")
+		file.endsWith(".schema.json") ||
+		file.includes("/tests/fixtures/")
 	) {
 		return true;
 	}

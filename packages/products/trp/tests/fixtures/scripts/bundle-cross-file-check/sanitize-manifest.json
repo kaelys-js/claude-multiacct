@@ -1,0 +1,21 @@
+{
+  "script": "bundle-cross-file-check",
+  "shape": "d",
+  "shape_description": "side-effect JSON file at discovery/bundle-cross-file-<task_id_slug>.json",
+  "files": [
+    {
+      "name": "input.json",
+      "long_string_replacements": 0,
+      "path_leak_replacements": 0,
+      "total_replacements": 0
+    },
+    {
+      "name": "expected-side.json",
+      "long_string_replacements": 0,
+      "path_leak_replacements": 0,
+      "total_replacements": 0
+    }
+  ],
+  "total_replacements": 0,
+  "notes": "Fixture is fully synthesized (no client source, no secrets, no host paths). No sanitization applied. The Python original writes JSON via json.dumps(..., indent=2); the TS port uses JSON.stringify(..., null, 2) \u2014 byte-for-byte identical for the schema in use."
+}

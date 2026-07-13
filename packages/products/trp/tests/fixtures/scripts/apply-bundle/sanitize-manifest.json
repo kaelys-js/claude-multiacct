@@ -1,0 +1,21 @@
+{
+  "fixture": "apply-bundle",
+  "sanitize_impl": "byte-for-byte tree comparison (JSON.stringify(sortedTree, null, 2)); no sanitize.ts hasher \u2014 every file's full_content is short and deterministic",
+  "shape": "c",
+  "shape_reason": "the script's observable output is the filesystem tree it writes under $FIX_SRC; stdout is inspected but not oracle-compared; discovery/patches/*.patch is not written on the full-content fast path",
+  "files": [
+    {
+      "name": "input.json",
+      "long_string_replacements": 0,
+      "path_leak_replacements": 0,
+      "total_replacements": 0
+    },
+    {
+      "name": "expected-tree.json",
+      "long_string_replacements": 0,
+      "path_leak_replacements": 0,
+      "total_replacements": 0
+    }
+  ],
+  "total_replacements": 0
+}

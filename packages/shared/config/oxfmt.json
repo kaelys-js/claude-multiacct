@@ -11,6 +11,8 @@
 		".mise",
 		"coverage",
 		"**/*.min.js",
-		"**/*.toml"
+		"**/*.toml",
+		"**/tests/fixtures/**",
+		"**/tests/composed-run/**"
 	]
 }

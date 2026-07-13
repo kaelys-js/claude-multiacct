@@ -1,0 +1,22 @@
+{
+  "findings": [
+    {
+      "kind": "missing-prisma-field",
+      "severity": "high",
+      "file": "src/auth/login.ts",
+      "summary": "User.entraOid referenced but not declared in schema.prisma",
+      "evidence": "prisma.user.findFirst({ where: { entraOid: entraOid }"
+    },
+    {
+      "kind": "missing-prisma-model",
+      "severity": "high",
+      "file": "src/audit/report.ts",
+      "summary": "prisma.audit referenced but no model `Audit` in any schema.prisma",
+      "evidence": "prisma.audit.findMany({ where: { id: id }"
+    }
+  ],
+  "models_scanned": [
+    "User",
+    "Session"
+  ]
+}

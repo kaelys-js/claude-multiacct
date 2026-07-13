@@ -1,0 +1,27 @@
+{
+  "script": "bundle-schema-check",
+  "shape": "d",
+  "shape_description": "side-effect JSON file at discovery/bundle-schema-<task_id_slug>.json",
+  "files": [
+    {
+      "name": "input.json",
+      "long_string_replacements": 0,
+      "path_leak_replacements": 0,
+      "total_replacements": 0
+    },
+    {
+      "name": "fix-src/prisma/schema.prisma",
+      "long_string_replacements": 0,
+      "path_leak_replacements": 0,
+      "total_replacements": 0
+    },
+    {
+      "name": "expected-side.json",
+      "long_string_replacements": 0,
+      "path_leak_replacements": 0,
+      "total_replacements": 0
+    }
+  ],
+  "total_replacements": 0,
+  "notes": "Fixture is fully synthesized (no client source, no secrets, no host paths). No sanitization applied. The Python original writes JSON via json.dumps(..., indent=2); the TS port uses JSON.stringify(..., null, 2) \u2014 byte-for-byte identical for the schema in use because every finding summary and evidence string is ASCII (no em-dash: the raw-sql-unknown-table class is deliberately not exercised, so the em-dash in its summary never appears in the output and Python's ensure_ascii=True vs Node's raw-UTF-8 default cannot diverge). The two exercised finding classes are missing-prisma-field and missing-prisma-model."
+}

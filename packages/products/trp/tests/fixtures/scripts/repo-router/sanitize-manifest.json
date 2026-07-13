@@ -1,0 +1,22 @@
+{
+  "_comment": "repo-router emits a single JSON object on stdout with {slug, owner, repo, default_branch, fix_src_path}. The Python original is invoked from a scratch dir where a synthetic sfp.env + trp.env are staged; the TS port anchors REPO_ROOT to process.cwd() at module load, so the test chdirs into the same scratch dir and dynamic-imports the module. Both paths embed the scratch dir's absolute path in fix_src_path \u2014 the sanitize step replaces that runtime prefix with the placeholder token <REPO_ROOT> in the actual bytes so the compare against expected.txt is stable across operator machines. No other bytes are touched. Expected.txt was generated from a subprocess run of the .py original and re-serialized via Node JSON.stringify (no indent, no key sort) so the comparator matches the .ts port's exact stdout format \u2014 the .py's default `json.dump` uses `', '` / `': '` separators while Node's `JSON.stringify` uses `','` / `':'`; this fixture pins the Node canonical form because the shape-(a) contract is the JSON value, not the byte layout of one particular serializer.",
+  "fixture": "repo-router",
+  "sanitize_impl": "Replace every occurrence of the runtime scratch REPO_ROOT (equal to the test's tempDir absolute path) with the literal string '<REPO_ROOT>' in the captured stdout bytes; then compare byte-for-byte against expected.txt.",
+  "shape": "a",
+  "shape_reason": "primary output is a pure return value serialized as a single JSON line on stdout \u2014 the driver's callers read it via `JSON.parse(stdout)` and never treat it as free-form text",
+  "files": [
+    {
+      "name": "input.json",
+      "long_string_replacements": 0,
+      "path_leak_replacements": 0,
+      "total_replacements": 0
+    },
+    {
+      "name": "expected.txt",
+      "long_string_replacements": 0,
+      "path_leak_replacements": 1,
+      "total_replacements": 1
+    }
+  ],
+  "total_replacements": 1
+}

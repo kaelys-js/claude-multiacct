@@ -1,0 +1,125 @@
+{
+  "task_id": "TEST-1",
+  "title": "sample task",
+  "description": "body text",
+  "status": {
+    "status": "open",
+    "type": "open"
+  },
+  "priority": {
+    "priority": "high"
+  },
+  "assignees": [
+    {
+      "id": "u1",
+      "username": "alice",
+      "email": "alice@example.com"
+    },
+    {
+      "id": "u2",
+      "username": "bob",
+      "email": "bob@example.com"
+    }
+  ],
+  "custom_fields": [
+    {
+      "name": "sec-nn",
+      "value": "SEC-99"
+    }
+  ],
+  "comments": [
+    {
+      "id": "c1",
+      "user": "bob",
+      "date": "1700000001000",
+      "text": "first"
+    },
+    {
+      "id": "c2",
+      "user": null,
+      "date": "1700000002000",
+      "text": "user-null branch"
+    }
+  ],
+  "attachments": [
+    {
+      "id": "a1",
+      "title": "screenshot.png",
+      "url": "https://att.example/a1",
+      "extension": "png"
+    }
+  ],
+  "subtasks": [
+    {
+      "id": "st1",
+      "name": "sub"
+    }
+  ],
+  "updated_at": "1700000000000",
+  "url": "https://app.clickup.com/t/TEST-1",
+  "_raw": {
+    "task": {
+      "id": "TEST-1",
+      "name": "sample task",
+      "text_content": "body text",
+      "description": "should be ignored when text_content present",
+      "status": {
+        "status": "open",
+        "type": "open"
+      },
+      "priority": {
+        "priority": "high"
+      },
+      "assignees": [
+        {
+          "id": "u1",
+          "username": "alice",
+          "email": "alice@example.com"
+        },
+        {
+          "id": "u2",
+          "username": "bob",
+          "email": "bob@example.com"
+        }
+      ],
+      "custom_fields": [
+        {
+          "name": "sec-nn",
+          "value": "SEC-99"
+        }
+      ],
+      "subtasks": [
+        {
+          "id": "st1",
+          "name": "sub"
+        }
+      ],
+      "date_updated": "1700000000000",
+      "url": "https://app.clickup.com/t/TEST-1"
+    },
+    "comments": [
+      {
+        "id": "c1",
+        "user": {
+          "username": "bob"
+        },
+        "date": "1700000001000",
+        "comment_text": "first"
+      },
+      {
+        "id": "c2",
+        "user": null,
+        "date": "1700000002000",
+        "comment_text": "user-null branch"
+      }
+    ],
+    "attachments": [
+      {
+        "id": "a1",
+        "title": "screenshot.png",
+        "url": "https://att.example/a1",
+        "extension": "png"
+      }
+    ]
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "findings": [
+    {
+      "kind": "env-default-mismatch",
+      "severity": "high",
+      "summary": "env var ENTRA_TEST_SECRET has different defaults across files",
+      "locations": {
+        "secret-alpha": [
+          "packages/api/setupFiles.ts"
+        ],
+        "secret-beta": [
+          "packages/api/globalSetup.ts"
+        ]
+      }
+    },
+    {
+      "kind": "const-value-mismatch",
+      "severity": "medium",
+      "summary": "const TENANT_ID has different string values across files",
+      "locations": {
+        "tenant-alpha": [
+          "packages/api/setupFiles.ts"
+        ],
+        "tenant-beta": [
+          "packages/api/globalSetup.ts"
+        ]
+      }
+    },
+    {
+      "kind": "import-path-mismatch",
+      "severity": "low",
+      "summary": "Logger imported from different paths across files",
+      "locations": {
+        "@fixture/logger": [
+          "packages/api/setupFiles.ts"
+        ],
+        "../shared/logger.js": [
+          "packages/api/globalSetup.ts"
+        ]
+      }
+    },
+    {
+      "kind": "import-path-mismatch",
+      "severity": "low",
+      "summary": "helper imported from different paths across files",
+      "locations": {
+        "./util.js": [
+          "packages/api/setupFiles.ts"
+        ],
+        "../util/index.js": [
+          "packages/api/globalSetup.ts"
+        ]
+      }
+    }
+  ]
+}

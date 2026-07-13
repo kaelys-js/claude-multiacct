@@ -1,0 +1,16 @@
+{
+  "files_to_modify": [
+    {
+      "path": "packages/api/setupFiles.ts",
+      "full_content": "import { Logger } from \"@fixture/logger\";\nimport { helper } from \"./util.js\";\n\nprocess.env.ENTRA_TEST_SECRET ??= \"secret-alpha\";\nprocess.env.API_BASE_URL = \"https://alpha.example.test\";\n\nexport const APP_NAME = \"parity-fixture\";\nexport const TENANT_ID = \"tenant-alpha\";\n\nLogger.info(APP_NAME);\nhelper();\n"
+    },
+    {
+      "path": "packages/api/globalSetup.ts",
+      "full_content": "import { Logger } from \"../shared/logger.js\";\nimport { helper } from \"../util/index.js\";\n\nprocess.env.ENTRA_TEST_SECRET = \"secret-beta\";\nprocess.env.API_BASE_URL = process.env.API_BASE_URL ?? \"https://alpha.example.test\";\n\nexport const APP_NAME = \"parity-fixture\";\nexport const TENANT_ID = \"tenant-beta\";\n\nLogger.info(APP_NAME);\nhelper();\n"
+    },
+    {
+      "path": "packages/api/src/config.ts",
+      "full_content": "export const APP_NAME = \"parity-fixture\";\nexport const REGION = \"us-east-1\";\n"
+    }
+  ]
+}

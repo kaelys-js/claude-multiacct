@@ -1,0 +1,10 @@
+[DRY-RUN] would post proof COMMENT to task SEC-99
+  status transition: in review
+  artefacts (4):
+    - proof-dir/meta.json
+    - proof-dir/notes.md
+    - proof-dir/time-comparison.json
+    - proof-dir/verify.log
+  comment body (first line): "Proof bundle attached for SEC-99 -- 4 files"
+  ---
+  AI-assisted actual: 2h 30m. Without AI (estimate): 8-16h. Speedup: 3.2-6.4x.

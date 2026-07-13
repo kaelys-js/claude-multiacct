@@ -1,0 +1,4 @@
+{
+  "_comment": "discover-client-ci writes deterministic filesystem output \u2014 the OUT_PATH text file and the classified TSV. No sanitization is needed: input tree is synthesized inside a per-test tempdir, no timestamps, no absolute paths in either output. Manifest is intentionally empty so the parity test compares byte-for-byte.",
+  "structural_shape_only": []
+}

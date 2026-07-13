@@ -1,0 +1,11 @@
+{
+  "_comment": "Parity input for discover-client-ci. `env` names env vars the script reads (FIX_SRC + OUT_PATH resolved to test tempdir; TASK_ID_SLUG passed through). `tree` is the synthesized fix-src directory the script walks \u2014 path -> file body. Exercises workflow discovery (2 hits), package.json script discovery (dedupes the workflow's lint, adds typecheck + test), and the QUALITY / SKIP / MUTATE filters (echo hello dropped by QUALITY miss).",
+  "env": {
+    "TASK_ID_SLUG": "parity-test"
+  },
+  "tree": {
+    "pnpm-lock.yaml": "",
+    "package.json": "{\n  \"name\": \"parity-fixture\",\n  \"scripts\": {\n    \"lint\": \"eslint .\",\n    \"typecheck\": \"tsc --noEmit\",\n    \"test\": \"vitest run\"\n  }\n}\n",
+    ".github/workflows/ci.yml": "name: ci\non: [push]\njobs:\n  build:\n    runs-on: ubuntu-latest\n    steps:\n      - name: build\n        run: pnpm run build\n      - name: lint\n        run: pnpm run lint\n      - name: skip\n        run: echo hello\n"
+  }
+}

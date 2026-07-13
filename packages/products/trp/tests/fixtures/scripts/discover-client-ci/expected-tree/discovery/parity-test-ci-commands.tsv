@@ -1,0 +1,5 @@
+command	source	class
+pnpm run build	workflow:ci.yml	expensive
+pnpm run lint	workflow:ci.yml	cheap
+pnpm run typecheck	package.json:scripts.typecheck	cheap
+pnpm run test	package.json:scripts.test	expensive

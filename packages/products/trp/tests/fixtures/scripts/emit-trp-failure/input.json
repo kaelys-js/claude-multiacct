@@ -1,0 +1,13 @@
+{
+  "files_to_modify": [
+    {
+      "path": "src/lib/verify.ts",
+      "full_content": "export const verify = (t: string) => t === 'ok';\n",
+      "rationale": "close finding"
+    }
+  ],
+  "style_recon": {
+    "commit_convention": "conventional",
+    "test_runner": "vitest"
+  }
+}

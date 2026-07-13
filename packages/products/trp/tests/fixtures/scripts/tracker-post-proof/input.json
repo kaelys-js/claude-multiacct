@@ -1,0 +1,33 @@
+{
+  "argv": [
+    "--task",
+    "SEC-99",
+    "--action=comment",
+    "--dry-run",
+    "--proof-dir",
+    "proof-dir",
+    "--status-transition",
+    "in review"
+  ],
+  "env": {
+    "TRP_ALLOW_REMOTE_MUTATE": "true"
+  },
+  "files": [
+    {
+      "relpath": "proof-dir/meta.json",
+      "content": "{\"model\":\"opus\"}\n"
+    },
+    {
+      "relpath": "proof-dir/notes.md",
+      "content": "step 1: reproduce finding\n"
+    },
+    {
+      "relpath": "proof-dir/verify.log",
+      "content": "verify output\n"
+    },
+    {
+      "relpath": "proof-dir/time-comparison.json",
+      "content": "{\n  \"actual_hours\": 2.5,\n  \"baseline_min_hours\": 8,\n  \"baseline_max_hours\": 16,\n  \"speedup_min\": 3.2,\n  \"speedup_max\": 6.4\n}\n"
+    }
+  ]
+}

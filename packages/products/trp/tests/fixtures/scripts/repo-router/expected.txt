@@ -1,0 +1,1 @@
+{"slug":"beta","owner":"acme","repo":"backend","default_branch":"develop","fix_src_path":"<REPO_ROOT>/discovery/fix-src/beta-abc-123"}
