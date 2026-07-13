@@ -1,0 +1,23 @@
+# mise.toml — self-contained toolchain pin for claude-multiacct.
+# Clone + `mise install` gets shellcheck + bats + gitleaks with no machine-global dependency.
+# Docs: https://mise.jdx.dev/configuration.html
+
+min_version = "2026.5.0"
+
+[settings]
+experimental = true
+auto_install = false
+lockfile = true
+# Don't trust child .mise.toml files unless allow-listed.
+
+[tools]
+# Shell lint — the same version stardust and dotfiles pin.
+shellcheck = "0.11.0"
+# Hermetic install/uninstall smoke tests.
+bats = "1.13.0"
+# Secrets scanning — .gitleaks.toml lives at the repo root.
+gitleaks = "8.28.0"
+# YAML lint for instances.yaml + launchd plist templates.
+yamllint = "1.35.1"
+# YAML query/edit — read instances.yaml + inject into launchd plist template.
+yq = "4.44.6"

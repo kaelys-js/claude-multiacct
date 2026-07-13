@@ -1,0 +1,235 @@
+#!/usr/bin/env bash
+# claude-multiacct — CLI for managing any number of Claude Desktop instances
+# under different accounts on the same Mac. Dispatcher over lib/*.sh.
+#
+# Subcommands:
+#   init                              detect primary + write example instances.yaml
+#   add-instance <label> --email <e>  install a new mirror instance
+#   remove-instance <label> [--keep-userdata]
+#   list                              show all instances + health
+#   repair [<label>]                  re-run install steps for one or all instances
+#   sync-now                          manually trigger primary → mirrors sync
+#   doctor                            deep diagnostic report
+#   qa {lint|test}                    dev helpers (shellcheck + bats)
+
+set -euo pipefail
+
+CMA_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)"
+CMA_BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/common.sh
+. "$CMA_LIB/common.sh"
+
+usage() {
+  cat <<USAGE
+claude-multiacct — manage multiple Claude Desktop instances on one Mac
+
+usage:
+  claude-multiacct init
+  claude-multiacct add-instance <label> --email <email>
+  claude-multiacct remove-instance <label> [--keep-userdata] [--keep-configdir]
+  claude-multiacct list
+  claude-multiacct repair [<label>]
+  claude-multiacct sync-now
+  claude-multiacct doctor
+  claude-multiacct qa {lint|test}
+
+labels: lowercase [a-z0-9-]+, no leading/trailing hyphen. 'primary' is reserved.
+config: $CMA_CONFIG_FILE
+docs:   see README.md and docs/ under $CMA_REPO_ROOT
+USAGE
+}
+
+cmd_init() {
+  mkdir -p "$CMA_CONFIG_DIR"
+  if [[ -f "$CMA_CONFIG_FILE" ]]; then
+    cma_warn "config already exists at $CMA_CONFIG_FILE — not overwriting"
+    cma_dim "  to reset: back it up and re-run \`init\`"
+    return 0
+  fi
+
+  # Detect the primary's email. The paths themselves are hard-coded in the
+  # example config template (~/.claude, ~/Library/Application Support/Claude);
+  # `sed` substitutes the tilde-forms so the config file is portable across users.
+  local p_email
+  p_email="$(cma_primary_email "$CMA_PRIMARY_USERDATA")"
+
+  # Copy the example config and substitute the detected primary.
+  local example="$CMA_REPO_ROOT/config/instances.example.yaml"
+  [[ -f "$example" ]] || cma_die "example config missing at $example"
+
+  # `sed` with `|` delimiter avoids escaping the path slashes.
+  sed \
+    -e "s|__PRIMARY_EMAIL__|${p_email:-you@example.com}|g" \
+    -e "s|__PRIMARY_CONFIGDIR__|~/.claude|g" \
+    -e "s|__PRIMARY_USERDATA__|~/Library/Application Support/Claude|g" \
+    "$example" > "$CMA_CONFIG_FILE"
+  chmod 600 "$CMA_CONFIG_FILE"
+  cma_ok "wrote $CMA_CONFIG_FILE"
+  cma_dim "  primary detected: email=${p_email:-unknown}"
+  cma_dim "  next: edit the file to add mirror instances, then run \`add-instance <label>\` OR add via CLI:"
+  cma_dim "    claude-multiacct add-instance b --email you@example.com"
+
+  # Install the launchd sync agent (idempotent).
+  "$CMA_LIB/install-launchd.sh"
+}
+
+cmd_add_instance() {
+  local label="" email=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --email) email="$2"; shift 2 ;;
+      --*) cma_die "add-instance: unknown flag: $1" ;;
+      *) label="$1"; shift ;;
+    esac
+  done
+  [[ -n "$label" ]] || cma_die "add-instance: label required"
+  [[ -n "$email" ]] || cma_die "add-instance: --email required"
+  cma_validate_label "$label"
+
+  cma_require yq
+  cma_require_config
+
+  # If already present in instances.yaml, refuse (call repair instead).
+  if yq -r '.instances[].label' "$CMA_CONFIG_FILE" | grep -qxF "$label"; then
+    cma_die "instance '$label' already in $CMA_CONFIG_FILE — use \`repair $label\` to reinstall in place"
+  fi
+
+  # Append the instance to instances.yaml (yq eval-in-place).
+  local snap; snap="$(cma_backup_snapshot "$CMA_CONFIG_FILE" "config")"
+  cma_dim "  snapshot: $snap"
+  yq eval ".instances += [{\"label\": \"$label\", \"email\": \"$email\"}]" -i "$CMA_CONFIG_FILE"
+  cma_ok "added instance '$label' to $CMA_CONFIG_FILE"
+
+  # Run the installer for the new instance.
+  "$CMA_LIB/install-instance.sh" "$label"
+
+  # Re-render the launchd plist (idempotent; picks up new mirror path).
+  "$CMA_LIB/install-launchd.sh"
+}
+
+cmd_remove_instance() {
+  local label="" flags=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --keep-userdata|--keep-configdir) flags+=("$1"); shift ;;
+      --*) cma_die "remove-instance: unknown flag: $1" ;;
+      *) label="$1"; shift ;;
+    esac
+  done
+  [[ -n "$label" ]] || cma_die "remove-instance: label required"
+  cma_validate_label "$label"
+
+  cma_require yq
+  cma_require_config
+
+  # Tear down on-disk artifacts first (uses instances.yaml, so remove config LAST).
+  # ${flags[@]+"${flags[@]}"} expands to nothing when the array is empty — safe under set -u.
+  "$CMA_LIB/uninstall-instance.sh" "$label" ${flags[@]+"${flags[@]}"}
+
+  # Remove the instance from instances.yaml.
+  local snap; snap="$(cma_backup_snapshot "$CMA_CONFIG_FILE" "config")"
+  cma_dim "  snapshot: $snap"
+  yq eval "del(.instances[] | select(.label == \"$label\"))" -i "$CMA_CONFIG_FILE"
+  cma_ok "removed instance '$label' from $CMA_CONFIG_FILE"
+}
+
+cmd_list() {
+  cma_require_config
+  "$CMA_LIB/discover.sh"
+}
+
+cmd_repair() {
+  cma_require_config
+  local label="${1:-}"
+  if [[ -n "$label" ]]; then
+    cma_validate_label "$label"
+    "$CMA_LIB/install-instance.sh" "$label"
+  else
+    # Repair all instances.
+    local l
+    while IFS= read -r l; do
+      [[ -z "$l" ]] && continue
+      "$CMA_LIB/install-instance.sh" "$l"
+    done < <(cma_list_labels)
+  fi
+  # Always re-render the launchd plist.
+  "$CMA_LIB/install-launchd.sh"
+}
+
+cmd_sync_now() {
+  cma_require_config
+  cma_say "running sync manually (primary → mirrors)"
+  "$CMA_BIN/claude-sessions-sync.sh"
+  cma_ok "sync complete — see $CMA_LOG_DIR/sessions-sync.log"
+}
+
+cmd_doctor() {
+  cma_say "claude-multiacct doctor"
+  cma_dim "  repo:   $CMA_REPO_ROOT"
+  cma_dim "  config: $CMA_CONFIG_FILE"
+  cma_dim "  logs:   $CMA_LOG_DIR"
+  cma_dim "  backups: $CMA_BACKUP_DIR"
+  printf '\n' >&2
+
+  # Config presence.
+  if [[ -f "$CMA_CONFIG_FILE" ]]; then
+    cma_ok "config file present"
+  else
+    cma_warn "config file MISSING — run \`init\` first"
+    return 1
+  fi
+
+  # Launchd agent state.
+  local label="com.user.claude-sessions-sync"
+  if launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; then
+    cma_ok "launchd agent $label loaded"
+    launchctl print "gui/$(id -u)/$label" 2>/dev/null | grep -E 'state|last exit code|watch paths' | sed 's/^/  /' >&2 || true
+  else
+    cma_warn "launchd agent $label NOT loaded"
+  fi
+
+  # Per-instance discovery.
+  printf '\n' >&2
+  "$CMA_LIB/discover.sh"
+}
+
+cmd_qa() {
+  local sub="${1:-}"
+  case "$sub" in
+    lint)
+      cma_require shellcheck
+      cma_say "shellcheck bin/ lib/ tests/"
+      shellcheck -x "$CMA_BIN"/* "$CMA_LIB"/* "$CMA_REPO_ROOT/tests"/*.bats 2>&1 || return $?
+      cma_ok "shellcheck clean"
+      if command -v gitleaks >/dev/null 2>&1; then
+        cma_say "gitleaks"
+        gitleaks detect --no-git --source "$CMA_REPO_ROOT" --config "$CMA_REPO_ROOT/.gitleaks.toml" --no-banner 2>&1
+        cma_ok "gitleaks clean"
+      fi
+      ;;
+    test)
+      cma_require bats
+      cma_say "bats tests/"
+      bats "$CMA_REPO_ROOT/tests"
+      ;;
+    *) cma_die "qa: expected {lint|test}, got: ${sub:-<empty>}" ;;
+  esac
+}
+
+main() {
+  local cmd="${1:-}"; shift || true
+  case "$cmd" in
+    ""|-h|--help|help) usage ;;
+    init)              cmd_init "$@" ;;
+    add-instance)      cmd_add_instance "$@" ;;
+    remove-instance)   cmd_remove_instance "$@" ;;
+    list)              cmd_list "$@" ;;
+    repair)            cmd_repair "$@" ;;
+    sync-now)          cmd_sync_now "$@" ;;
+    doctor)            cmd_doctor "$@" ;;
+    qa)                cmd_qa "$@" ;;
+    *)                 usage; cma_die "unknown subcommand: $cmd" ;;
+  esac
+}
+
+main "$@"

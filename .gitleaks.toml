@@ -1,0 +1,48 @@
+# Secret-scanning standard for stardust — gitleaks. Run via `pnpm qa:lint`
+# (staged scan in the pre-commit path). Extends gitleaks' built-in ruleset
+# rather than replacing it, then narrows false positives with a reviewed
+# allowlist.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Lockfiles and vendored assets — integrity hashes, not secrets."
+paths = [
+	'''pnpm-lock\.yaml$''',
+	'''mise\.lock$''',
+	'''(^|/)\.mise/''',
+	'''(^|/)node_modules/''',
+	'''\.min\.(js|css)$''',
+]
+
+[[allowlists]]
+description = "Obvious non-secret placeholders used in docs and examples."
+regexTarget = "match"
+regexes = [
+	'''(?i)(example|sample|dummy|placeholder|changeme|your[-_]?(token|key|secret))''',
+	'''no-reply@resistjs\.dev''',
+]
+
+[[allowlists]]
+# age RECIPIENT public keys (`age1…`) are the encryption TARGET, not secrets — they are
+# safe to commit and already appear in every product's `.sops.yaml`. Only the counterpart
+# PRIVATE key (`AGE-SECRET-KEY-1…`) must never be committed, and that form is NOT matched
+# here, so it stays fully scanned. This narrows ONLY the public `age1…` form, which the
+# generic-api-key heuristic can't distinguish (e.g. the tailscale product commits
+# `AUTHKEY_RECIPIENT` — mac-mini-config's public recipient — as a default so `mac dr` can
+# decrypt the rotated authkey). User-approved 2026-07-05.
+description = "age recipient PUBLIC keys (age1…) — encryption targets, not secrets."
+regexTarget = "match"
+regexes = ['''age1[0-9a-z]{58}''']
+
+[[allowlists]]
+# Product runtime state — GITIGNORED, never committed, and only present on a live
+# host. `packages/products/*/data/` holds each container's migrated live config
+# (which legitimately contains real credentials, e.g. sabnzbd.ini's provider
+# password), and `*/dist/` holds built bundles. The staged/pre-commit + CI scans
+# never see these (gitignored, absent on CI); only the whole-tree `gitleaks dir .`
+# walks them, where they are pure false positives. Scans of TRACKED content are
+# unaffected — this narrows the filesystem walk, it does not relax any detection rule.
+description = "Gitignored product runtime dirs (data/ live configs, dist/ bundles)."
+paths = ['''(^|/)packages/products/[^/]+/data/''', '''(^|/)packages/products/[^/]+/dist/''']

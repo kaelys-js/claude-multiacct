@@ -1,0 +1,38 @@
+---
+# instances.yaml — source of truth for claude-multiacct's on-disk state.
+#
+# Location on install: ~/.config/claude-multiacct/instances.yaml (mode 600).
+#
+# The `claude-multiacct init` subcommand writes a stub file from this template,
+# with __PRIMARY_EMAIL__ / __PRIMARY_USERDATA__ / __PRIMARY_CONFIGDIR__
+# substituted from the detected Claude Desktop primary state.
+#
+# Every field is optional per-instance; unset fields default from the label:
+#   configDir   = ~/.claude-<label>
+#   userData    = ~/Library/Application Support/Claude-<Titlecase(label)>
+#   cliLauncher = ~/.local/bin/claude-account-<label>
+#   appBundle   = ~/Applications/Claude Account <Titlecase(label)>.app
+#   bundleId    = com.claude-multiacct.claude-account-<label>-launcher
+# Override any of them per-instance when the default clashes with something else
+# on your machine.
+
+version: 1
+
+primary:
+  label: primary
+  email: __PRIMARY_EMAIL__
+  configDir: __PRIMARY_CONFIGDIR__
+  userData: __PRIMARY_USERDATA__
+
+instances: []
+
+# Example populated file:
+#
+# instances:
+#   - label: b
+#     email: you@example.com
+#   - label: work
+#     email: work@example.com
+#     # Override defaults:
+#     configDir: ~/.claude-work
+#     userData: ~/Library/Application Support/Claude-Work

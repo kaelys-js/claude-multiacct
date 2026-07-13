@@ -1,0 +1,27 @@
+# Shell standard for stardust — shellcheck config, auto-discovered from repo
+# root by the CLI, editor/LSP, and the `pnpm qa:lint` aggregator alike.
+# Formatting is shfmt's job (see .editorconfig); this file is lint only.
+
+# Treat every script as bash unless it declares its own shebang/directive.
+# Keeps POSIX-only false positives down on this bash-first codebase.
+shell=bash
+
+# Follow `source`/`.` into sourced files so shared libraries are analysed in
+# context instead of warned about (SC1091).
+external-sources=true
+
+# Opt into the optional checks that catch real bugs:
+enable=avoid-nullary-conditions    # [ "$x" ] where a real test was intended
+enable=check-extra-masked-returns  # return codes masked by local/declare/pipes
+enable=check-set-e-suppressed      # commands whose failure `set -e` won't catch
+enable=deprecate-which             # `which` is non-portable; prefer command -v
+
+# Run at full severity (so info-level correctness checks like SC2086
+# unquoted-variable word-splitting DO block) but silence the purely-stylistic
+# rules that are project preference, not defects. This is deliberately stricter
+# than a blanket --severity=warning, which would let SC2086 through.
+disable=SC2250 # "brace all variable references" — style only
+disable=SC2292 # "prefer [[ ]] over [ ]" — [ ] is intentional POSIX-portable
+disable=SC2312 # "command in condition masks return" — noisy under pipefail
+disable=SC2248 # "quote already-safe expansions" — style only
+disable=SC2329 # "function never invoked" — false positive for indirect calls (run "$@")
