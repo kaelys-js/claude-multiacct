@@ -104,6 +104,10 @@ export function parseArgs(argv: readonly string[]): ParseOutcome {
 	return { kind: "ok", args: { fixSrc, withDocker, dryRun } };
 }
 
+// ─── Stage 2 — run() helper + PM detect + frozen install ─────────
+
+// Sibling to isDir; kept next to the code that uses it. Bash `[ -f path ]`
+// treats permission errors and broken symlinks as false, not thrown.
 function isFile(path: string): boolean {
 	try {
 		return statSync(path).isFile();
@@ -111,8 +115,6 @@ function isFile(path: string): boolean {
 		return false;
 	}
 }
-
-// ─── Stage 2 — run() helper + PM detect + frozen install ─────────
 
 // `set -euo pipefail` in bash aborts the whole script on any non-zero
 // exit. Since we do not have that semantics for free in Node, `run()`
