@@ -470,3 +470,314 @@ JSON
   [ ! -d "$MIRROR_UDATA/claude-code-sessions/$DERIV_MIRROR_ACCT" ]
   grep -q "not logged in yet" "$CMA_LOG_DIR/metadata-watcher.log"
 }
+
+# ── Auto-restart on first symlink install ──────────────────────────────────
+#
+# WHY this block exists (Rule 9): Desktop's React sidebar loads the mirror's
+# session dir on app-start and does not retroactively see symlinks that
+# appear mid-run. Before this feature the UX after sign-in was: sessions
+# appear on disk → sidebar stays empty → user must Cmd-Q + relaunch by hand.
+# The watcher now writes a sentinel at
+# <mirror_userData>/.claude-multiacct/symlinks-installed on the first pass
+# that observes real symlinks, and — if the mirror is currently running —
+# quits + relaunches it so the sidebar picks up the freshly-symlinked content
+# on next app-start. Subsequent fires observe the sentinel and skip the
+# restart branch. These assertions pin the gate + auto-restart contract.
+#
+# STUB_PROC_TABLE emulates ps output for pgrep -f. Each line is `<pid> <argv>`
+# and pgrep -F-substring-matches its -f pattern against the file. The pkill
+# and open stubs record their args (tab-separated) to $STUB_CALLS so tests
+# can assert what the watcher invoked. pkill does NOT modify the proc table,
+# so the "unresponsive to TERM" test is a one-liner (pgrep keeps returning
+# the same PID even after pkill).
+
+setup_process_shims() {
+  export STUB_DIR="$BATS_TEST_TMPDIR/stubs"
+  export STUB_CALLS="$BATS_TEST_TMPDIR/stub-calls"
+  export STUB_PROC_TABLE="$BATS_TEST_TMPDIR/stub-proc-table"
+  mkdir -p "$STUB_DIR"
+  : >"$STUB_CALLS"
+  : >"$STUB_PROC_TABLE"
+
+  # pgrep -f <pattern> — matches lines in $STUB_PROC_TABLE containing <pattern>
+  # (fixed-string substring). Returns 0 with matching PIDs on stdout, 1 if no
+  # match — mirrors real pgrep's exit contract.
+  cat >"$STUB_DIR/pgrep" <<'STUB'
+#!/usr/bin/env bash
+{
+  printf 'pgrep'
+  for a in "$@"; do printf '\t%s' "$a"; done
+  printf '\n'
+} >> "$STUB_CALLS"
+
+pattern=""
+prev=""
+for arg in "$@"; do
+  if [[ "$prev" == "-f" ]]; then pattern="$arg"; fi
+  prev="$arg"
+done
+
+if [[ -s "$STUB_PROC_TABLE" && -n "$pattern" ]] && grep -qF -- "$pattern" "$STUB_PROC_TABLE"; then
+  grep -F -- "$pattern" "$STUB_PROC_TABLE" | awk '{print $1}'
+  exit 0
+fi
+exit 1
+STUB
+
+  # pkill -TERM -f <pattern> — records the call. If STUB_PKILL_SUCCEEDS=1,
+  # ALSO removes matching lines from $STUB_PROC_TABLE so a subsequent pgrep
+  # observes the process as "gone" (i.e. graceful exit succeeded). This is
+  # what test #1 relies on to keep the "wait for exit" loop from timing out;
+  # tests that want the timeout path (test #4/#5) leave PKILL_SUCCEEDS unset.
+  cat >"$STUB_DIR/pkill" <<'STUB'
+#!/usr/bin/env bash
+{
+  printf 'pkill'
+  for a in "$@"; do printf '\t%s' "$a"; done
+  printf '\n'
+} >> "$STUB_CALLS"
+
+if [[ "${STUB_PKILL_SUCCEEDS:-0}" == "1" ]]; then
+  pattern=""
+  prev=""
+  for arg in "$@"; do
+    if [[ "$prev" == "-f" ]]; then pattern="$arg"; fi
+    prev="$arg"
+  done
+  if [[ -n "$pattern" && -f "$STUB_PROC_TABLE" ]]; then
+    grep -vF -- "$pattern" "$STUB_PROC_TABLE" > "$STUB_PROC_TABLE.tmp" 2>/dev/null || :
+    mv "$STUB_PROC_TABLE.tmp" "$STUB_PROC_TABLE"
+  fi
+fi
+exit 0
+STUB
+
+  cat >"$STUB_DIR/open" <<'STUB'
+#!/usr/bin/env bash
+{
+  printf 'open'
+  for a in "$@"; do printf '\t%s' "$a"; done
+  printf '\n'
+} >> "$STUB_CALLS"
+exit 0
+STUB
+
+  chmod +x "$STUB_DIR/pgrep" "$STUB_DIR/pkill" "$STUB_DIR/open"
+  # Prepend AFTER the setup's stubs. common.sh's PATH prepend block is a
+  # no-op in scratch $HOME (~/.local/share/mise/installs doesn't exist under
+  # the fake HOME), so these stubs stay at the top of PATH for the watcher.
+  export PATH="$STUB_DIR:$PATH"
+}
+
+# Mark the mirror as "running" by seeding a proc-table row whose argv carries
+# --user-data-dir=<mirror_userData>. Matches the shape the mirror's shell
+# wrapper injects in Contents/MacOS/Claude.
+seed_mirror_running() {
+  printf '12345 /path/to/Claude Account B.app/Contents/MacOS/Claude --user-data-dir=%s\n' \
+    "$MIRROR_UDATA" > "$STUB_PROC_TABLE"
+}
+
+# Both mirror AND primary running. Primary's argv deliberately has NO
+# --user-data-dir — that's what makes the watcher's pattern selective.
+seed_mirror_and_primary_running() {
+  {
+    printf '12345 /path/to/Claude Account B.app/Contents/MacOS/Claude --user-data-dir=%s\n' \
+      "$MIRROR_UDATA"
+    printf '67890 /Applications/Claude.app/Contents/MacOS/Claude\n'
+  } > "$STUB_PROC_TABLE"
+}
+
+sentinel_dir()  { printf '%s' "$MIRROR_UDATA/.claude-multiacct"; }
+sentinel_path() { printf '%s' "$MIRROR_UDATA/.claude-multiacct/symlinks-installed"; }
+
+@test "first install with mirror running triggers auto-restart" {
+  # The load-bearing assertion for the "sessions appear on sign-in"
+  # continuation. Without the auto-restart, Desktop's React sidebar shows
+  # empty until the user quits + relaunches by hand. Regression here brings
+  # the manual step back.
+  "$CMA" init
+  "$CMA" add-instance b --email test-b@example.com
+  simulate_mirror_signin
+  setup_process_shims
+  seed_mirror_running
+  # Model a mirror that exits gracefully on TERM: pkill removes matching
+  # lines from the proc table so the wait-for-exit pgrep sees the process
+  # as gone on its next call and the loop breaks. Keep the cap short as a
+  # belt-and-braces against a stubbing bug.
+  # shellcheck disable=SC2030  # bats runs each @test in a subshell; export is intentional per-test scope
+  export STUB_PKILL_SUCCEEDS=1
+  # shellcheck disable=SC2030  # bats runs each @test in a subshell; export is intentional per-test scope
+  export CMA_RESTART_WAIT_S=0.5
+
+  # Sentinel absent — first install.
+  [ ! -e "$(sentinel_path)" ]
+
+  run "$WATCHER"
+  [ "$status" -eq 0 ]
+
+  # pkill was called with the mirror's user-data-dir pattern.
+  grep -qE $'^pkill\t-TERM\t-f\t--user-data-dir=' "$STUB_CALLS"
+
+  # open was called with the mirror's app bundle path.
+  grep -qE $'^open\t.*Claude Account B\\.app' "$STUB_CALLS"
+
+  # Sentinel written after successful install pass.
+  [ -f "$(sentinel_path)" ]
+
+  # Log surfaces the auto-restart + relaunch lines.
+  grep -q "auto-restarting mirror" "$CMA_LOG_DIR/metadata-watcher.log"
+  grep -q "relaunched" "$CMA_LOG_DIR/metadata-watcher.log"
+}
+
+@test "second fire on already-installed mirror does NOT restart" {
+  # Sentinel exists → skip auto-restart even if the mirror IS running.
+  # Regression here would TERM the user's live mirror on every launchd fire,
+  # which happens repeatedly during Desktop's setup-time write bursts.
+  "$CMA" init
+  "$CMA" add-instance b --email test-b@example.com
+  simulate_mirror_signin
+  setup_process_shims
+  seed_mirror_running
+
+  # Pre-install the sentinel — represents a previous successful auto-restart.
+  mkdir -p "$(sentinel_dir)"
+  touch "$(sentinel_path)"
+
+  run "$WATCHER"
+  [ "$status" -eq 0 ]
+
+  # No pkill, no open — the sentinel gated us out.
+  run ! grep -qE $'^pkill\t' "$STUB_CALLS"
+  run ! grep -qE $'^open\t' "$STUB_CALLS"
+
+  # Symlink still in place (metadata-symlinks observed already-correct).
+  local link="$MIRROR_UDATA/claude-code-sessions/$MIRROR_ACCT_UUID/$MIRROR_ORG_UUID"
+  [ -L "$link" ]
+
+  # Log records the sentinel-skip surfacing.
+  grep -q "sentinel present" "$CMA_LOG_DIR/metadata-watcher.log"
+}
+
+@test "first install with mirror NOT running skips restart cleanly" {
+  # No sentinel + mirror not running. Sentinel STILL gets written — the next
+  # fire treats this mirror as already-installed and won't auto-restart even
+  # if it's running by then. If sentinel weren't written here, a mirror
+  # launched between fires would get TERM'd on the following fire.
+  "$CMA" init
+  "$CMA" add-instance b --email test-b@example.com
+  simulate_mirror_signin
+  setup_process_shims
+  # Empty proc table — mirror not running.
+
+  [ ! -e "$(sentinel_path)" ]
+
+  run "$WATCHER"
+  [ "$status" -eq 0 ]
+
+  # No pkill, no open — mirror wasn't running.
+  run ! grep -qE $'^pkill\t' "$STUB_CALLS"
+  run ! grep -qE $'^open\t' "$STUB_CALLS"
+
+  # Sentinel written — next fire skips restart even if the mirror is running by then.
+  [ -f "$(sentinel_path)" ]
+
+  # Log records the clean skip.
+  grep -q "mirror not running" "$CMA_LOG_DIR/metadata-watcher.log"
+}
+
+@test "restart target pattern doesn't match primary command line" {
+  # The pkill pattern is `--user-data-dir=<mirror_userData>`. The primary's
+  # argv never carries --user-data-dir (it uses the default userData
+  # implicitly), so grep-F substring-match cannot hit it. Regression here
+  # would silently TERM the primary — the user's live Claude Desktop —
+  # every time a mirror signs in for the first time.
+  "$CMA" init
+  "$CMA" add-instance b --email test-b@example.com
+  simulate_mirror_signin
+  setup_process_shims
+  seed_mirror_and_primary_running
+  # Model a graceful-exit mirror so this test focuses on the pattern
+  # assertion rather than the wait-loop timeout branch. STUB_PKILL_SUCCEEDS=1
+  # makes pkill delete matching lines from the proc table — pgrep then reports
+  # the mirror as gone on its next call.
+  # shellcheck disable=SC2030,SC2031  # bats runs each @test in a subshell; export is intentional per-test scope
+  export STUB_PKILL_SUCCEEDS=1
+  # shellcheck disable=SC2030,SC2031  # bats runs each @test in a subshell; export is intentional per-test scope
+  export CMA_RESTART_WAIT_S=0.5
+
+  run "$WATCHER"
+  [ "$status" -eq 0 ]
+
+  # Extract the -f pattern that pkill was called with (4th tab-field).
+  local pattern
+  pattern="$(awk -F'\t' '/^pkill/ { print $4; exit }' "$STUB_CALLS")"
+  [ -n "$pattern" ]
+  # The pattern is the mirror-selective form we expect.
+  [[ "$pattern" == --user-data-dir=* ]]
+
+  # Primary's argv from the seeded proc table — must NOT contain the pattern.
+  local primary_argv='/Applications/Claude.app/Contents/MacOS/Claude'
+  [[ "$primary_argv" != *"$pattern"* ]]
+
+  # And the primary line lacks --user-data-dir=, which is what makes the
+  # substring match structurally impossible.
+  [[ "$primary_argv" != *"--user-data-dir="* ]]
+}
+
+@test "wait timeout logs and skips relaunch (no SIGKILL, no open)" {
+  # Mirror is unresponsive to TERM (pkill stub records the call but doesn't
+  # affect the proc table, so pgrep keeps returning "still running"). The
+  # watcher must respect the cap, log the timeout, and refuse to SIGKILL or
+  # relaunch. SIGKILLing a running Claude Desktop mid-write to LevelDB /
+  # SQLite could corrupt state — hence the hard "no SIGKILL" rule.
+  "$CMA" init
+  "$CMA" add-instance b --email test-b@example.com
+  simulate_mirror_signin
+  setup_process_shims
+  seed_mirror_running
+  # Short timeout so the poll loop exits fast under bats.
+  # shellcheck disable=SC2031  # bats runs each @test in a subshell; export is intentional per-test scope
+  export CMA_RESTART_WAIT_S=0.2
+
+  run "$WATCHER"
+  [ "$status" -eq 0 ]
+
+  # pkill was called (we tried a graceful TERM).
+  grep -qE $'^pkill\t-TERM\t-f\t' "$STUB_CALLS"
+
+  # ... but open was NOT (we bailed on the timeout).
+  run ! grep -qE $'^open\t' "$STUB_CALLS"
+
+  # No SIGKILL was sent — grepping the stub call log for any -KILL invocation.
+  run ! grep -qE $'^pkill\t-KILL' "$STUB_CALLS"
+  run ! grep -qE $'^pkill\t-9' "$STUB_CALLS"
+
+  # Log surfaces the timeout AND the no-SIGKILL note.
+  grep -q "did not exit" "$CMA_LOG_DIR/metadata-watcher.log"
+  grep -q "do NOT SIGKILL" "$CMA_LOG_DIR/metadata-watcher.log"
+}
+
+@test "remove-instance --keep-userdata clears the sentinel dir but preserves the rest" {
+  # After the user removes a mirror with --keep-userdata (to preserve OAuth
+  # cookies for a future re-add), the sentinel must go with it so a re-add
+  # + first sign-in triggers a fresh auto-restart. Without this, the stale
+  # sentinel would gate out the restart and the sidebar wouldn't refresh —
+  # exactly the manual UX step this feature exists to remove.
+  "$CMA" init
+  "$CMA" add-instance b --email test-b@example.com
+
+  # Install the sentinel manually to represent a completed first-install pass.
+  mkdir -p "$(sentinel_dir)"
+  touch "$(sentinel_path)"
+  # A canary outside .claude-multiacct/ to confirm the rest of userData is preserved.
+  printf 'canary' > "$MIRROR_UDATA/canary.txt"
+
+  run "$CMA" remove-instance b --keep-userdata
+  [ "$status" -eq 0 ]
+
+  # Sentinel dir is gone.
+  [ ! -e "$(sentinel_dir)" ]
+  # Rest of userData is preserved (canary still there).
+  [ -f "$MIRROR_UDATA/canary.txt" ]
+  [ "$(cat "$MIRROR_UDATA/canary.txt")" = "canary" ]
+}

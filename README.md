@@ -60,9 +60,11 @@ claude-multiacct add-instance work --email work@example.com
 #    writes on OAuth token cache — and derives the required account+org UUIDs
 #    from `lastKnownAccountUuid` + the newest `dxt:allowlistLastUpdated:<org>`
 #    timestamp. It installs the session-metadata symlinks the moment sign-in
-#    completes, no "open Code inside Desktop first" step required. Sidebar
-#    sessions should appear within seconds of sign-in; if they don't, quit
-#    and relaunch the mirror to force the React sidebar to re-read state.
+#    completes, no "open Code inside Desktop first" step required. On the
+#    first symlink install the watcher also auto-quits + relaunches the
+#    running mirror so Desktop's React sidebar re-reads the freshly-symlinked
+#    session dir on app-start — sessions appear within seconds of sign-in
+#    with no manual quit/relaunch step.
 open ~/Applications/Claude\ Account\ B.app
 # → sign in to Account B via the normal Claude Desktop UI. Sessions appear.
 
@@ -145,7 +147,7 @@ Both must pass on `main`. `.gitleaks.toml` covers OAuth-adjacent paths that the 
 - **Mirror's Dock icon coalesces with the primary** → see [docs/dock-icon-fix.md](docs/dock-icon-fix.md). Root cause: macOS Dock groups by `CFBundleIdentifier`; the fix is a per-instance clone of Claude.app with a rewritten bundle-id. `claude-multiacct repair <label>` (single mirror) or `claude-multiacct refresh-clones` (all mirrors) rebuilds. `claude-multiacct doctor` catches bundle-id or Claude-version drift.
 - **Claude Desktop updated but mirror shows old version** → the `com.user.claude-clone-refresh` WatchPaths agent auto-refreshes on Squirrel updates. If it hasn't fired (e.g. mirror was running at update-time), run `claude-multiacct refresh-clones` manually after quitting the mirror(s).
 - **launchd agent missing after macOS update** → `claude-multiacct repair` re-installs both plists and re-loads them.
-- **Mirror instance never logged in yet** → `metadata-symlinks.sh` skips the desktop-UI-metadata symlinks with a warning. Once the user signs in, the `com.user.claude-metadata-symlink` launchd agent fires on the `<userData>/config.json` write (or the per-account UUID subdir creation on Code first-use) and installs the symlinks automatically — derived from `config.json` if the Code area hasn't been opened yet. Fallback: `claude-multiacct repair <label>` if the agent hasn't been loaded.
+- **Mirror instance never logged in yet** → `metadata-symlinks.sh` skips the desktop-UI-metadata symlinks with a warning. Once the user signs in, the `com.user.claude-metadata-symlink` launchd agent fires on the `<userData>/config.json` write (or the per-account UUID subdir creation on Code first-use) and installs the symlinks automatically — derived from `config.json` if the Code area hasn't been opened yet. On the first successful install the watcher also auto-restarts the mirror if it's running so Desktop's React sidebar reloads with the symlinked content in place. Fallback: `claude-multiacct repair <label>` if the agent hasn't been loaded.
 
 ## Engineering
 

@@ -77,6 +77,16 @@ main() {
     cma_ok "removed $udata"
   else
     cma_dim "  keeping $udata (default; use --keep-userdata=0 semantics via explicit teardown to force removal)"
+    # Even when preserving userData, drop the metadata-watcher's first-install
+    # sentinel so a future re-add + sign-in triggers a fresh auto-restart of
+    # the mirror. Without this the mirror comes back with a stale sentinel,
+    # the watcher's first-fire treats it as "already installed", and Desktop's
+    # React sidebar isn't force-reloaded — reintroducing the manual quit +
+    # relaunch step this feature exists to remove.
+    if [[ -d "$udata/.claude-multiacct" ]]; then
+      rm -rf "$udata/.claude-multiacct"
+      cma_ok "cleared $udata/.claude-multiacct/ (metadata-watcher sentinel)"
+    fi
   fi
 
   cma_ok "uninstall-instance: label=$label complete"
