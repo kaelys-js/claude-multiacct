@@ -10,7 +10,7 @@
 
 Claude Desktop stores OAuth per-userData directory. `--user-data-dir` lets you point at a second one; combined with `CLAUDE_CONFIG_DIR` for the embedded Claude Code CLI, the same app binary boots into a different identity. This repo automates:
 
-- **Instance install**: one command builds the per-instance `configDir` + `userData` + terminal launcher + Dock-clickable `.app` bundle (with the ad-hoc codesign / xattr / `lsregister` dance Gatekeeper requires).
+- **Instance install**: one command builds the per-instance `configDir` + `userData` + terminal launcher + Dock-clickable `.app` bundle (a full ~745 MB clone of `/Applications/Claude.app` with a rewritten `CFBundleIdentifier` so the Dock groups each mirror separately from the primary — see [docs/dock-icon-fix.md](docs/dock-icon-fix.md)). A `launchd` WatchPaths agent auto-refreshes every clone after each Claude Desktop Squirrel update; disk cost is ~745 MB per mirror.
 - **Session sharing** at every layer that's safe to share (JSONL bodies + desktop UI metadata + agent-mode metadata → symlinked at file layer; Chromium IndexedDB / Local Storage / Session Storage → `launchd`-triggered rsync one-way primary→mirrors on primary-close).
 - **Per-instance state that must stay isolated** (Cookies / Preferences / Network Persistent State / Crashpad) is left untouched, per instance.
 - **Repair + diagnostics**: idempotent `repair` + a `doctor` subcommand that walks every layer and reports what's healthy vs drifted.
@@ -58,19 +58,21 @@ See [docs/sync-model.md](docs/sync-model.md) for the full four-layer breakdown. 
 
 ```
 bin/
-  claude-multiacct          # the CLI (init / add-instance / remove-instance / list / repair / sync-now / doctor / qa)
-  claude-sessions-sync.sh   # sync worker (called by launchd + `sync-now`)
+  claude-multiacct          # the CLI (init / add-instance / remove-instance / list / repair / refresh-clones / sync-now / doctor / qa)
+  claude-sessions-sync.sh   # sessions rsync worker (called by launchd + `sync-now`)
+  claude-clone-refresh.sh   # clone-refresh worker (called by launchd on Claude Desktop update)
 lib/
   common.sh                 # shared functions (logging, config parsing, path helpers)
   install-instance.sh       # per-instance idempotent installer
   uninstall-instance.sh     # symmetric teardown (with snapshot-first)
   build-cli-launcher.sh     # writes ~/.local/bin/claude-account-<label>
-  build-launcher-app.sh     # builds Claude Account <Title>.app + codesign + xattr + lsregister
+  build-clone-app.sh        # clones Claude.app → Claude Account <Title>.app + rewrites Info.plist + wraps MacOS/Claude + codesigns
   metadata-symlinks.sh      # per-account-folder metadata symlinks
-  install-launchd.sh        # renders + bootstraps the WatchPaths agent
+  install-launchd.sh        # renders + bootstraps both WatchPaths agents
   discover.sh               # on-disk health inspection (used by list + doctor)
 launchd/
-  com.user.claude-sessions-sync.plist.tmpl   # launchd template (paths substituted at install)
+  com.user.claude-sessions-sync.plist.tmpl   # sessions rsync agent template
+  com.user.claude-clone-refresh.plist.tmpl   # clone refresh agent template (fires on Claude.app Info.plist mtime)
 config/
   instances.example.yaml    # scaffold copied by init
 docs/
@@ -93,8 +95,9 @@ Both must pass on `main`. `.gitleaks.toml` covers OAuth-adjacent paths that the 
 
 ## Known issues + fixes
 
-- **Dock icon fails silently** → see [docs/dock-icon-fix.md](docs/dock-icon-fix.md). `claude-multiacct repair <label>` re-runs the codesign + xattr + lsregister dance. `claude-multiacct doctor` catches when the fix has drifted.
-- **launchd agent missing after macOS update** → `claude-multiacct repair` re-installs the plist and re-bootstraps.
+- **Mirror's Dock icon coalesces with the primary** → see [docs/dock-icon-fix.md](docs/dock-icon-fix.md). Root cause: macOS Dock groups by `CFBundleIdentifier`; the fix is a per-instance clone of Claude.app with a rewritten bundle-id. `claude-multiacct repair <label>` (single mirror) or `claude-multiacct refresh-clones` (all mirrors) rebuilds. `claude-multiacct doctor` catches bundle-id or Claude-version drift.
+- **Claude Desktop updated but mirror shows old version** → the `com.user.claude-clone-refresh` WatchPaths agent auto-refreshes on Squirrel updates. If it hasn't fired (e.g. mirror was running at update-time), run `claude-multiacct refresh-clones` manually after quitting the mirror(s).
+- **launchd agent missing after macOS update** → `claude-multiacct repair` re-installs both plists and re-loads them.
 - **Mirror instance never logged in yet** → `metadata-symlinks.sh` skips the desktop-UI-metadata symlinks with a warning; run `claude-multiacct repair <label>` after first login + quit.
 
 ## Engineering

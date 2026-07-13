@@ -41,6 +41,36 @@ setup() {
   # the launchd install for hermetic tests. The launchd path itself is exercised
   # by the live install run (task #6 in the todo).
   export CMA_SKIP_LAUNCHD=1
+
+  # A hermetic fake Claude.app for build-clone-app.sh to ditto. Small enough to
+  # copy in ~10ms per test (real Claude.app is 745 MB — too big for CI). Has
+  # the two things build-clone-app.sh reads: Info.plist and MacOS/Claude.
+  export CMA_SOURCE_CLAUDE_APP="$BATS_TEST_TMPDIR/fake-claude.app"
+  mkdir -p "$CMA_SOURCE_CLAUDE_APP/Contents/MacOS"
+  # plutil requires the file to already look like a plist; write it in XML form
+  # then use plutil to convert to binary in place if desired (we skip the
+  # conversion — XML plists are perfectly valid, and build-clone-app.sh's
+  # plutil -extract / -replace work on both encodings).
+  cat >"$CMA_SOURCE_CLAUDE_APP/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>        <string>com.fake.claude</string>
+    <key>CFBundleExecutable</key>        <string>Claude</string>
+    <key>CFBundleName</key>              <string>Claude</string>
+    <key>CFBundleDisplayName</key>       <string>Claude</string>
+    <key>CFBundleShortVersionString</key><string>0.0.1-fake</string>
+    <key>CFBundleVersion</key>           <string>1</string>
+    <key>CFBundlePackageType</key>       <string>APPL</string>
+</dict>
+</plist>
+PLIST
+  cat >"$CMA_SOURCE_CLAUDE_APP/Contents/MacOS/Claude" <<'BIN'
+#!/usr/bin/env bash
+echo "fake claude ran with args: $*"
+BIN
+  chmod +x "$CMA_SOURCE_CLAUDE_APP/Contents/MacOS/Claude"
 }
 
 @test "help prints usage" {
@@ -77,9 +107,11 @@ setup() {
   [ -L "$HOME/.claude-b/projects" ]
   # CLI launcher installed + executable.
   [ -x "$HOME/.local/bin/claude-account-b" ]
-  # .app bundle built.
+  # .app bundle built as a clone of the source Claude.app: shell wrapper at
+  # MacOS/Claude, original binary at MacOS/Claude.real, Info.plist present.
   [ -d "$HOME/Applications/Claude Account B.app" ]
-  [ -x "$HOME/Applications/Claude Account B.app/Contents/MacOS/launcher" ]
+  [ -x "$HOME/Applications/Claude Account B.app/Contents/MacOS/Claude" ]
+  [ -f "$HOME/Applications/Claude Account B.app/Contents/MacOS/Claude.real" ]
   [ -f "$HOME/Applications/Claude Account B.app/Contents/Info.plist" ]
 }
 

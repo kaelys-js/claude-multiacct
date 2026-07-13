@@ -21,8 +21,8 @@ TSV=0
 check_one() {
   local label="$1"
   local row; row="$(cma_resolve_instance "$label")"
-  local _l email cdir udata cli app _bid
-  IFS=$'\t' read -r _l email cdir udata cli app _bid <<<"$row"
+  local _l email cdir udata cli app bid
+  IFS=$'\t' read -r _l email cdir udata cli app bid <<<"$row"
 
   local issues=()
 
@@ -98,6 +98,41 @@ check_one() {
       cma_warn ".app codesign check FAILED — Dock launch will be silently rejected"
       issues+=("codesign-broken")
     fi
+
+    # 4a. Bundle-id parity — the Dock groups by CFBundleIdentifier. If the
+    # clone's plist doesn't match the expected per-instance id, Dock icons
+    # will collide with the primary or with the wrong mirror.
+    if [[ -f "$app/Contents/Info.plist" ]]; then
+      local actual_bid
+      actual_bid="$(plutil -extract CFBundleIdentifier raw "$app/Contents/Info.plist" 2>/dev/null || printf '%s' '<unreadable>')"
+      if [[ "$actual_bid" == "$bid" ]]; then
+        cma_ok "bundle-id parity: $actual_bid"
+      else
+        cma_warn "bundle-id drift — expected $bid, got $actual_bid; repair required"
+        issues+=("bundle-id-drift")
+      fi
+
+      # 4b. Clone Claude version vs primary Claude version — Squirrel updates
+      # Claude Desktop under the primary but our clone is a snapshot from the
+      # time of the last `build-clone-app.sh` run. Version drift is why the
+      # WatchPaths-driven refresh-clones agent exists; surface it in doctor so
+      # a user can trigger it manually if it hasn't fired.
+      local clone_ver primary_ver=""
+      clone_ver="$(plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist" 2>/dev/null || printf '%s' '<unreadable>')"
+      if [[ -f "$CMA_SOURCE_CLAUDE_APP/Contents/Info.plist" ]]; then
+        primary_ver="$(plutil -extract CFBundleShortVersionString raw "$CMA_SOURCE_CLAUDE_APP/Contents/Info.plist" 2>/dev/null || printf '%s' '<unreadable>')"
+      fi
+      if [[ -n "$primary_ver" && "$clone_ver" != "$primary_ver" ]]; then
+        cma_warn "Claude version drift: clone=$clone_ver primary=$primary_ver — run \`claude-multiacct refresh-clones\`"
+        issues+=("version-drift")
+      else
+        cma_dim "  Claude version: $clone_ver (matches primary)"
+      fi
+    else
+      cma_warn "Info.plist missing under .app bundle"
+      issues+=("info-plist-missing")
+    fi
+
     # Note: com.apple.provenance is a PROTECTED xattr on modern macOS (2026-07-13
     # verified: `xattr -d/-c` returns 0 but the xattr persists — SIP-adjacent).
     # It's cosmetically-flagged but NOT actually blocking: `open -b <bundleId>`

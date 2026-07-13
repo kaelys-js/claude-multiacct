@@ -93,7 +93,10 @@ JSON
   "$LIB/build-cli-launcher.sh" "$label" "$cdir" "$udata" "$cli"
 
   # ── 4. .app bundle ─────────────────────────────────────────────────────
-  "$LIB/build-launcher-app.sh" "$label" "$bid" "$cdir" "$udata" "$app"
+  # Full clone of /Applications/Claude.app with a rewritten Info.plist and a
+  # wrapped MacOS/Claude that injects the per-instance env. See docs/dock-icon-fix.md
+  # for why a shell-launcher .app doesn't fix Dock-icon grouping.
+  "$LIB/build-clone-app.sh" "$label" "$bid" "$cdir" "$udata" "$app"
 
   # ── 5. Symlinks (config-dir shares + metadata symlinks) ────────────────
   # metadata-symlinks.sh handles both:

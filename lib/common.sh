@@ -111,6 +111,10 @@ cma_validate_label() {
 CMA_PRIMARY_USERDATA="$HOME/Library/Application Support/Claude"
 CMA_PRIMARY_CONFIG_DIR="$HOME/.claude"
 
+# Source of the per-instance clone bundle. Tests override this to a fake
+# fixture so build-clone-app.sh doesn't need the real 745 MB Claude Desktop.
+CMA_SOURCE_CLAUDE_APP="${CMA_SOURCE_CLAUDE_APP:-/Applications/Claude.app}"
+
 # Given a label, echo the default userData / configDir / launcher / .app paths.
 # Callers may override any of these via instances.yaml.
 cma_default_userdata() {
@@ -134,7 +138,10 @@ cma_default_app_bundle() {
 }
 cma_default_bundle_id() {
   local label="$1"
-  printf '%s\n' "com.claude-multiacct.claude-account-$label-launcher"
+  # `-desktop` (not `-launcher`) because the mirror is now a clone of the real
+  # Claude Desktop bundle (see docs/dock-icon-fix.md). The bundle-id must be
+  # unique per running mirror so the Dock groups each mirror separately.
+  printf '%s\n' "com.claude-multiacct.claude-account-$label-desktop"
 }
 
 # ── Config file ───────────────────────────────────────────────────────────

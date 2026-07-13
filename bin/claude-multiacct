@@ -10,6 +10,9 @@
 #   remove-instance <label> [--keep-userdata]
 #   list [--tsv]                      show all instances + health (--tsv for machine)
 #   repair [<label>]                  re-run install steps for one or all instances
+#   refresh-clones                    rebuild every mirror clone from the current
+#                                     /Applications/Claude.app (fires automatically
+#                                     via WatchPaths on Squirrel update)
 #   sync-now                          manually trigger primary → mirrors sync
 #   sync-log [--tail]                 print the sessions-sync log (--tail follows it)
 #   doctor                            deep diagnostic report
@@ -44,6 +47,7 @@ usage:
   claude-multiacct remove-instance <label> [--keep-userdata] [--keep-configdir]
   claude-multiacct list [--tsv]
   claude-multiacct repair [<label>]
+  claude-multiacct refresh-clones
   claude-multiacct sync-now
   claude-multiacct sync-log [--tail]
   claude-multiacct doctor
@@ -227,6 +231,67 @@ cmd_sync_now() {
   cma_ok "sync complete — see $CMA_LOG_DIR/sessions-sync.log"
 }
 
+# refresh-clones — rebuild every mirror's clone from the current
+# /Applications/Claude.app. Called both interactively AND by the launchd
+# WatchPaths agent on Info.plist mutation (which is what Squirrel writes on
+# a Claude Desktop update). Log lives at CMA_LOG_DIR/clone-refresh.log so
+# users can inspect what happened after an update.
+#
+# We refuse to run if any MIRROR clone is currently running — a live process
+# holds file locks on Contents/Frameworks, so `ditto` over top will produce
+# a corrupted clone and codesign will then reject it. We DELIBERATELY don't
+# check for the primary Claude Desktop: Squirrel restarts the primary as
+# part of applying an update, and blocking on the primary would defeat the
+# entire point of the WatchPaths trigger.
+cmd_refresh_clones() {
+  cma_require_config
+
+  local log="$CMA_LOG_DIR/clone-refresh.log"
+  mkdir -p "$(dirname "$log")"
+
+  # `pgrep -f` regex matches any process whose command line contains
+  # "Claude Account <anything>.app/Contents/MacOS" — that's the exec path of
+  # a running mirror clone (either the wrapper script or the Claude.real
+  # process image). Matches the wrapper, main binary, and every helper.
+  if pgrep -f 'Claude Account .*\.app/Contents/MacOS' >/dev/null 2>&1; then
+    local msg="refresh-clones: at least one mirror clone is running; quit all Claude Account *.app processes and retry"
+    printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$msg" >>"$log"
+    cma_die "$msg"
+  fi
+
+  local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf '%s === refresh-clones begin ===\n' "$ts" >>"$log"
+
+  local label rc=0
+  while IFS= read -r label; do
+    [[ -z "$label" ]] && continue
+    local row; row="$(cma_resolve_instance "$label")"
+    local _l _e cdir udata _cli app bid
+    IFS=$'\t' read -r _l _e cdir udata _cli app bid <<<"$row"
+    printf '%s   rebuilding clone label=%s → %s (bundleId=%s)\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$label" "$app" "$bid" >>"$log"
+    # shellcheck disable=SC2310  # keep going through other mirrors on one failure
+    if ! "$CMA_LIB/build-clone-app.sh" "$label" "$bid" "$cdir" "$udata" "$app" >>"$log" 2>&1; then
+      printf '%s   ✗ build-clone-app.sh failed for label=%s\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$label" >>"$log"
+      rc=1
+    else
+      printf '%s   ✓ clone rebuilt for label=%s\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$label" >>"$log"
+    fi
+  done < <(cma_list_labels)
+
+  printf '%s === refresh-clones end (rc=%d) ===\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$rc" >>"$log"
+
+  if [[ $rc -eq 0 ]]; then
+    cma_ok "refresh-clones complete — see $log"
+  else
+    cma_warn "refresh-clones finished with errors — see $log"
+  fi
+  return "$rc"
+}
+
 # sync-log — QoL wrapper over `cat` / `tail -f` on the sync worker's log file.
 # The log is where every sync (launchd-triggered or manual) records its
 # progress; users with drifted mirrors reach for it first.
@@ -264,14 +329,16 @@ cmd_doctor() {
     return 1
   fi
 
-  # Launchd agent state.
-  local label="com.user.claude-sessions-sync"
-  if launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; then
-    cma_ok "launchd agent $label loaded"
-    launchctl print "gui/$(id -u)/$label" 2>/dev/null | grep -E 'state|last exit code|watch paths' | sed 's/^/  /' >&2 || true
-  else
-    cma_warn "launchd agent $label NOT loaded"
-  fi
+  # Launchd agent state. Both agents get the same treatment.
+  local label
+  for label in com.user.claude-sessions-sync com.user.claude-clone-refresh; do
+    if launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; then
+      cma_ok "launchd agent $label loaded"
+      launchctl print "gui/$(id -u)/$label" 2>/dev/null | grep -E 'state|last exit code|watch paths' | sed 's/^/  /' >&2 || true
+    else
+      cma_warn "launchd agent $label NOT loaded"
+    fi
+  done
 
   # Per-instance discovery.
   printf '\n' >&2
@@ -323,6 +390,7 @@ main() {
     remove-instance)   cmd_remove_instance "$@" ;;
     list)              cmd_list "$@" ;;
     repair)            cmd_repair "$@" ;;
+    refresh-clones)    cmd_refresh_clones "$@" ;;
     sync-now)          cmd_sync_now "$@" ;;
     sync-log)          cmd_sync_log "$@" ;;
     doctor)            cmd_doctor "$@" ;;

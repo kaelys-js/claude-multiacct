@@ -12,7 +12,7 @@
 #   userData    = ~/Library/Application Support/Claude-<Titlecase(label)>
 #   cliLauncher = ~/.local/bin/claude-account-<label>
 #   appBundle   = ~/Applications/Claude Account <Titlecase(label)>.app
-#   bundleId    = com.claude-multiacct.claude-account-<label>-launcher
+#   bundleId    = com.claude-multiacct.claude-account-<label>-desktop
 # Override any of them per-instance when the default clashes with something else
 # on your machine.
 

@@ -24,24 +24,26 @@ Every instance has:
 
 1. **`configDir`** (`~/.claude-<label>`) — where the desktop-embedded Claude Code writes JSONL bodies, sessions, plugins, skills. The mirror instance's `configDir` symlinks most of its subpaths at the primary's `~/.claude/` so session content is shared at file layer.
 2. **`userData`** (`~/Library/Application Support/Claude-<Titlecase>`) — Chromium's per-instance store (cookies, IndexedDB, preferences, session storage). Cookies stay per-instance (per-account OAuth); IndexedDB / Local Storage / Session Storage sync one-way from the primary.
-3. **A launcher pair**: a shell script at `~/.local/bin/claude-account-<label>` and a Dock-clickable `Claude Account <Title>.app` bundle. Both invoke:
-   ```
-   open -na /Applications/Claude.app --env CLAUDE_CONFIG_DIR=… --args --user-data-dir=…
-   ```
+3. **A launcher pair**: a shell script at `~/.local/bin/claude-account-<label>` (uses `open -na /Applications/Claude.app --env CLAUDE_CONFIG_DIR=… --args --user-data-dir=…` for terminal invocation) and a Dock-clickable `Claude Account <Title>.app` bundle that is a full CLONE of `/Applications/Claude.app` with its `Info.plist` rewritten to a per-mirror bundle-id and its `MacOS/Claude` wrapped by a shell script that injects `CLAUDE_CONFIG_DIR` + `--user-data-dir`. See "The Dock-clone layer" below.
 
-## Why the .app bundle needs codesign + xattr + lsregister
+## The Dock-clone layer (why not a shell-launcher .app)
 
-Gatekeeper uses different code paths for `open` (from a shell) vs Dock-click (via LaunchServices).
+macOS Dock groups running processes by `CFBundleIdentifier`. A shell-launcher .app that `open`s `/Applications/Claude.app` inherits the primary bundle-id `com.anthropic.claudefordesktop` — the running mirror process ends up sharing the primary's Dock slot, invisible to the user. Only per-instance bundle-id parity between the Dock item and the running Claude process fixes this.
 
-- **Shell `open`**: skips the "is this signed at all" check. Ad-hoc bundles launch fine.
-- **Dock LaunchServices**: enforces the check even for ad-hoc bundles. Unsigned + provenance-tagged bundles are silently rejected — no window, no error dialog, no Gatekeeper prompt. Symptom: click Dock icon, nothing happens.
+`lib/build-clone-app.sh` handles this per mirror:
 
-The fix is a three-part dance:
-1. `codesign --force --deep --sign -` — ad-hoc signature (no Developer ID needed; Gatekeeper's LaunchServices path accepts ad-hoc)
-2. `xattr -d com.apple.provenance` — strip the "downloaded from browser" quarantine attribute (spuriously applied to freshly-built bundles in some cases; when present, Gatekeeper hardens further and rejects even ad-hoc signatures)
-3. `lsregister -f` — force re-register the bundle-ID → path mapping so LaunchServices doesn't cache a stale entry
+- **`ditto`** `/Applications/Claude.app` → `~/Applications/Claude Account <Title>.app`. Preserves xattrs, resource forks, ACLs, and the codesign structure that `cp -R` would strip.
+- **Rewrite** `Contents/Info.plist`: `CFBundleIdentifier=com.claude-multiacct.claude-account-<label>-desktop`, `CFBundleDisplayName=Claude Account <Title>`. **`CFBundleName` is deliberately left as "Claude"** — Chromium derives the helper .app folder name from `CFBundleName + " Helper"`, so rewriting it makes Electron fatal-exit at `electron_main_delegate_mac.mm:66` with "Unable to find helper app" before any window opens.
+- **Wrap** `Contents/MacOS/Claude`: move real → `Claude.real`, write a `bash` shell script at `Claude` that `export CLAUDE_CONFIG_DIR="<cdir>"` then `exec "$(dirname "$0")/Claude.real" --user-data-dir="<udata>" "$@"`. `exec` is load-bearing — it replaces the process image so the running Claude Desktop IS the process macOS launched from the clone bundle.
+- **Ad-hoc re-sign**: `codesign --force --deep --sign - <clone>`. Required because the plist mutation and executable wrap both invalidate the original signature. `--deep` re-signs every nested framework and helper .app in `Contents/Frameworks/`.
+- **`lsregister -f`**: force-register the new bundle-id → clone-path mapping so the Dock doesn't cache a stale routing.
+- **`xattr -rd com.apple.provenance`**: best-effort strip. Modern macOS protects the attribute, but the strip is retained for older releases and as a diagnostic marker.
 
-`claude-multiacct repair <label>` re-runs all three; `claude-multiacct doctor` checks whether each layer is intact.
+Disk cost: ~745 MB per mirror. Two mirrors ≈ 1.5 GB under `~/Applications/`.
+
+**Version drift + auto-refresh.** Claude Desktop's autoupdater (Squirrel) rewrites `/Applications/Claude.app` in place after every update. The mirror clones would then drift behind the primary until a manual `claude-multiacct refresh-clones`. Instead: `launchd/com.user.claude-clone-refresh.plist.tmpl` installs a WatchPaths agent that watches `/Applications/Claude.app/Contents/Info.plist`; on mtime change (Squirrel touches it at update-end), it invokes `bin/claude-clone-refresh.sh` which rebuilds every mirror clone against the new primary. The refresh subcommand refuses to run while any mirror is currently open (file locks would corrupt the ditto), but does NOT gate on the primary running — Squirrel restarts the primary as part of applying an update.
+
+`claude-multiacct repair <label>` re-runs the full clone+plist+wrap+codesign+lsregister flow for one mirror; `claude-multiacct refresh-clones` runs it for every configured mirror; `claude-multiacct doctor` checks whether the codesign, bundle-id parity, Claude version parity, and LaunchServices registration are each intact.
 
 ## Layered sync (see docs/sync-model.md for detail)
 

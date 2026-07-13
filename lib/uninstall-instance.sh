@@ -41,10 +41,16 @@ main() {
     cma_ok "removed $cli"
   fi
 
-  # 2. Remove the .app bundle (snapshot + LaunchServices unregister).
+  # 2. Remove the .app bundle (snapshot Info.plist + LaunchServices unregister).
+  # The bundle is a 745 MB clone of Claude Desktop — snapshotting the whole
+  # thing would burn disk. Info.plist alone is enough for forensics (bundle-id,
+  # version, executable name); the rest is bit-identical to the source
+  # /Applications/Claude.app of the same version.
   if [[ -d "$app" ]]; then
-    local snap; snap="$(cma_backup_snapshot "$app" "app-$label")"
-    cma_dim "  snapshot: $snap"
+    if [[ -f "$app/Contents/Info.plist" ]]; then
+      local snap; snap="$(cma_backup_snapshot "$app/Contents/Info.plist" "clone-plist-$label")"
+      cma_dim "  snapshot: $snap (Info.plist only; the 745 MB payload is not snapshotted)"
+    fi
     "$LSREGISTER" -u "$app" >/dev/null 2>&1 || true
     rm -rf "$app"
     cma_ok "removed $app"
