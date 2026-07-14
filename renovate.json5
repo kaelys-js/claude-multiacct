@@ -26,6 +26,10 @@
 		"config:recommended",
 		":dependencyDashboard",
 		":semanticCommits",
+		// Keep every GitHub Actions `uses:` line pinned to a full commit SHA
+		// with a `# vX.Y.Z` comment. Renovate rewrites the comment when it
+		// bumps the pin, so tag context stays visible next to the digest.
+		"helpers:pinGitHubActionDigestsToSemver",
 	],
 
 	timezone: "America/Vancouver",

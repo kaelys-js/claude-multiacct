@@ -9,26 +9,30 @@ name: CI
   pull_request:
     branches: [main]
 
-# Cancel in-progress runs for the same branch when a new push arrives.
+# Per-PR concurrency: cancel obsolete PR runs, never cancel main-branch runs.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# Workflow-level least privilege: read-only. Bats tests are hermetic + `qa
+# lint` (shellcheck/gitleaks/yamllint) never writes. No job needs an override.
+permissions:
+  contents: read
 
 jobs:
   qa:
     name: qa lint + qa test
     runs-on: macos-14
-    permissions:
-      contents: read
+    timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
 
       # jdx/mise-action installs mise + every tool pinned in mise.toml
       # (shellcheck, bats, gitleaks, yq, yamllint). Caches to speed up
       # subsequent runs.
       - name: Install mise + pinned toolchain
-        uses: jdx/mise-action@v4
+        uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d  # v4.2.0
 
       # qa lint = shellcheck + gitleaks + yamllint
       - name: qa lint

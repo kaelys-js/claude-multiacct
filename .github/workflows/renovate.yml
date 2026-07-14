@@ -26,10 +26,14 @@ name: renovate
         type: choice
         options: [debug, info, warn]
 
+# A rolling Renovate run is single-writer by nature — this group is not
+# per-PR; it prevents two Renovate runs stacking on each other.
 concurrency:
   group: renovate
   cancel-in-progress: false
 
+# Workflow-level least privilege. All writes go through the App token minted
+# below, not GITHUB_TOKEN, so read here is enough.
 permissions:
   contents: read
 
@@ -60,11 +64,11 @@ jobs:
           fi
 
       - name: Check out
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
 
       - name: Mint GitHub App installation token
         id: app-token
-        uses: actions/create-github-app-token@v3.2.0
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
           client-id: ${{ secrets.RENOVATE_APP_CLIENT_ID }}
           private-key: ${{ secrets.RENOVATE_APP_PRIVATE_KEY }}
@@ -74,7 +78,7 @@ jobs:
       - name: Run Renovate
         # Pinned to a tag + digest, like the rest of our workflow deps.
         # Renovate keeps this line current via the github-actions manager.
-        uses: renovatebot/github-action@v46.1.19
+        uses: renovatebot/github-action@22e0a16091fc706b04affe6ae53d5e3358ac4023  # v46.1.19
         with:
           token: ${{ steps.app-token.outputs.token }}
           configurationFile: renovate.json5

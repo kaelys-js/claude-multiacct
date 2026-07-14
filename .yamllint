@@ -1,0 +1,28 @@
+---
+# yamllint config for claude-multiacct.
+# Matches the pattern in stardust + kaelys-js: disable layout rules where a
+# SHA-pinned `uses:` line (40-char digest + `  # vX.Y.Z` comment) naturally
+# exceeds the default 80-col cap. Semantic rules (key-duplicates, truthy,
+# anchors, etc.) stay on via `extends: default`.
+
+extends: default
+
+rules:
+  # SHA-pinned action `uses:` lines are ~85–100 chars — a 40-char digest is
+  # inescapable, and Renovate's helpers:pinGitHubActionDigestsToSemver preset
+  # needs the `# vX.Y.Z` comment on the SAME line.
+  line-length: disable
+
+  # Inline comments on `uses:` lines use two spaces before `#` (yamllint's
+  # default requirement), but the pin format sometimes leaves one space. The
+  # `comments` rule is layout, not correctness — disable and rely on review.
+  comments: disable
+
+  # `on:` in GitHub Actions is a YAML 1.1 boolean alias, but it's the
+  # workflow-trigger key; not a bug.
+  truthy:
+    check-keys: false
+
+ignore: |
+  node_modules/
+  .mise/
