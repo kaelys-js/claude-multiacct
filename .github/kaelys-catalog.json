@@ -1,0 +1,41 @@
+{
+	"$schema": "https://raw.githubusercontent.com/kaelys-js/kaelys-js/main/schema/kaelys-catalog.schema.json",
+	"name": "foundation-registry",
+	"tagline": "Business-as-Code governance registry — owned decision records for a shared client foundation.",
+	"sellMe": "A pnpm workspace that holds the firm's decision spine as Markdown-with-YAML-frontmatter records — PRDs, PDRs, ADRs, SPECs, Tasks, Releases — validated by a JSON Schema and routed to named GitHub teams via CODEOWNERS. Records are partitioned by domain (governance, build, design, frontend, backend, infra, security, data, observability) and cross-link into a PRD → PDR/ADR → SPEC → Tasks → Release spine. Not a runtime application; the record of what the firm decided and why.",
+	"status": "wip",
+	"since": 2026,
+	"primaryLanguage": "TypeScript",
+	"technology": ["TypeScript", "pnpm", "Turbo", "mise", "JSON Schema", "Markdown"],
+	"topics": [
+		"adr",
+		"business-as-code",
+		"decision-records",
+		"governance",
+		"prd",
+		"registry",
+		"spec"
+	],
+	"products": [
+		{
+			"name": "config",
+			"description": "@foundation/config — shared tsconfig base + every tool config (oxlint, oxfmt, taplo, syncpack, markdownlint, yamllint, commitlint, gitleaks, editorconfig, lefthook base)."
+		},
+		{
+			"name": "core",
+			"description": "@foundation/core — repoRoot() + miseExec() helpers, shared by qa and sync."
+		},
+		{
+			"name": "qa",
+			"description": "@foundation/qa — lint/format dispatch over the whole tree, plus gitmeta / editorconfig / lefthook / schema checks."
+		},
+		{
+			"name": "sync",
+			"description": "@foundation/sync — generated-file drift guards (versions, vendored schemas, turbo config, post-checkout/merge sync)."
+		},
+		{
+			"name": "registry",
+			"description": "@foundation/registry — the record spine (PRD/PDR/ADR/SPEC/tasks/release) + its JSON Schema validator + generated index site."
+		}
+	]
+}

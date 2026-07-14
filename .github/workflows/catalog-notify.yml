@@ -1,0 +1,64 @@
+# Notifies kaelys-js/kaelys-js when this repo's .github/kaelys-catalog.json
+# changes on main. The sync-catalog workflow over there listens for the
+# `catalog-updated` repository_dispatch event and re-renders the profile
+# README. See docs/catalog-setup.md in kaelys-js/kaelys-js for the one-time
+# GitHub App setup that provisions the two secrets used here.
+name: catalog-notify
+
+"on":
+  push:
+    branches: [main]
+    paths:
+      - ".github/kaelys-catalog.json"
+
+concurrency:
+  group: catalog-notify
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    name: dispatch catalog-updated
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify GitHub App secrets are configured
+        env:
+          APP_CID: ${{ secrets.KAELYS_CATALOG_APP_CLIENT_ID }}
+          APP_PK: ${{ secrets.KAELYS_CATALOG_APP_PRIVATE_KEY }}
+        run: |
+          if [[ -z "$APP_CID" || -z "$APP_PK" ]]; then
+            printf 'Catalog notify is not configured yet.\n'
+            printf '\n'
+            printf 'One-time setup: see docs/catalog-setup.md in kaelys-js/kaelys-js\n'
+            printf '\n'
+            printf 'Missing secrets:\n'
+            [[ -z "$APP_CID" ]] && printf '  - KAELYS_CATALOG_APP_CLIENT_ID\n'
+            [[ -z "$APP_PK" ]] && printf '  - KAELYS_CATALOG_APP_PRIVATE_KEY\n'
+            exit 1
+          fi
+
+      - name: Mint GitHub App installation token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.KAELYS_CATALOG_APP_CLIENT_ID }}
+          private-key: ${{ secrets.KAELYS_CATALOG_APP_PRIVATE_KEY }}
+          # Cross-repo dispatch: the token needs write access on the TARGET
+          # repo (kaelys-js/kaelys-js). Restrict the token to just that repo.
+          owner: ${{ github.repository_owner }}
+          repositories: kaelys-js
+
+      - name: Send repository_dispatch to kaelys-js/kaelys-js
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          SRC_REPO: ${{ github.repository }}
+          SRC_SHA: ${{ github.sha }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY_OWNER}/kaelys-js/dispatches" \
+            --method POST \
+            --field event_type=catalog-updated \
+            --raw-field "client_payload[repo]=${SRC_REPO}" \
+            --raw-field "client_payload[sha]=${SRC_SHA}"
