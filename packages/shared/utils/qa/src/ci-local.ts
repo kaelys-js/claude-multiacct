@@ -23,6 +23,12 @@ const ROOT = repoRoot();
 const IMAGE = "catthehacker/ubuntu:act-latest";
 const ACT_TOOL = "aqua:nektos/act@0.2.89";
 const ACT_CACHE = join(homedir(), ".cache", "act");
+// act's built-in cache server (used by actions/cache@v4). Separate from
+// ACT_CACHE above, which holds pre-cloned actions. A polluted workflow-cache
+// entry (e.g. `.mise/` restored across runs with host-relative symlinks)
+// keeps broken installs alive inside the container until this directory is
+// wiped, so `--clean` has to reach both paths.
+const ACT_WORKFLOW_CACHE = join(homedir(), ".cache", "actcache");
 
 // act must fetch these actions to run ci.yml. We pre-clone them into act's cache
 // with the credential helper disabled — an ambient git credential helper can make
@@ -60,12 +66,18 @@ function removeActContainers(): void {
 	}
 }
 
-// Full teardown: containers + the cached runner image + act's action cache.
+// Full teardown: containers + the cached runner image + act's action cache +
+// act's workflow-cache server directory (`~/.cache/actcache`). Skipping the
+// latter kept broken tool installs alive across runs; wiping both makes the
+// clean idempotent.
 function clean(): void {
 	removeActContainers();
 	sh("docker", ["rmi", "-f", IMAGE], { stdio: "ignore" });
 	rmSync(ACT_CACHE, { recursive: true, force: true });
-	stdout.write("ci:local: torn down — containers, runner image, and action cache removed.\n");
+	rmSync(ACT_WORKFLOW_CACHE, { recursive: true, force: true });
+	stdout.write(
+		"ci:local: torn down — containers, runner image, action cache, and workflow cache removed.\n",
+	);
 }
 
 // Install act globally via mise if it is not already available, keeping it out of
@@ -127,8 +139,9 @@ export function ciLocal(args: readonly string[]): number {
 			clean();
 		} else {
 			rmSync(ACT_CACHE, { recursive: true, force: true });
+			rmSync(ACT_WORKFLOW_CACHE, { recursive: true, force: true });
 			stdout.write(
-				"ci:local: Docker not running — removed the action cache; no containers/image to reap.\n",
+				"ci:local: Docker not running — removed both action + workflow caches; no containers/image to reap.\n",
 			);
 		}
 		return 0;

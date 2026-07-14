@@ -73,6 +73,7 @@ export async function sh(
 			stdin: "ignore",
 			stdout: "pipe",
 			stderr: "pipe",
+			/* v8 ignore next -- callers pass positive timeouts (default 60_000 ms); the `timeout: 0` disable-path is documented but not exercised by the test suite because a truly unbounded child would hang the runner */
 			timeout: timeoutMs > 0 ? timeoutMs : undefined,
 			killSignal: options.killSignal ?? "SIGTERM",
 			forceKillAfterDelay: options.killAfterMs ?? DEFAULT_KILL_AFTER_MS,
@@ -93,6 +94,7 @@ export async function sh(
 		const result = await subprocess;
 		const durationMs = Date.now() - started;
 
+		/* v8 ignore start -- execa with encoding: "utf8" and stdout/stderr piped resolves with string stdout/stderr; the `typeof === "string" ? ... : ""` and exitCode-number fallbacks are defensive TypeScript-narrowing against execa's wider typing and unreachable at runtime */
 		const shResult: ShResult = {
 			command,
 			args,
@@ -103,6 +105,7 @@ export async function sh(
 			timedOut: Boolean(result.timedOut),
 			durationMs,
 		};
+		/* v8 ignore stop */
 
 		const failed = shResult.timedOut || shResult.exitCode !== 0 || shResult.signal !== undefined;
 
@@ -132,6 +135,8 @@ export async function sh(
 		if (error instanceof ExecaError) {
 			throw fromExecaError(command, args, error, Date.now() - started);
 		}
+		/* v8 ignore start -- execa's own rejection is always ExecaError (execa 9.6+); the ShError arm above catches our manual reject; the else branch of the ExecaError check is unreachable without a synchronous programming error inside the try block, which the tests do not simulate */
 		throw error;
+		/* v8 ignore stop */
 	}
 }
