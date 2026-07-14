@@ -120,6 +120,12 @@ describe("ciLocal — run mode", () => {
 		expect(act).toContain("push"); // full workflow, not a single -j job
 		expect(act).toContain("--rm"); // teardown even on failure
 		expect(act).toContain("--action-offline-mode"); // uses the pre-cached actions
+		// The runner scopes act to ci.yml — notification workflows that require
+		// production-only secrets (e.g. catalog-notify) would fail-loud locally and
+		// mask the real ci.yml result. `-W .github/workflows/ci.yml` keeps the run
+		// on the pipeline this script is documented to verify.
+		expect(act).toContain("-W");
+		expect(act).toContain(".github/workflows/ci.yml");
 		expect(ranShell("docker", "rm")).toBe(true); // reaped the two act containers
 	});
 

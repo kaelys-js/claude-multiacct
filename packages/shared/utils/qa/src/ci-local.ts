@@ -122,10 +122,21 @@ function ensureActionCache(): void {
 // uses the pre-cached actions. The job steps install the toolchain + deps INSIDE the
 // container, so the heavy dirs live there regardless of what act copies — gitleaks
 // stays clean via its allowlist (packages/shared/config/gitleaks.toml), not a copy flag.
+// `-W .github/workflows/ci.yml` scopes act to ci.yml so notification workflows that
+// require production-only secrets (e.g. catalog-notify) don't fail locally.
 function runAct(): number {
 	stdout.write(`ci:local: running the full CI workflow in ${IMAGE} via act…\n`);
 	const result = miseExec(
-		["act", "push", "-P", `ubuntu-latest=${IMAGE}`, "--rm", "--action-offline-mode"],
+		[
+			"act",
+			"push",
+			"-W",
+			".github/workflows/ci.yml",
+			"-P",
+			`ubuntu-latest=${IMAGE}`,
+			"--rm",
+			"--action-offline-mode",
+		],
 		{ stdio: "inherit" },
 	);
 	removeActContainers();
