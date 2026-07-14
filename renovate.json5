@@ -10,12 +10,23 @@
 	//    (node, pnpm, oxlint, gitleaks, etc.). Same policy as npm:
 	//    patch/minor auto-merge after CI, major -> review PR.
 	//
+	// 3. GitHub Actions. The built-in `github-actions` manager reads every
+	//    `uses:` line in .github/workflows/*.yml. Same policy as npm:
+	//    patch/minor/digest auto-merge, major review PR. Every pin is a full
+	//    commit SHA with a `# vX.Y.Z` comment; helpers:pinGitHubActionDigestsToSemver
+	//    keeps the comment fresh whenever Renovate bumps the digest.
+	//
 	// All auto-merges wait a `minimumReleaseAge` cool-down so brand-new releases
 	// aren't merged the instant they publish. Every Renovate commit is
 	// `chore(deps): …`, which passes this repo's commitlint for ALL managers.
 	$schema: "https://docs.renovatebot.com/renovate-schema.json",
 
-	extends: ["config:recommended", ":dependencyDashboard", ":semanticCommits"],
+	extends: [
+		"config:recommended",
+		":dependencyDashboard",
+		":semanticCommits",
+		"helpers:pinGitHubActionDigestsToSemver",
+	],
 
 	timezone: "America/Vancouver",
 
@@ -27,16 +38,21 @@
 
 	// --- Commit / PR message shape -------------------------------------------
 	// Must satisfy this repo's commitlint: type MUST be in the type-enum and
-	// "chore" IS in it; scope is kebab-case and "deps" is in the scope-enum. So
-	// every Renovate commit reads:
+	// "chore" IS in it; scope is kebab-case. So every Renovate commit reads:
 	//   chore(deps): update <dep> to <newvalue>
-	// which passes type-enum, type-case, scope-case, scope-enum, subject-empty.
+	// which passes type-enum, type-case, scope-case, subject-empty.
 	semanticCommits: "enabled",
 	semanticCommitType: "chore",
 	semanticCommitScope: "deps",
 	commitMessagePrefix: "chore(deps):",
 	// Renovate's default body appends the changelog etc.; the header above is the
 	// only line commitlint validates and it is compliant.
+
+	// --- DCO signoff -----------------------------------------------------------
+	// Renovate's commits are authored by the shared GitHub App bot
+	// (kaelys-js-renovate[bot]); the same trailer is injected on every repo so
+	// probot/dco (when installed anywhere in the org) sees a consistent signoff.
+	commitBody: "Signed-off-by: kaelys-js-renovate[bot] <304942767+kaelys-js-renovate[bot]@users.noreply.github.com>",
 
 	// --- Concurrency / noise control -----------------------------------------
 	prConcurrentLimit: 4,
@@ -50,10 +66,11 @@
 	minimumReleaseAge: "3 days",
 
 	// Enabled managers:
-	//   - npm   -> package.json (× workspace) + pnpm-lock.yaml
-	//   - mise  -> mise.toml [tools] versions
-	// Everything else (GitHub Actions, etc.) stays off.
-	enabledManagers: ["npm", "mise"],
+	//   - npm             -> package.json (× workspace) + pnpm-lock.yaml
+	//   - mise            -> mise.toml [tools] versions
+	//   - github-actions  -> .github/workflows/*.yml `uses:` lines (SHA-pinned)
+	// Everything else stays off.
+	enabledManagers: ["npm", "mise", "github-actions"],
 
 	// Keep pnpm-lock.yaml fresh (dedupe / transitive security bumps) via a
 	// scheduled lockfile-only PR. Auto-merged after CI (see packageRules).
@@ -109,6 +126,28 @@
 			// Major toolchain bumps (e.g. a new Node major) are a human decision;
 			// review PR, its own PR (never grouped).
 			matchManagers: ["mise"],
+			matchUpdateTypes: ["major"],
+			automerge: false,
+			groupName: null,
+		},
+
+		// ── GitHub Actions ───────────────────────────────────────────────────
+		{
+			// patch/minor/digest bumps for the workflow `uses:` pins auto-merge
+			// after green CI. Grouped so a single actions/checkout or mise-action
+			// bump lands as one PR across every workflow.
+			matchManagers: ["github-actions"],
+			matchUpdateTypes: ["patch", "minor", "digest"],
+			automerge: true,
+			automergeType: "pr",
+			platformAutomerge: true,
+			groupName: "github actions (non-major)",
+			commitMessageTopic: "github actions",
+		},
+		{
+			// Major action bumps (e.g. actions/checkout v4 -> v5) can change
+			// input names; review PR, its own PR (never grouped).
+			matchManagers: ["github-actions"],
 			matchUpdateTypes: ["major"],
 			automerge: false,
 			groupName: null,
