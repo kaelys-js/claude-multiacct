@@ -73,6 +73,7 @@
 		"qa:test:coverage": "turbo run //#test:coverage:run",
 		"sync": "node packages/shared/utils/sync/src/versions.ts && node packages/shared/utils/sync/src/schemas.ts && node packages/shared/utils/sync/src/turbo.ts",
 		"sync-upstream": "git fetch upstream && git merge --ff-only upstream/main && pnpm install",
+		"sync-upstream:opt-in": "node packages/shared/utils/sync/src/opt-in-sync-upstream.ts",
 		"sync:check": "node packages/shared/utils/sync/src/versions.ts --check && node packages/shared/utils/sync/src/turbo.ts --check && node packages/shared/utils/sync/src/schemas.ts --check",
 		"sync:schemas": "node packages/shared/utils/sync/src/schemas.ts",
 		"sync:turbo": "node packages/shared/utils/sync/src/turbo.ts",

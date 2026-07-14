@@ -1,0 +1,164 @@
+# SPDX-FileCopyrightText: 2026 TTT Studios
+# SPDX-License-Identifier: LicenseRef-Proprietary
+#
+# Template for a fork's daily auto-merge of its upstream mirror into `main`.
+# Consumed by `pnpm sync-upstream:opt-in`, which reads `.sync-upstream.json`
+# from the caller's working directory and writes the substituted output to
+# `.github/workflows/sync-upstream.yml`. Three placeholders are substituted
+# on write (names without the ${...} wrapping so this docstring itself
+# survives substitution):
+#
+#   UPSTREAM_REPO_SSH          — SSH URL of the upstream repo,
+#                                e.g. `git@github.com:owner/upstream.git`.
+#   UPSTREAM_BRANCH            — the upstream branch to track, e.g. `main`.
+#   UPSTREAM_DEPLOY_KEY_SECRET — repo-secret NAME (not value) whose SSH
+#                                private key has read on the upstream AND
+#                                write on the fork,
+#                                e.g. `UPSTREAM_DEPLOY_KEY`.
+#
+# Substitution is a literal ${NAME} string-replace; GHA's own ${{ ... }}
+# expressions pass through untouched because the outer braces do not match
+# a placeholder start. The line that reads secrets from GHA looks like
+# `${{ secrets.${UPSTREAM_DEPLOY_KEY_SECRET} }}` in the template, and
+# becomes `${{ secrets.UPSTREAM_DEPLOY_KEY }}` after substitution.
+#
+# The template intentionally omits the yaml-language-server schema-ref line —
+# the CLI prepends the correct ref for the OUTPUT location on write, so the
+# template file itself is not schema-checked (its own path differs from
+# where the generated file lands and the ref would resolve to nowhere).
+#
+# Deploy-key setup sequence (do this once per fork before enabling):
+#
+#   1. `ssh-keygen -t ed25519 -N '' -f /tmp/upstream-deploy-key -C
+#      "sync-upstream <fork>"`.
+#   2. Add `/tmp/upstream-deploy-key.pub` as a READ-ONLY deploy key on the
+#      upstream mirror (Settings -> Deploy keys -> Add).
+#   3. Add the SAME public key as a WRITE deploy key on the fork
+#      (Settings -> Deploy keys, check "Allow write access").
+#   4. Store the private key as the repo secret named by
+#      UPSTREAM_DEPLOY_KEY_SECRET on the fork.
+#   5. Wipe the local private key.
+#
+# What the workflow does at run time:
+#
+#   1. Checkout `main` with fetch-depth 0 using the deploy key (read of
+#      upstream, write of fork).
+#   2. Add the SSH `upstream` remote and fetch the tracked branch.
+#   3. Try `git merge --ff-only`. On success, push and exit.
+#   4. On non-fast-forward: cut branch `sync/upstream-YYYY-MM-DD-<sha>`,
+#      merge with a fixed rule (upstream wins under `packages/shared` and
+#      `.schemas`; product code and product-specific workflows win
+#      locally), push, open a PR, enable squash auto-merge with branch
+#      delete.
+#   5. If a merged path outside the two allowlists conflicts, the commit
+#      lands with conflict markers, the PR stays open, GitHub CI reports
+#      the failure, and the reviewer resolves by hand.
+
+name: sync-upstream
+
+on:
+  schedule:
+    - cron: "0 10 * * *" # every day 10:00 UTC (03:00 America/Los_Angeles under PT)
+  workflow_dispatch:
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ssh-key: ${{ secrets.${UPSTREAM_DEPLOY_KEY_SECRET} }}
+
+      - name: Configure git identity
+        run: |
+          git config user.name "Cole Beuker"
+          git config user.email "cole.beuker@ttt.studio"
+
+      - name: Add upstream remote and fetch
+        run: |
+          git remote add upstream ${UPSTREAM_REPO_SSH}
+          git fetch upstream ${UPSTREAM_BRANCH}
+
+      - name: Try fast-forward
+        id: ff
+        run: |
+          if git merge --ff-only upstream/${UPSTREAM_BRANCH}; then
+            echo "result=ff" >>"$GITHUB_OUTPUT"
+            git push origin main
+          else
+            echo "result=conflict" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Create sync branch on non-fast-forward
+        if: steps.ff.outputs.result == 'conflict'
+        id: branch
+        run: |
+          git reset --hard origin/main
+          UPSTREAM_SHA=$(git rev-parse --short upstream/${UPSTREAM_BRANCH})
+          BRANCH="sync/upstream-$(date -u +%Y-%m-%d)-${UPSTREAM_SHA}"
+          echo "branch=${BRANCH}" >>"$GITHUB_OUTPUT"
+          git checkout -b "${BRANCH}"
+
+      - name: Merge upstream with fixed conflict rule
+        if: steps.ff.outputs.result == 'conflict'
+        run: |
+          set +e
+          git merge --no-ff --no-commit upstream/${UPSTREAM_BRANCH}
+          MERGE_STATUS=$?
+          set -e
+
+          for p in packages/shared .schemas mise.toml turbo.json; do
+            if [ -e "$p" ] || git ls-files -u "$p" | grep -q .; then
+              git checkout --theirs -- "$p" 2>/dev/null || true
+              git add -A "$p" 2>/dev/null || true
+            fi
+          done
+
+          for p in \
+            packages/products/cole-30-60-90 \
+            .github/workflows/refresh.yml \
+            .github/workflows/publish-memex.yml \
+            .github/workflows/reminders.yml \
+            .github/workflows/sync-upstream.yml \
+          ; do
+            if [ -e "$p" ] || git ls-files -u "$p" | grep -q .; then
+              git checkout --ours -- "$p" 2>/dev/null || true
+              git add -A "$p" 2>/dev/null || true
+            fi
+          done
+
+          git -c "user.name=Cole Beuker" -c "user.email=cole.beuker@ttt.studio" \
+            commit --no-edit || {
+              git -c "user.name=Cole Beuker" -c "user.email=cole.beuker@ttt.studio" \
+                commit -am "sync: upstream merge with unresolved conflicts (needs review)"
+            }
+          exit ${MERGE_STATUS}
+
+      - name: Push sync branch
+        if: steps.ff.outputs.result == 'conflict'
+        run: |
+          git push origin "${{ steps.branch.outputs.branch }}"
+
+      - name: Open PR and enable auto-merge
+        if: steps.ff.outputs.result == 'conflict'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr create \
+            --base main \
+            --head "${{ steps.branch.outputs.branch }}" \
+            --title "sync: upstream $(date -u +%Y-%m-%d)" \
+            --body "Automated sync of upstream/${UPSTREAM_BRANCH} into this fork. Conflict rule: upstream wins under \`packages/shared\` and \`.schemas\`; product and product-workflow paths win locally. If CI passes, this PR auto-merges (squash) and the branch is deleted."
+          gh pr merge \
+            "${{ steps.branch.outputs.branch }}" \
+            --auto --squash --delete-branch
