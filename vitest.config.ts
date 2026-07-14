@@ -41,8 +41,15 @@ export default defineConfig({
 			reportsDirectory: "coverage",
 			// ALL toolchain source — the qa/sync IO tooling is coverage-gated too, not
 			// just the pure helpers. Test files and type decls are excluded.
+			//
+			// TRP's fix-task.ts is excluded from the per-file gate on Cole's
+			// directive: the coverage debt is real (around 21% lines, 40%
+			// functions), the tests are queued under ROADMAP Item 20, and the
+			// gate would otherwise stop every push against this repo until that
+			// queue clears. Loud in the config so nobody mistakes the exclusion
+			// for "this file doesn't need coverage".
 			include: ["packages/**/src/**/*.ts"],
-			exclude: ["**/*.test.ts", "**/*.d.ts"],
+			exclude: ["**/*.test.ts", "**/*.d.ts", "packages/products/trp/src/scripts/fix-task.ts"],
 			// perFile: every covered file must clear the floor independently, so a
 			// well-covered file can't average out an untested one.
 			thresholds: {
