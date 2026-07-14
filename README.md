@@ -23,14 +23,16 @@ Fresh Mac? Get these first:
 xcode-select --install                   # git + build tools
 curl https://mise.run | sh               # mise (pins the toolchain)
 brew install gh                          # GitHub CLI (or use SSH — either works for a private clone)
-gh auth login                            # authorise the account with access to kaelys-js/claude-multiacct
+gh auth login                            # authorise your GitHub account
 ```
+
+Below, `<owner>/claude-multiacct` is a placeholder — replace `<owner>` with whichever GitHub account or org has been granted access to the repo (typically an individual account that owns the fork you've been shared into).
 
 ## Quick start
 
 ```sh
 # 1. Clone + install the toolchain (self-contained via mise).
-gh repo clone kaelys-js/claude-multiacct ~/Documents/work/@personal/claude-multiacct
+gh repo clone <owner>/claude-multiacct ~/Documents/work/@personal/claude-multiacct
 cd ~/Documents/work/@personal/claude-multiacct
 mise install                              # pins shellcheck, bats, gitleaks, yq, yamllint
 
@@ -76,6 +78,19 @@ claude-multiacct repair b
 # 8. Confirm health.
 claude-multiacct doctor
 ```
+
+## Upgrading from a previous install
+
+If you installed a previous version of this repo and see `bundle-id-drift` under `claude-multiacct doctor`, rebuild every clone against the current bundle-id namespace:
+
+```sh
+git pull
+claude-multiacct refresh-clones     # rebuilds every mirror clone; refuses if any mirror is running
+# or, per instance:
+claude-multiacct repair <label>
+```
+
+Then `claude-multiacct doctor` should report each instance `→ ok`. Dock launch of the rebuilt clones is served from the new bundle-id via LaunchServices.
 
 ## Uninstall
 
@@ -144,15 +159,9 @@ Both must pass on `main`. `.gitleaks.toml` covers OAuth-adjacent paths that the 
 
 ## Known issues + fixes
 
-- **Mirror's Dock icon coalesces with the primary** → see [docs/dock-icon-fix.md](docs/dock-icon-fix.md). Root cause: macOS Dock groups by `CFBundleIdentifier`; the fix is a per-instance clone of Claude.app with a rewritten bundle-id. `claude-multiacct repair <label>` (single mirror) or `claude-multiacct refresh-clones` (all mirrors) rebuilds. `claude-multiacct doctor` catches bundle-id or Claude-version drift.
-- **Claude Desktop updated but mirror shows old version** → the `com.user.claude-clone-refresh` WatchPaths agent auto-refreshes on Squirrel updates. If it hasn't fired (e.g. mirror was running at update-time), run `claude-multiacct refresh-clones` manually after quitting the mirror(s).
-- **launchd agent missing after macOS update** → `claude-multiacct repair` re-installs both plists and re-loads them.
-- **Mirror instance never logged in yet** → `metadata-symlinks.sh` skips the desktop-UI-metadata symlinks with a warning. Once the user signs in, the `com.user.claude-metadata-symlink` launchd agent fires on the `<userData>/config.json` write (or the per-account UUID subdir creation on Code first-use) and installs the symlinks automatically — derived from `config.json` if the Code area hasn't been opened yet. On the first successful install the watcher also auto-restarts the mirror if it's running so Desktop's React sidebar reloads with the symlinked content in place. Fallback: `claude-multiacct repair <label>` if the agent hasn't been loaded.
+- **Claude Desktop updated but mirror shows old version** → the `com.user.claude-clone-refresh` WatchPaths agent auto-refreshes on Squirrel updates. If it hasn't fired (e.g. a mirror was running at update-time and the refresh skipped it), run `claude-multiacct refresh-clones` manually after quitting the mirror(s).
+- **launchd agent missing after macOS update** → macOS occasionally resets per-user launchd state after a major OS update. `claude-multiacct repair` re-installs and re-loads all three agents.
 
 ## Engineering
 
 This repo follows the 13 rules in [AGENTS.md](AGENTS.md). AI agents load `AGENTS.md` automatically; humans reading the code should skim it once too.
-
-## Related
-
-- The design was extracted from an ad-hoc setup on this Mac (2026-06-24 through 2026-06-26) — see the linked memory entry in [`~/.claude/projects/memory/claude-multiacct-second-instance.md`](../..). This repo is the canonical version.
