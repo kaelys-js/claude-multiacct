@@ -127,7 +127,6 @@ jobs:
           for p in \
             packages/products/cole-30-60-90 \
             .github/workflows/refresh.yml \
-            .github/workflows/publish-memex.yml \
             .github/workflows/reminders.yml \
             .github/workflows/sync-upstream.yml \
           ; do
