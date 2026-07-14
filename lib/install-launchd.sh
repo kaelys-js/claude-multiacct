@@ -40,7 +40,8 @@ install_agent() {
   mkdir -p "$(dirname "$installed")"
 
   # Render template into place atomically.
-  local tmp; tmp="$(mktemp "$installed.XXXXXX")"
+  local tmp
+  tmp="$(mktemp "$installed.XXXXXX")"
   local sed_args=()
   local expr
   for expr in "$@"; do
@@ -53,11 +54,11 @@ install_agent() {
   # If the installed plist already matches, skip the reload cycle. Still verify
   # the agent is actually loaded; if not, load it. `launchctl print` fails when
   # the label isn't registered — we use that to detect it.
-  if [[ -f "$installed" ]] && diff -q "$tmp" "$installed" >/dev/null 2>&1; then
+  if [[ -f "$installed" ]] && diff -q "$tmp" "$installed" > /dev/null 2>&1; then
     rm -f "$tmp"
     cma_dim "  = launchd plist $label already up-to-date"
     local loaded=0
-    launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1 && loaded=1
+    launchctl print "gui/$(id -u)/$label" > /dev/null 2>&1 && loaded=1
     if [[ $loaded -eq 0 ]]; then
       cma_warn "  plist matches but agent not loaded — loading"
       launchctl load -w "$installed"
@@ -68,14 +69,15 @@ install_agent() {
 
   # Snapshot existing plist (if any) before overwriting.
   if [[ -f "$installed" ]]; then
-    local snap; snap="$(cma_backup_snapshot "$installed" "launchd-plist-$label")"
+    local snap
+    snap="$(cma_backup_snapshot "$installed" "launchd-plist-$label")"
     cma_dim "  snapshot: $snap"
     # Unload the old version. `launchctl unload` is the pair to `load -w`;
     # both use the older but consistently-working API on modern macOS.
     # (Modern `bootstrap` fails with "5: Input/output error" in some domain
     # states we've seen — 2026-07-13; `load -w` handles the same transitions
     # correctly.)
-    launchctl unload -w "$installed" 2>/dev/null || true
+    launchctl unload -w "$installed" 2> /dev/null || true
   fi
 
   mv -f "$tmp" "$installed"
@@ -94,9 +96,10 @@ uninstall_agent() {
   local label="$1"
   local installed="$HOME/Library/LaunchAgents/$label.plist"
   [[ -f "$installed" ]] || return 0
-  local snap; snap="$(cma_backup_snapshot "$installed" "launchd-plist-$label")"
+  local snap
+  snap="$(cma_backup_snapshot "$installed" "launchd-plist-$label")"
   cma_dim "  snapshot: $snap"
-  launchctl unload -w "$installed" 2>/dev/null || true
+  launchctl unload -w "$installed" 2> /dev/null || true
   rm -f "$installed"
   cma_ok "removed $label"
 }
@@ -114,20 +117,21 @@ uninstall_agent() {
 # Returns the count of mirrors emitted.
 build_metadata_watchpaths() {
   local entries_file="$1"
-  : >"$entries_file"
+  : > "$entries_file"
   local count=0 label
   while IFS= read -r label; do
     [[ -z "$label" ]] && continue
-    local row; row="$(cma_resolve_instance "$label")"
+    local row
+    row="$(cma_resolve_instance "$label")"
     local _l _e _cdir m_udata _cli _app _bid
-    IFS=$'\t' read -r _l _e _cdir m_udata _cli _app _bid <<<"$row"
+    IFS=$'\t' read -r _l _e _cdir m_udata _cli _app _bid <<< "$row"
     # Group the three per-mirror entries so shellcheck-SC2129 stays clean and
     # the file is opened once per mirror instead of thrice.
     {
-      printf '        <string>%s/claude-code-sessions</string>\n'      "$m_udata"
+      printf '        <string>%s/claude-code-sessions</string>\n' "$m_udata"
       printf '        <string>%s/local-agent-mode-sessions</string>\n' "$m_udata"
-      printf '        <string>%s/config.json</string>\n'               "$m_udata"
-    } >>"$entries_file"
+      printf '        <string>%s/config.json</string>\n' "$m_udata"
+    } >> "$entries_file"
     count=$((count + 1))
   done < <(cma_list_labels)
   printf '%s' "$count"
@@ -143,7 +147,8 @@ main() {
     return 0
   fi
 
-  local primary_ls; primary_ls="$(cma_primary_userdata)/Local State"
+  local primary_ls
+  primary_ls="$(cma_primary_userdata)/Local State"
 
   # Agent 1: sessions-sync — IndexedDB / LS / SS rsync on primary close.
   install_agent \
@@ -167,11 +172,13 @@ main() {
   # under launchd, and a placeholder path would arm the agent uselessly.
   # If mirrors were removed since the last install, bootout + delete the
   # existing plist so the agent's WatchPaths don't dangle at stale paths.
-  local entries_file; entries_file="$(mktemp -t claude-metadata-watchpaths)"
+  local entries_file
+  entries_file="$(mktemp -t claude-metadata-watchpaths)"
   # Ensure cleanup even on the cma_die → set -e paths inside install_agent.
   # shellcheck disable=SC2064  # deliberate: expand entries_file now, not at trap time
   trap "rm -f '$entries_file'" EXIT
-  local mirror_count; mirror_count="$(build_metadata_watchpaths "$entries_file")"
+  local mirror_count
+  mirror_count="$(build_metadata_watchpaths "$entries_file")"
   if [[ "$mirror_count" -gt 0 ]]; then
     # sed script: match the placeholder line, read the entries file into the
     # output stream, then delete the placeholder line itself. Real newlines

@@ -98,11 +98,13 @@ sys.stdout.write(f"{m_acct}\t{m_org}\t{p_acct}\t{p_org}\n")
 # Aborts if the parent dir doesn't exist (caller's responsibility).
 symlink_atomic() {
   local link="$1" target="$2"
-  local parent; parent="$(dirname "$link")"
+  local parent
+  parent="$(dirname "$link")"
   [[ -d "$parent" ]] || cma_die "symlink parent missing: $parent"
 
   if [[ -L "$link" ]]; then
-    local cur; cur="$(readlink "$link")"
+    local cur
+    cur="$(readlink "$link")"
     if [[ "$cur" == "$target" ]]; then
       cma_dim "  = already correct: $link → $target"
       return 0
@@ -110,7 +112,8 @@ symlink_atomic() {
     cma_dim "  ↻ replacing symlink at $link (was → $cur)"
     rm "$link"
   elif [[ -e "$link" ]]; then
-    local snap; snap="$(cma_backup_snapshot "$link" "symlink-replace")"
+    local snap
+    snap="$(cma_backup_snapshot "$link" "symlink-replace")"
     cma_warn "  snapshotted existing at $link → $snap"
     rm -rf "$link"
   fi
@@ -123,11 +126,14 @@ main() {
   cma_validate_label "$label"
 
   # Resolve mirror + primary paths.
-  local row; row="$(cma_resolve_instance "$label")"
+  local row
+  row="$(cma_resolve_instance "$label")"
   local _m_label _m_email m_cdir m_udata _l _a _b
-  IFS=$'\t' read -r _m_label _m_email m_cdir m_udata _l _a _b <<<"$row"
-  local p_udata; p_udata="$(cma_primary_userdata)"
-  local p_cdir; p_cdir="$(cma_primary_configdir)"
+  IFS=$'\t' read -r _m_label _m_email m_cdir m_udata _l _a _b <<< "$row"
+  local p_udata
+  p_udata="$(cma_primary_userdata)"
+  local p_cdir
+  p_cdir="$(cma_primary_configdir)"
 
   cma_say "metadata-symlinks: label=$label"
 
@@ -177,10 +183,12 @@ main() {
   local m_acct_uuid="" m_org_uuid="" p_acct_uuid="" p_org_uuid=""
   local uuid_source="find"
 
-  local m_acct; m_acct="$(find -L "$m_ccs" -mindepth 1 -maxdepth 1 -type d ! -name '.*' 2>/dev/null | head -1)"
+  local m_acct
+  m_acct="$(find -L "$m_ccs" -mindepth 1 -maxdepth 1 -type d ! -name '.*' 2> /dev/null | head -1)"
   if [[ -n "$m_acct" ]]; then
     m_acct_uuid="$(basename "$m_acct")"
-    local m_org; m_org="$(find -L "$m_acct" -mindepth 1 -maxdepth 1 -type d ! -name '.*' 2>/dev/null | head -1)"
+    local m_org
+    m_org="$(find -L "$m_acct" -mindepth 1 -maxdepth 1 -type d ! -name '.*' 2> /dev/null | head -1)"
     if [[ -n "$m_org" ]]; then
       m_org_uuid="$(basename "$m_org")"
       # Primary side. cma_primary_uuids dies if the primary hasn't opened the
@@ -190,9 +198,9 @@ main() {
       # exactly the intent (we WANT to catch failure and try the config path).
       local p_uuids=""
       # shellcheck disable=SC2310  # deliberate: catch cma_primary_uuids's die, fall to config.json
-      p_uuids="$(cma_primary_uuids "$p_udata" 2>/dev/null)" || p_uuids=""
+      p_uuids="$(cma_primary_uuids "$p_udata" 2> /dev/null)" || p_uuids=""
       if [[ -n "$p_uuids" ]]; then
-        IFS=$'\t' read -r p_acct_uuid p_org_uuid <<<"$p_uuids"
+        IFS=$'\t' read -r p_acct_uuid p_org_uuid <<< "$p_uuids"
       fi
     fi
   fi
@@ -205,7 +213,7 @@ main() {
     local derived=""
     # shellcheck disable=SC2310  # deliberate: derivation is expected to fail on pre-signin mirrors
     if derived="$(_derive_uuids_from_config "$m_udata/config.json" "$p_udata/config.json")" && [[ -n "$derived" ]]; then
-      IFS=$'\t' read -r m_acct_uuid m_org_uuid p_acct_uuid p_org_uuid <<<"$derived"
+      IFS=$'\t' read -r m_acct_uuid m_org_uuid p_acct_uuid p_org_uuid <<< "$derived"
       uuid_source="config.json"
     else
       cma_warn "  not logged in yet (no account UUID discoverable on disk or in config.json) — will retry on next Desktop event"
@@ -220,14 +228,14 @@ main() {
 
   # Symlink: mirror's <acct>/<org> → primary's <acct>/<org>.
   symlink_atomic "$m_ccs/$m_acct_uuid/$m_org_uuid" \
-                 "$p_udata/claude-code-sessions/$p_acct_uuid/$p_org_uuid"
+    "$p_udata/claude-code-sessions/$p_acct_uuid/$p_org_uuid"
 
   # ── Agent-mode subagent metadata symlink ──────────────────────────────
   # Same shape but only account-scoped (no org-level partition below).
   # Use the m_acct_uuid we already resolved (find or config.json) — same
   # account UUID regardless of which dir it was discovered from.
   symlink_atomic "$m_lams/$m_acct_uuid" \
-                 "$p_udata/local-agent-mode-sessions/$p_acct_uuid"
+    "$p_udata/local-agent-mode-sessions/$p_acct_uuid"
 
   if [[ "$uuid_source" == "config.json" ]]; then
     cma_ok "metadata-symlinks: label=$label all links resolved (uuids derived from config.json)"

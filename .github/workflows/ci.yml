@@ -23,23 +23,58 @@ jobs:
   qa:
     name: qa lint + qa test
     runs-on: macos-14
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
 
       # jdx/mise-action installs mise + every tool pinned in mise.toml
-      # (shellcheck, bats, gitleaks, yq, yamllint). Caches to speed up
-      # subsequent runs.
+      # (shellcheck, bats, gitleaks, yq, yamllint, shfmt, markdownlint-cli2,
+      # commitlint). Caches to speed up subsequent runs.
       - name: Install mise + pinned toolchain
         uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d  # v4.2.0
 
-      # qa lint = shellcheck + gitleaks + yamllint
+      # qa lint = shellcheck + shfmt --diff + gitleaks + yamllint + markdownlint
       - name: qa lint
         run: bin/claude-multiacct qa lint
+
+      # qa format:check — refuse to merge unformatted shell files (shfmt).
+      - name: qa format:check
+        run: shfmt -d bin/* lib/*.sh tests/*.bats
 
       # qa test = hermetic bats suite (all four .bats files).
       # Runs under scratch $HOME (CMA_SKIP_LAUNCHD=1 + CMA_SKIP_AUTO_MIGRATE=1
       # set by each file's setup()), so no live macOS state is touched.
       - name: qa test
         run: bin/claude-multiacct qa test
+
+  # Coverage job on ubuntu-latest — kcov hangs under macOS SIP on some
+  # apple-silicon setups, so we measure line coverage on Linux where kcov is
+  # rock-solid. Tests are hermetic (they source scratch $HOME + skip launchd)
+  # so Linux is a valid environment for them.
+  coverage:
+    name: qa test:coverage (kcov)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+
+      - name: Install mise + pinned toolchain
+        uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d  # v4.2.0
+
+      - name: Install kcov (apt)
+        run: sudo apt-get update && sudo apt-get install -y kcov
+
+      # Runs `kcov + bats` and enforces ≥90% line coverage. Fails the job if
+      # below threshold; uploads the HTML report either way.
+      - name: qa test:coverage
+        run: bin/claude-multiacct qa test:coverage
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: coverage-kcov
+          path: coverage/
+          retention-days: 7

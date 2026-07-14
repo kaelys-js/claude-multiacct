@@ -18,7 +18,7 @@ CMA_BIN="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG="$CMA_LOG_DIR/clone-refresh.log"
 mkdir -p "$(dirname "$LOG")"
 
-log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"$LOG"; }
+log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$LOG"; }
 
 log "=== launchd-triggered clone refresh begin ==="
 
@@ -26,7 +26,7 @@ log "=== launchd-triggered clone refresh begin ==="
 # and per-clone codesign + lsregister. We just call it and forward its rc.
 rc=0
 # shellcheck disable=SC2310  # assign rc from the subcommand's exit even under set -e
-"$CMA_BIN/claude-multiacct" refresh-clones >>"$LOG" 2>&1 || rc=$?
+"$CMA_BIN/claude-multiacct" refresh-clones >> "$LOG" 2>&1 || rc=$?
 
 log "=== launchd-triggered clone refresh end (rc=$rc) ==="
 

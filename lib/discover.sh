@@ -20,9 +20,10 @@ TSV=0
 # Check a single instance and print a report + optionally a TSV row.
 check_one() {
   local label="$1"
-  local row; row="$(cma_resolve_instance "$label")"
+  local row
+  row="$(cma_resolve_instance "$label")"
   local _l email cdir udata cli app bid
-  IFS=$'\t' read -r _l email cdir udata cli app bid <<<"$row"
+  IFS=$'\t' read -r _l email cdir udata cli app bid <<< "$row"
 
   local issues=()
 
@@ -56,10 +57,12 @@ check_one() {
     cma_ok "userData exists"
     local ccs="$udata/claude-code-sessions"
     if [[ -d "$ccs" ]]; then
-      local acct; acct="$(find "$ccs" -mindepth 1 -maxdepth 1 -type d ! -name '.*' 2>/dev/null | head -1)"
+      local acct
+      acct="$(find "$ccs" -mindepth 1 -maxdepth 1 -type d ! -name '.*' 2> /dev/null | head -1)"
       if [[ -n "$acct" ]]; then
         cma_ok "logged in (account UUID: $(basename "$acct"))"
-        local org; org="$(find "$acct" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -1)"
+        local org
+        org="$(find "$acct" -mindepth 1 -maxdepth 1 -type d 2> /dev/null | head -1)"
         if [[ -n "$org" ]]; then
           if [[ -L "$org" ]]; then
             cma_ok "claude-code-sessions ORG symlinked → $(readlink "$org")"
@@ -92,7 +95,7 @@ check_one() {
   # 4. .app bundle
   if [[ -d "$app" ]]; then
     # Verify codesign.
-    if codesign -v "$app" >/dev/null 2>&1; then
+    if codesign -v "$app" > /dev/null 2>&1; then
       cma_ok ".app codesigned"
     else
       cma_warn ".app codesign check FAILED — Dock launch will be silently rejected"
@@ -104,7 +107,7 @@ check_one() {
     # will collide with the primary or with the wrong mirror.
     if [[ -f "$app/Contents/Info.plist" ]]; then
       local actual_bid
-      actual_bid="$(plutil -extract CFBundleIdentifier raw "$app/Contents/Info.plist" 2>/dev/null || printf '%s' '<unreadable>')"
+      actual_bid="$(plutil -extract CFBundleIdentifier raw "$app/Contents/Info.plist" 2> /dev/null || printf '%s' '<unreadable>')"
       if [[ "$actual_bid" == "$bid" ]]; then
         cma_ok "bundle-id parity: $actual_bid"
       else
@@ -118,9 +121,9 @@ check_one() {
       # WatchPaths-driven refresh-clones agent exists; surface it in doctor so
       # a user can trigger it manually if it hasn't fired.
       local clone_ver primary_ver=""
-      clone_ver="$(plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist" 2>/dev/null || printf '%s' '<unreadable>')"
+      clone_ver="$(plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist" 2> /dev/null || printf '%s' '<unreadable>')"
       if [[ -f "$CMA_SOURCE_CLAUDE_APP/Contents/Info.plist" ]]; then
-        primary_ver="$(plutil -extract CFBundleShortVersionString raw "$CMA_SOURCE_CLAUDE_APP/Contents/Info.plist" 2>/dev/null || printf '%s' '<unreadable>')"
+        primary_ver="$(plutil -extract CFBundleShortVersionString raw "$CMA_SOURCE_CLAUDE_APP/Contents/Info.plist" 2> /dev/null || printf '%s' '<unreadable>')"
       fi
       if [[ -n "$primary_ver" && "$clone_ver" != "$primary_ver" ]]; then
         cma_warn "Claude version drift: clone=$clone_ver primary=$primary_ver — run \`claude-multiacct refresh-clones\`"
@@ -138,11 +141,11 @@ check_one() {
     # It's cosmetically-flagged but NOT actually blocking: `open -b <bundleId>`
     # against a provenance-tagged ad-hoc bundle DOES launch (verified same day).
     # Report presence for information only; do NOT add to issues.
-    if xattr -lr "$app" 2>/dev/null | grep -q '^[^:]*: com\.apple\.provenance'; then
+    if xattr -lr "$app" 2> /dev/null | grep -q '^[^:]*: com\.apple\.provenance'; then
       cma_dim "  com.apple.provenance xattr present (informational — modern macOS protects it; launch still works)"
     fi
     # Check LaunchServices registration.
-    if "$LSREGISTER" -dump 2>/dev/null | grep -F "$app" >/dev/null; then
+    if "$LSREGISTER" -dump 2> /dev/null | grep -F "$app" > /dev/null; then
       cma_ok "registered with LaunchServices"
     else
       cma_warn ".app NOT registered with LaunchServices (Dock launch will fail)"
@@ -159,7 +162,10 @@ check_one() {
 
   if [[ $TSV -eq 1 ]]; then
     local issues_joined=""
-    [[ ${#issues[@]} -eq 0 ]] || issues_joined="$(IFS=,; printf '%s' "${issues[*]}")"
+    [[ ${#issues[@]} -eq 0 ]] || issues_joined="$(
+      IFS=,
+      printf '%s' "${issues[*]}"
+    )"
     printf '%s\t%s\t%s\n' "$label" "$health" "$issues_joined"
   fi
 }

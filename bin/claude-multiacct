@@ -25,9 +25,9 @@ set -euo pipefail
 # link targets. Terminates once BASH_SOURCE hits a real file.
 _cma_self="${BASH_SOURCE[0]}"
 while [[ -L "$_cma_self" ]]; do
-  _cma_link="$(readlink "$_cma_self")"
-  [[ "$_cma_link" != /* ]] && _cma_link="$(cd "$(dirname "$_cma_self")" && pwd)/$_cma_link"
-  _cma_self="$_cma_link"
+	_cma_link="$(readlink "$_cma_self")"
+	[[ "$_cma_link" != /* ]] && _cma_link="$(cd "$(dirname "$_cma_self")" && pwd)/$_cma_link"
+	_cma_self="$_cma_link"
 done
 CMA_LIB="$(cd "$(dirname "$_cma_self")/../lib" && pwd)"
 CMA_BIN="$(cd "$(dirname "$_cma_self")" && pwd)"
@@ -36,7 +36,7 @@ unset _cma_self _cma_link
 . "$CMA_LIB/common.sh"
 
 usage() {
-  cat <<USAGE
+	cat <<USAGE
 claude-multiacct — manage multiple Claude Desktop instances on one Mac
 
 usage:
@@ -66,169 +66,185 @@ USAGE
 CMA_INSTALL_TARGET="$HOME/.local/bin/claude-multiacct"
 
 cmd_install() {
-  local self="$CMA_BIN/claude-multiacct"
-  mkdir -p "$(dirname "$CMA_INSTALL_TARGET")"
+	local self="$CMA_BIN/claude-multiacct"
+	mkdir -p "$(dirname "$CMA_INSTALL_TARGET")"
 
-  if [[ -L "$CMA_INSTALL_TARGET" ]]; then
-    local existing; existing="$(readlink "$CMA_INSTALL_TARGET")"
-    if [[ "$existing" == "$self" ]]; then
-      cma_ok "already installed at $CMA_INSTALL_TARGET"
-      return 0
-    fi
-    cma_die "install: $CMA_INSTALL_TARGET is a symlink to $existing (not this repo). Remove it manually or run \`uninstall\` there."
-  fi
-  if [[ -e "$CMA_INSTALL_TARGET" ]]; then
-    cma_die "install: $CMA_INSTALL_TARGET exists and is NOT a symlink. Remove it manually if you're sure it's not something you want."
-  fi
+	if [[ -L "$CMA_INSTALL_TARGET" ]]; then
+		local existing
+		existing="$(readlink "$CMA_INSTALL_TARGET")"
+		if [[ "$existing" == "$self" ]]; then
+			cma_ok "already installed at $CMA_INSTALL_TARGET"
+			return 0
+		fi
+		cma_die "install: $CMA_INSTALL_TARGET is a symlink to $existing (not this repo). Remove it manually or run \`uninstall\` there."
+	fi
+	if [[ -e "$CMA_INSTALL_TARGET" ]]; then
+		cma_die "install: $CMA_INSTALL_TARGET exists and is NOT a symlink. Remove it manually if you're sure it's not something you want."
+	fi
 
-  ln -s "$self" "$CMA_INSTALL_TARGET"
-  cma_ok "linked $CMA_INSTALL_TARGET → $self"
-  cma_dim "  ensure ~/.local/bin is on your PATH"
+	ln -s "$self" "$CMA_INSTALL_TARGET"
+	cma_ok "linked $CMA_INSTALL_TARGET → $self"
+	cma_dim "  ensure ~/.local/bin is on your PATH"
 }
 
 cmd_uninstall() {
-  local self="$CMA_BIN/claude-multiacct"
+	local self="$CMA_BIN/claude-multiacct"
 
-  if [[ ! -e "$CMA_INSTALL_TARGET" ]] && [[ ! -L "$CMA_INSTALL_TARGET" ]]; then
-    cma_ok "not installed — nothing to remove"
-    return 0
-  fi
-  if [[ ! -L "$CMA_INSTALL_TARGET" ]]; then
-    cma_die "uninstall: $CMA_INSTALL_TARGET is not a symlink — refusing to touch it"
-  fi
-  local existing; existing="$(readlink "$CMA_INSTALL_TARGET")"
-  if [[ "$existing" != "$self" ]]; then
-    cma_die "uninstall: $CMA_INSTALL_TARGET points at $existing, not this repo — refusing to remove"
-  fi
-  rm -f "$CMA_INSTALL_TARGET"
-  cma_ok "removed $CMA_INSTALL_TARGET"
+	if [[ ! -e "$CMA_INSTALL_TARGET" ]] && [[ ! -L "$CMA_INSTALL_TARGET" ]]; then
+		cma_ok "not installed — nothing to remove"
+		return 0
+	fi
+	if [[ ! -L "$CMA_INSTALL_TARGET" ]]; then
+		cma_die "uninstall: $CMA_INSTALL_TARGET is not a symlink — refusing to touch it"
+	fi
+	local existing
+	existing="$(readlink "$CMA_INSTALL_TARGET")"
+	if [[ "$existing" != "$self" ]]; then
+		cma_die "uninstall: $CMA_INSTALL_TARGET points at $existing, not this repo — refusing to remove"
+	fi
+	rm -f "$CMA_INSTALL_TARGET"
+	cma_ok "removed $CMA_INSTALL_TARGET"
 }
 
 cmd_init() {
-  mkdir -p "$CMA_CONFIG_DIR"
-  if [[ -f "$CMA_CONFIG_FILE" ]]; then
-    cma_warn "config already exists at $CMA_CONFIG_FILE — not overwriting"
-    cma_dim "  to reset: back it up and re-run \`init\`"
-    return 0
-  fi
+	mkdir -p "$CMA_CONFIG_DIR"
+	if [[ -f "$CMA_CONFIG_FILE" ]]; then
+		cma_warn "config already exists at $CMA_CONFIG_FILE — not overwriting"
+		cma_dim "  to reset: back it up and re-run \`init\`"
+		return 0
+	fi
 
-  # Detect the primary's email. The paths themselves are hard-coded in the
-  # example config template (~/.claude, ~/Library/Application Support/Claude);
-  # `sed` substitutes the tilde-forms so the config file is portable across users.
-  local p_email
-  p_email="$(cma_primary_email "$CMA_PRIMARY_USERDATA")"
+	# Detect the primary's email. The paths themselves are hard-coded in the
+	# example config template (~/.claude, ~/Library/Application Support/Claude);
+	# `sed` substitutes the tilde-forms so the config file is portable across users.
+	local p_email
+	p_email="$(cma_primary_email "$CMA_PRIMARY_USERDATA")"
 
-  # Copy the example config and substitute the detected primary.
-  local example="$CMA_REPO_ROOT/config/instances.example.yaml"
-  [[ -f "$example" ]] || cma_die "example config missing at $example"
+	# Copy the example config and substitute the detected primary.
+	local example="$CMA_REPO_ROOT/config/instances.example.yaml"
+	[[ -f "$example" ]] || cma_die "example config missing at $example"
 
-  # `sed` with `|` delimiter avoids escaping the path slashes.
-  sed \
-    -e "s|__PRIMARY_EMAIL__|${p_email:-you@example.com}|g" \
-    -e "s|__PRIMARY_CONFIGDIR__|~/.claude|g" \
-    -e "s|__PRIMARY_USERDATA__|~/Library/Application Support/Claude|g" \
-    "$example" > "$CMA_CONFIG_FILE"
-  chmod 600 "$CMA_CONFIG_FILE"
-  cma_ok "wrote $CMA_CONFIG_FILE"
-  cma_dim "  primary detected: email=${p_email:-unknown}"
-  cma_dim "  next: edit the file to add mirror instances, then run \`add-instance <label>\` OR add via CLI:"
-  cma_dim "    claude-multiacct add-instance b --email you@example.com"
+	# `sed` with `|` delimiter avoids escaping the path slashes.
+	sed \
+		-e "s|__PRIMARY_EMAIL__|${p_email:-you@example.com}|g" \
+		-e "s|__PRIMARY_CONFIGDIR__|~/.claude|g" \
+		-e "s|__PRIMARY_USERDATA__|~/Library/Application Support/Claude|g" \
+		"$example" >"$CMA_CONFIG_FILE"
+	chmod 600 "$CMA_CONFIG_FILE"
+	cma_ok "wrote $CMA_CONFIG_FILE"
+	cma_dim "  primary detected: email=${p_email:-unknown}"
+	cma_dim "  next: edit the file to add mirror instances, then run \`add-instance <label>\` OR add via CLI:"
+	cma_dim "    claude-multiacct add-instance b --email you@example.com"
 
-  # Install the launchd sync agent (idempotent).
-  "$CMA_LIB/install-launchd.sh"
+	# Install the launchd sync agent (idempotent).
+	"$CMA_LIB/install-launchd.sh"
 }
 
 cmd_add_instance() {
-  local label="" email=""
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --email) email="$2"; shift 2 ;;
-      --*) cma_die "add-instance: unknown flag: $1" ;;
-      *) label="$1"; shift ;;
-    esac
-  done
-  [[ -n "$label" ]] || cma_die "add-instance: label required"
-  [[ -n "$email" ]] || cma_die "add-instance: --email required"
-  cma_validate_label "$label"
+	local label="" email=""
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+		--email)
+			email="$2"
+			shift 2
+			;;
+		--*) cma_die "add-instance: unknown flag: $1" ;;
+		*)
+			label="$1"
+			shift
+			;;
+		esac
+	done
+	[[ -n "$label" ]] || cma_die "add-instance: label required"
+	[[ -n "$email" ]] || cma_die "add-instance: --email required"
+	cma_validate_label "$label"
 
-  cma_require yq
-  cma_require_config
+	cma_require yq
+	cma_require_config
 
-  # If already present in instances.yaml, refuse (call repair instead).
-  if yq -r '.instances[].label' "$CMA_CONFIG_FILE" | grep -qxF "$label"; then
-    cma_die "instance '$label' already in $CMA_CONFIG_FILE — use \`repair $label\` to reinstall in place"
-  fi
+	# If already present in instances.yaml, refuse (call repair instead).
+	if yq -r '.instances[].label' "$CMA_CONFIG_FILE" | grep -qxF "$label"; then
+		cma_die "instance '$label' already in $CMA_CONFIG_FILE — use \`repair $label\` to reinstall in place"
+	fi
 
-  # Append the instance to instances.yaml (yq eval-in-place).
-  local snap; snap="$(cma_backup_snapshot "$CMA_CONFIG_FILE" "config")"
-  cma_dim "  snapshot: $snap"
-  yq eval ".instances += [{\"label\": \"$label\", \"email\": \"$email\"}]" -i "$CMA_CONFIG_FILE"
-  cma_ok "added instance '$label' to $CMA_CONFIG_FILE"
+	# Append the instance to instances.yaml (yq eval-in-place).
+	local snap
+	snap="$(cma_backup_snapshot "$CMA_CONFIG_FILE" "config")"
+	cma_dim "  snapshot: $snap"
+	yq eval ".instances += [{\"label\": \"$label\", \"email\": \"$email\"}]" -i "$CMA_CONFIG_FILE"
+	cma_ok "added instance '$label' to $CMA_CONFIG_FILE"
 
-  # Run the installer for the new instance.
-  "$CMA_LIB/install-instance.sh" "$label"
+	# Run the installer for the new instance.
+	"$CMA_LIB/install-instance.sh" "$label"
 
-  # Re-render the launchd plist (idempotent; picks up new mirror path).
-  "$CMA_LIB/install-launchd.sh"
+	# Re-render the launchd plist (idempotent; picks up new mirror path).
+	"$CMA_LIB/install-launchd.sh"
 }
 
 cmd_remove_instance() {
-  local label="" flags=()
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --keep-userdata|--keep-configdir) flags+=("$1"); shift ;;
-      --*) cma_die "remove-instance: unknown flag: $1" ;;
-      *) label="$1"; shift ;;
-    esac
-  done
-  [[ -n "$label" ]] || cma_die "remove-instance: label required"
-  cma_validate_label "$label"
+	local label="" flags=()
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+		--keep-userdata | --keep-configdir)
+			flags+=("$1")
+			shift
+			;;
+		--*) cma_die "remove-instance: unknown flag: $1" ;;
+		*)
+			label="$1"
+			shift
+			;;
+		esac
+	done
+	[[ -n "$label" ]] || cma_die "remove-instance: label required"
+	cma_validate_label "$label"
 
-  cma_require yq
-  cma_require_config
+	cma_require yq
+	cma_require_config
 
-  # Tear down on-disk artifacts first (uses instances.yaml, so remove config LAST).
-  # ${flags[@]+"${flags[@]}"} expands to nothing when the array is empty — safe under set -u.
-  "$CMA_LIB/uninstall-instance.sh" "$label" ${flags[@]+"${flags[@]}"}
+	# Tear down on-disk artifacts first (uses instances.yaml, so remove config LAST).
+	# ${flags[@]+"${flags[@]}"} expands to nothing when the array is empty — safe under set -u.
+	"$CMA_LIB/uninstall-instance.sh" "$label" ${flags[@]+"${flags[@]}"}
 
-  # Remove the instance from instances.yaml.
-  local snap; snap="$(cma_backup_snapshot "$CMA_CONFIG_FILE" "config")"
-  cma_dim "  snapshot: $snap"
-  yq eval "del(.instances[] | select(.label == \"$label\"))" -i "$CMA_CONFIG_FILE"
-  cma_ok "removed instance '$label' from $CMA_CONFIG_FILE"
+	# Remove the instance from instances.yaml.
+	local snap
+	snap="$(cma_backup_snapshot "$CMA_CONFIG_FILE" "config")"
+	cma_dim "  snapshot: $snap"
+	yq eval "del(.instances[] | select(.label == \"$label\"))" -i "$CMA_CONFIG_FILE"
+	cma_ok "removed instance '$label' from $CMA_CONFIG_FILE"
 }
 
 cmd_list() {
-  cma_require_config
-  # Forward any flags (currently --tsv) through to discover.sh. The forwarded
-  # arg is validated inside discover.sh; unknown flags there fall out of the
-  # `--tsv`-only case and get treated as a label (which discover ignores).
-  "$CMA_LIB/discover.sh" "$@"
+	cma_require_config
+	# Forward any flags (currently --tsv) through to discover.sh. The forwarded
+	# arg is validated inside discover.sh; unknown flags there fall out of the
+	# `--tsv`-only case and get treated as a label (which discover ignores).
+	"$CMA_LIB/discover.sh" "$@"
 }
 
 cmd_repair() {
-  cma_require_config
-  local label="${1:-}"
-  if [[ -n "$label" ]]; then
-    cma_validate_label "$label"
-    "$CMA_LIB/install-instance.sh" "$label"
-  else
-    # Repair all instances.
-    local l
-    while IFS= read -r l; do
-      [[ -z "$l" ]] && continue
-      "$CMA_LIB/install-instance.sh" "$l"
-    done < <(cma_list_labels)
-  fi
-  # Always re-render the launchd plist.
-  "$CMA_LIB/install-launchd.sh"
+	cma_require_config
+	local label="${1:-}"
+	if [[ -n "$label" ]]; then
+		cma_validate_label "$label"
+		"$CMA_LIB/install-instance.sh" "$label"
+	else
+		# Repair all instances.
+		local l
+		while IFS= read -r l; do
+			[[ -z "$l" ]] && continue
+			"$CMA_LIB/install-instance.sh" "$l"
+		done < <(cma_list_labels)
+	fi
+	# Always re-render the launchd plist.
+	"$CMA_LIB/install-launchd.sh"
 }
 
 cmd_sync_now() {
-  cma_require_config
-  cma_say "running sync manually (primary → mirrors)"
-  "$CMA_BIN/claude-sessions-sync.sh"
-  cma_ok "sync complete — see $CMA_LOG_DIR/sessions-sync.log"
+	cma_require_config
+	cma_say "running sync manually (primary → mirrors)"
+	"$CMA_BIN/claude-sessions-sync.sh"
+	cma_ok "sync complete — see $CMA_LOG_DIR/sessions-sync.log"
 }
 
 # refresh-clones — rebuild every mirror's clone from the current
@@ -244,153 +260,225 @@ cmd_sync_now() {
 # part of applying an update, and blocking on the primary would defeat the
 # entire point of the WatchPaths trigger.
 cmd_refresh_clones() {
-  cma_require_config
+	cma_require_config
 
-  local log="$CMA_LOG_DIR/clone-refresh.log"
-  mkdir -p "$(dirname "$log")"
+	local log="$CMA_LOG_DIR/clone-refresh.log"
+	mkdir -p "$(dirname "$log")"
 
-  # `pgrep -f` regex matches any process whose command line contains
-  # "Claude Account <anything>.app/Contents/MacOS" — that's the exec path of
-  # a running mirror clone (either the wrapper script or the Claude.real
-  # process image). Matches the wrapper, main binary, and every helper.
-  if pgrep -f 'Claude Account .*\.app/Contents/MacOS' >/dev/null 2>&1; then
-    local msg="refresh-clones: at least one mirror clone is running; quit all Claude Account *.app processes and retry"
-    printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$msg" >>"$log"
-    cma_die "$msg"
-  fi
+	# `pgrep -f` regex matches any process whose command line contains
+	# "Claude Account <anything>.app/Contents/MacOS" — that's the exec path of
+	# a running mirror clone (either the wrapper script or the Claude.real
+	# process image). Matches the wrapper, main binary, and every helper.
+	if pgrep -f 'Claude Account .*\.app/Contents/MacOS' >/dev/null 2>&1; then
+		local msg="refresh-clones: at least one mirror clone is running; quit all Claude Account *.app processes and retry"
+		printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$msg" >>"$log"
+		cma_die "$msg"
+	fi
 
-  local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  printf '%s === refresh-clones begin ===\n' "$ts" >>"$log"
+	local ts
+	ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+	printf '%s === refresh-clones begin ===\n' "$ts" >>"$log"
 
-  local label rc=0
-  while IFS= read -r label; do
-    [[ -z "$label" ]] && continue
-    local row; row="$(cma_resolve_instance "$label")"
-    local _l _e cdir udata _cli app bid
-    IFS=$'\t' read -r _l _e cdir udata _cli app bid <<<"$row"
-    printf '%s   rebuilding clone label=%s → %s (bundleId=%s)\n' \
-      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$label" "$app" "$bid" >>"$log"
-    # shellcheck disable=SC2310  # keep going through other mirrors on one failure
-    if ! "$CMA_LIB/build-clone-app.sh" "$label" "$bid" "$cdir" "$udata" "$app" >>"$log" 2>&1; then
-      printf '%s   ✗ build-clone-app.sh failed for label=%s\n' \
-        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$label" >>"$log"
-      rc=1
-    else
-      printf '%s   ✓ clone rebuilt for label=%s\n' \
-        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$label" >>"$log"
-    fi
-  done < <(cma_list_labels)
+	local label rc=0
+	while IFS= read -r label; do
+		[[ -z "$label" ]] && continue
+		local row
+		row="$(cma_resolve_instance "$label")"
+		local _l _e cdir udata _cli app bid
+		IFS=$'\t' read -r _l _e cdir udata _cli app bid <<<"$row"
+		printf '%s   rebuilding clone label=%s → %s (bundleId=%s)\n' \
+			"$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$label" "$app" "$bid" >>"$log"
+		# shellcheck disable=SC2310  # keep going through other mirrors on one failure
+		if ! "$CMA_LIB/build-clone-app.sh" "$label" "$bid" "$cdir" "$udata" "$app" >>"$log" 2>&1; then
+			printf '%s   ✗ build-clone-app.sh failed for label=%s\n' \
+				"$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$label" >>"$log"
+			rc=1
+		else
+			printf '%s   ✓ clone rebuilt for label=%s\n' \
+				"$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$label" >>"$log"
+		fi
+	done < <(cma_list_labels)
 
-  printf '%s === refresh-clones end (rc=%d) ===\n' \
-    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$rc" >>"$log"
+	printf '%s === refresh-clones end (rc=%d) ===\n' \
+		"$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$rc" >>"$log"
 
-  if [[ $rc -eq 0 ]]; then
-    cma_ok "refresh-clones complete — see $log"
-  else
-    cma_warn "refresh-clones finished with errors — see $log"
-  fi
-  return "$rc"
+	if [[ $rc -eq 0 ]]; then
+		cma_ok "refresh-clones complete — see $log"
+	else
+		cma_warn "refresh-clones finished with errors — see $log"
+	fi
+	return "$rc"
 }
 
 # sync-log — QoL wrapper over `cat` / `tail -f` on the sync worker's log file.
 # The log is where every sync (launchd-triggered or manual) records its
 # progress; users with drifted mirrors reach for it first.
 cmd_sync_log() {
-  local follow=0
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --tail) follow=1; shift ;;
-      --*)    cma_die "sync-log: unknown flag: $1" ;;
-      *)      cma_die "sync-log: unexpected argument: $1" ;;
-    esac
-  done
-  local log="$CMA_LOG_DIR/sessions-sync.log"
-  [[ -f "$log" ]] || cma_die "sync-log: log not found at $log — has the sync worker run yet?"
-  if [[ $follow -eq 1 ]]; then
-    exec tail -f "$log"
-  else
-    cat "$log"
-  fi
+	local follow=0
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+		--tail)
+			follow=1
+			shift
+			;;
+		--*) cma_die "sync-log: unknown flag: $1" ;;
+		*) cma_die "sync-log: unexpected argument: $1" ;;
+		esac
+	done
+	local log="$CMA_LOG_DIR/sessions-sync.log"
+	[[ -f "$log" ]] || cma_die "sync-log: log not found at $log — has the sync worker run yet?"
+	if [[ $follow -eq 1 ]]; then
+		exec tail -f "$log"
+	else
+		cat "$log"
+	fi
 }
 
 cmd_doctor() {
-  cma_say "claude-multiacct doctor"
-  cma_dim "  repo:   $CMA_REPO_ROOT"
-  cma_dim "  config: $CMA_CONFIG_FILE"
-  cma_dim "  logs:   $CMA_LOG_DIR"
-  cma_dim "  backups: $CMA_BACKUP_DIR"
-  printf '\n' >&2
+	cma_say "claude-multiacct doctor"
+	cma_dim "  repo:   $CMA_REPO_ROOT"
+	cma_dim "  config: $CMA_CONFIG_FILE"
+	cma_dim "  logs:   $CMA_LOG_DIR"
+	cma_dim "  backups: $CMA_BACKUP_DIR"
+	printf '\n' >&2
 
-  # Config presence.
-  if [[ -f "$CMA_CONFIG_FILE" ]]; then
-    cma_ok "config file present"
-  else
-    cma_warn "config file MISSING — run \`init\` first"
-    return 1
-  fi
+	# Config presence.
+	if [[ -f "$CMA_CONFIG_FILE" ]]; then
+		cma_ok "config file present"
+	else
+		cma_warn "config file MISSING — run \`init\` first"
+		return 1
+	fi
 
-  # Launchd agent state. All three agents get the same treatment.
-  local label
-  for label in com.user.claude-sessions-sync com.user.claude-clone-refresh com.user.claude-metadata-symlink; do
-    if launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; then
-      cma_ok "launchd agent $label loaded"
-      launchctl print "gui/$(id -u)/$label" 2>/dev/null | grep -E 'state|last exit code|watch paths' | sed 's/^/  /' >&2 || true
-    else
-      cma_warn "launchd agent $label NOT loaded"
-    fi
-  done
+	# Launchd agent state. All three agents get the same treatment.
+	local label
+	for label in com.user.claude-sessions-sync com.user.claude-clone-refresh com.user.claude-metadata-symlink; do
+		if launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; then
+			cma_ok "launchd agent $label loaded"
+			launchctl print "gui/$(id -u)/$label" 2>/dev/null | grep -E 'state|last exit code|watch paths' | sed 's/^/  /' >&2 || true
+		else
+			cma_warn "launchd agent $label NOT loaded"
+		fi
+	done
 
-  # Per-instance discovery.
-  printf '\n' >&2
-  "$CMA_LIB/discover.sh"
+	# Per-instance discovery.
+	printf '\n' >&2
+	"$CMA_LIB/discover.sh"
 }
 
 cmd_qa() {
-  local sub="${1:-}"
-  case "$sub" in
-    lint)
-      # -P bin -P lib resolves the source directives in bin/claude-multiacct
-      # (source=../lib/common.sh) and lib/*.sh (source=./common.sh) so SC1091
-      # doesn't fire. bats files are shellcheckable too — they're bash + a bats
-      # preamble shellcheck tolerates fine.
-      cma_require shellcheck
-      cma_say "shellcheck bin/ lib/ tests/"
-      shellcheck -x -P "$CMA_BIN" -P "$CMA_LIB" "$CMA_BIN"/* "$CMA_LIB"/* "$CMA_REPO_ROOT/tests"/*.bats 2>&1 || return $?
-      cma_ok "shellcheck clean"
+	local sub="${1:-}"
+	case "$sub" in
+	lint)
+		# -P bin -P lib resolves the source directives in bin/claude-multiacct
+		# (source=../lib/common.sh) and lib/*.sh (source=./common.sh) so SC1091
+		# doesn't fire. bats files are shellcheckable too — they're bash + a bats
+		# preamble shellcheck tolerates fine.
+		cma_require shellcheck
+		cma_say "shellcheck bin/ lib/ tests/"
+		shellcheck -x -P "$CMA_BIN" -P "$CMA_LIB" "$CMA_BIN"/* "$CMA_LIB"/* "$CMA_REPO_ROOT/tests"/*.bats 2>&1 || return $?
+		cma_ok "shellcheck clean"
 
-      # gitleaks + yamllint are now REQUIRED (not optional). Both are pinned in
-      # mise.toml — a missing tool means the caller hasn't run `mise install`.
-      cma_require gitleaks
-      cma_say "gitleaks"
-      gitleaks detect --no-git --source "$CMA_REPO_ROOT" --config "$CMA_REPO_ROOT/.gitleaks.toml" --no-banner 2>&1 || return $?
-      cma_ok "gitleaks clean"
+		# shfmt in check-only mode. Reads .editorconfig for its indent settings
+		# (matches the shell block: indent_size=2, binary_next_line=true,
+		# switch_case_indent=true, space_redirects=true).
+		cma_require shfmt
+		cma_say "shfmt bin/ lib/ tests/"
+		shfmt -d "$CMA_BIN"/* "$CMA_LIB"/*.sh "$CMA_REPO_ROOT/tests"/*.bats 2>&1 || return $?
+		cma_ok "shfmt clean"
 
-      cma_require yamllint
-      cma_say "yamllint config/ + .github/"
-      # config/ holds our own scaffold yaml; .github/ holds Actions workflows,
-      # dependabot.yml, ISSUE_TEMPLATE forms, all of which should stay
-      # yamllint-clean so CI never breaks silently. Use a while-read loop
-      # over find (not `for … $(find …)`) so paths containing whitespace or
-      # weird characters don't split. Zero paths → yamllint runs with only
-      # the config/ globs, which is fine.
-      local yaml_targets=(
-        "$CMA_REPO_ROOT/config"/*.yaml
-      )
-      if [[ -d "$CMA_REPO_ROOT/.github" ]]; then
-        while IFS= read -r -d '' f; do
-          yaml_targets+=("$f")
-        done < <(find "$CMA_REPO_ROOT/.github" -type f \( -name '*.yml' -o -name '*.yaml' \) -print0)
-      fi
-      yamllint "${yaml_targets[@]}" 2>&1 || return $?
-      cma_ok "yamllint clean"
-      ;;
-    test)
-      cma_require bats
-      cma_say "bats tests/"
-      bats "$CMA_REPO_ROOT/tests"
-      ;;
-    *) cma_die "qa: expected {lint|test}, got: ${sub:-<empty>}" ;;
-  esac
+		# gitleaks + yamllint are now REQUIRED (not optional). Both are pinned in
+		# mise.toml — a missing tool means the caller hasn't run `mise install`.
+		cma_require gitleaks
+		cma_say "gitleaks"
+		gitleaks detect --no-git --source "$CMA_REPO_ROOT" --config "$CMA_REPO_ROOT/.gitleaks.toml" --no-banner 2>&1 || return $?
+		cma_ok "gitleaks clean"
+
+		cma_require yamllint
+		cma_say "yamllint config/ + .github/"
+		# config/ holds our own scaffold yaml; .github/ holds Actions workflows,
+		# dependabot.yml, ISSUE_TEMPLATE forms, all of which should stay
+		# yamllint-clean so CI never breaks silently. Use a while-read loop
+		# over find (not `for … $(find …)`) so paths containing whitespace or
+		# weird characters don't split. Zero paths → yamllint runs with only
+		# the config/ globs, which is fine.
+		local yaml_targets=(
+			"$CMA_REPO_ROOT/config"/*.yaml
+		)
+		if [[ -d "$CMA_REPO_ROOT/.github" ]]; then
+			while IFS= read -r -d '' f; do
+				yaml_targets+=("$f")
+			done < <(find "$CMA_REPO_ROOT/.github" -type f \( -name '*.yml' -o -name '*.yaml' \) -print0)
+		fi
+		yamllint "${yaml_targets[@]}" 2>&1 || return $?
+		cma_ok "yamllint clean"
+
+		# markdownlint on README + docs. Skips the changelog + generated files.
+		cma_require markdownlint-cli2
+		cma_say "markdownlint README + docs"
+		markdownlint-cli2 "$CMA_REPO_ROOT/README.md" "$CMA_REPO_ROOT/docs/**/*.md" 2>&1 || return $?
+		cma_ok "markdownlint clean"
+		;;
+	format)
+		# Rewrites shell files in-place per .editorconfig.
+		cma_require shfmt
+		cma_say "shfmt -w bin/ lib/ tests/"
+		shfmt -w "$CMA_BIN"/* "$CMA_LIB"/*.sh "$CMA_REPO_ROOT/tests"/*.bats
+		cma_ok "shfmt applied"
+		;;
+	test)
+		cma_require bats
+		cma_say "bats tests/"
+		bats "$CMA_REPO_ROOT/tests"
+		;;
+	"test:coverage")
+		# Bash line coverage via kcov, wrapping the bats runner.
+		#
+		# macOS-note: kcov uses PTRACE_ATTACH under the hood on darwin. On some
+		# macOS versions it hangs when kcov spawns bats which spawns bash — the
+		# per-descendant instrumentation deadlocks under System Integrity
+		# Protection. When running on macOS locally, `qa test` (without coverage)
+		# is the fallback. CI runs this same command on ubuntu-latest where
+		# kcov works reliably.
+		cma_require bats
+		if ! command -v kcov >/dev/null 2>&1; then
+			cma_die "qa test:coverage: kcov not on PATH. Install: brew install kcov (macOS) or apt install kcov (Linux)."
+		fi
+		local cov_dir="$CMA_REPO_ROOT/coverage"
+		rm -rf "$cov_dir"
+		mkdir -p "$cov_dir"
+		cma_say "kcov + bats tests/ (threshold: 90% line coverage)"
+		kcov \
+			--include-path="$CMA_BIN,$CMA_LIB" \
+			--exclude-path="$CMA_REPO_ROOT/node_modules,$CMA_REPO_ROOT/.mise,$CMA_REPO_ROOT/coverage,$CMA_REPO_ROOT/tests" \
+			--bash-parse-files-in-dir="$CMA_BIN,$CMA_LIB" \
+			--bash-dont-parse-binary-dir \
+			"$cov_dir" \
+			bats "$CMA_REPO_ROOT/tests" || return $?
+		# Extract percent-covered from kcov's summary JSON. kcov drops
+		# coverage.json next to index.html in the top-level output dir.
+		local pct
+		if [[ -f "$cov_dir/coverage.json" ]]; then
+			pct=$(yq -r '.percent_covered' "$cov_dir/coverage.json" 2>/dev/null || echo 0)
+		else
+			# Fall back to the merged report path used by newer kcov builds.
+			local merged
+			merged=$(find "$cov_dir" -type f -name 'coverage.json' -print -quit 2>/dev/null || true)
+			pct=$(yq -r '.percent_covered' "$merged" 2>/dev/null || echo 0)
+		fi
+		# kcov may fail to produce coverage.json on macOS SIP-restricted runs.
+		# In that case, treat as fatal so CI (Linux) is the source of truth.
+		if [[ -z "$pct" || "$pct" == "0" ]]; then
+			cma_die "qa test:coverage: could not read coverage.json from $cov_dir (kcov may be silently failing under SIP; CI runs this on ubuntu-latest which is reliable)."
+		fi
+		cma_say "coverage: ${pct}%"
+		# bash lacks native float comparison — use awk. Fail loud if below 90.
+		awk -v p="$pct" 'BEGIN { exit !(p+0 >= 90) }' ||
+			cma_die "qa test:coverage: bash line coverage ${pct}% is below the 90% threshold"
+		cma_ok "coverage ≥ 90% (${pct}%)"
+		;;
+	*) cma_die "qa: expected {lint|format|test|test:coverage}, got: ${sub:-<empty>}" ;;
+	esac
 }
 
 # Auto-migrate: detect + heal bundle-id drift transparently at CLI startup so
@@ -416,71 +504,75 @@ cmd_qa() {
 # set it in setup() so hermetic runs don't accidentally trip auto-migrate
 # when they explicitly mutate a bundle-id fixture (e.g. clone-app.bats).
 _cma_maybe_migrate() {
-  [[ "${CMA_SKIP_AUTO_MIGRATE:-0}" == "1" ]] && return 0
-  [[ -f "$CMA_CONFIG_FILE" ]] || return 0
-  command -v yq >/dev/null 2>&1 || return 0
-  command -v plutil >/dev/null 2>&1 || return 0
+	[[ "${CMA_SKIP_AUTO_MIGRATE:-0}" == "1" ]] && return 0
+	[[ -f "$CMA_CONFIG_FILE" ]] || return 0
+	command -v yq >/dev/null 2>&1 || return 0
+	command -v plutil >/dev/null 2>&1 || return 0
 
-  local drifted=()
-  local label
-  while IFS= read -r label; do
-    [[ -z "$label" ]] && continue
-    # cma_resolve_instance dies on invalid rows — swallow so one bad
-    # entry doesn't take down the whole CLI.
-    local row
-    # shellcheck disable=SC2310  # deliberate: swallow per-instance errors to keep the CLI usable
-    row="$(cma_resolve_instance "$label" 2>/dev/null)" || continue
-    local _l _e _cdir _udata _cli app expected_bid
-    IFS=$'\t' read -r _l _e _cdir _udata _cli app expected_bid <<<"$row"
-    [[ -f "$app/Contents/Info.plist" ]] || continue
-    local actual_bid
-    actual_bid="$(plutil -extract CFBundleIdentifier raw "$app/Contents/Info.plist" 2>/dev/null || printf '')"
-    [[ -z "$actual_bid" || "$actual_bid" == "$expected_bid" ]] && continue
-    drifted+=("$label")
-  done < <(yq -r '.instances[].label' "$CMA_CONFIG_FILE" 2>/dev/null || true)
+	local drifted=()
+	local label
+	while IFS= read -r label; do
+		[[ -z "$label" ]] && continue
+		# cma_resolve_instance dies on invalid rows — swallow so one bad
+		# entry doesn't take down the whole CLI.
+		local row
+		# shellcheck disable=SC2310  # deliberate: swallow per-instance errors to keep the CLI usable
+		row="$(cma_resolve_instance "$label" 2>/dev/null)" || continue
+		local _l _e _cdir _udata _cli app expected_bid
+		IFS=$'\t' read -r _l _e _cdir _udata _cli app expected_bid <<<"$row"
+		[[ -f "$app/Contents/Info.plist" ]] || continue
+		local actual_bid
+		actual_bid="$(plutil -extract CFBundleIdentifier raw "$app/Contents/Info.plist" 2>/dev/null || printf '')"
+		[[ -z "$actual_bid" || "$actual_bid" == "$expected_bid" ]] && continue
+		drifted+=("$label")
+	done < <(yq -r '.instances[].label' "$CMA_CONFIG_FILE" 2>/dev/null || true)
 
-  [[ ${#drifted[@]} -eq 0 ]] && return 0
+	[[ ${#drifted[@]} -eq 0 ]] && return 0
 
-  # Any mirror clone running → refuse to auto-rebuild (would corrupt a live
-  # bundle) but let the user's subcommand proceed.
-  if pgrep -f 'Claude Account .*\.app/Contents/MacOS' >/dev/null 2>&1; then
-    cma_warn "bundle-id drift on: ${drifted[*]} — quit all Claude Account *.app processes and re-run any command to auto-migrate"
-    return 0
-  fi
+	# Any mirror clone running → refuse to auto-rebuild (would corrupt a live
+	# bundle) but let the user's subcommand proceed.
+	if pgrep -f 'Claude Account .*\.app/Contents/MacOS' >/dev/null 2>&1; then
+		cma_warn "bundle-id drift on: ${drifted[*]} — quit all Claude Account *.app processes and re-run any command to auto-migrate"
+		return 0
+	fi
 
-  cma_say "auto-migrating bundle-id drift on: ${drifted[*]}"
-  local l
-  for l in "${drifted[@]}"; do
-    "$CMA_LIB/install-instance.sh" "$l" >&2
-  done
-  "$CMA_LIB/install-launchd.sh" >&2
-  cma_ok "auto-migrated: ${drifted[*]}"
+	cma_say "auto-migrating bundle-id drift on: ${drifted[*]}"
+	local l
+	for l in "${drifted[@]}"; do
+		"$CMA_LIB/install-instance.sh" "$l" >&2
+	done
+	"$CMA_LIB/install-launchd.sh" >&2
+	cma_ok "auto-migrated: ${drifted[*]}"
 }
 
 main() {
-  local cmd="${1:-}"; shift || true
-  # Skip auto-migrate on informational commands — no side effects wanted for
-  # `--help`. Every real subcommand gets the drift check.
-  case "$cmd" in
-    ""|-h|--help|help) ;;
-    *) _cma_maybe_migrate ;;
-  esac
-  case "$cmd" in
-    ""|-h|--help|help) usage ;;
-    install)           cmd_install "$@" ;;
-    uninstall)         cmd_uninstall "$@" ;;
-    init)              cmd_init "$@" ;;
-    add-instance)      cmd_add_instance "$@" ;;
-    remove-instance)   cmd_remove_instance "$@" ;;
-    list)              cmd_list "$@" ;;
-    repair)            cmd_repair "$@" ;;
-    refresh-clones)    cmd_refresh_clones "$@" ;;
-    sync-now)          cmd_sync_now "$@" ;;
-    sync-log)          cmd_sync_log "$@" ;;
-    doctor)            cmd_doctor "$@" ;;
-    qa)                cmd_qa "$@" ;;
-    *)                 usage; cma_die "unknown subcommand: $cmd" ;;
-  esac
+	local cmd="${1:-}"
+	shift || true
+	# Skip auto-migrate on informational commands — no side effects wanted for
+	# `--help`. Every real subcommand gets the drift check.
+	case "$cmd" in
+	"" | -h | --help | help) ;;
+	*) _cma_maybe_migrate ;;
+	esac
+	case "$cmd" in
+	"" | -h | --help | help) usage ;;
+	install) cmd_install "$@" ;;
+	uninstall) cmd_uninstall "$@" ;;
+	init) cmd_init "$@" ;;
+	add-instance) cmd_add_instance "$@" ;;
+	remove-instance) cmd_remove_instance "$@" ;;
+	list) cmd_list "$@" ;;
+	repair) cmd_repair "$@" ;;
+	refresh-clones) cmd_refresh_clones "$@" ;;
+	sync-now) cmd_sync_now "$@" ;;
+	sync-log) cmd_sync_log "$@" ;;
+	doctor) cmd_doctor "$@" ;;
+	qa) cmd_qa "$@" ;;
+	*)
+		usage
+		cma_die "unknown subcommand: $cmd"
+		;;
+	esac
 }
 
 main "$@"

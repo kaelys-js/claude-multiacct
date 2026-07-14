@@ -35,22 +35,30 @@ CMA_BACKUP_DIR="${CMA_BACKUP_DIR:-$HOME/.claude-multiacct-backups}"
 
 # Colour when stdout is a TTY.
 if [[ -t 1 ]]; then
-  CMA_C_INFO=$'\033[1;34m'  # blue
-  CMA_C_WARN=$'\033[1;33m'  # yellow
-  CMA_C_ERR=$'\033[1;31m'   # red
-  CMA_C_OK=$'\033[1;32m'    # green
+  CMA_C_INFO=$'\033[1;34m' # blue
+  CMA_C_WARN=$'\033[1;33m' # yellow
+  CMA_C_ERR=$'\033[1;31m'  # red
+  CMA_C_OK=$'\033[1;32m'   # green
   CMA_C_DIM=$'\033[2m'
   CMA_C_END=$'\033[0m'
 else
-  CMA_C_INFO=""; CMA_C_WARN=""; CMA_C_ERR=""; CMA_C_OK=""; CMA_C_DIM=""; CMA_C_END=""
+  CMA_C_INFO=""
+  CMA_C_WARN=""
+  CMA_C_ERR=""
+  CMA_C_OK=""
+  CMA_C_DIM=""
+  CMA_C_END=""
 fi
 
-cma_say()  { printf "%s==>%s %s\n" "$CMA_C_INFO" "$CMA_C_END" "$*" >&2; }
-cma_ok()   { printf "%s ✓ %s%s\n" "$CMA_C_OK" "$*" "$CMA_C_END" >&2; }
+cma_say() { printf "%s==>%s %s\n" "$CMA_C_INFO" "$CMA_C_END" "$*" >&2; }
+cma_ok() { printf "%s ✓ %s%s\n" "$CMA_C_OK" "$*" "$CMA_C_END" >&2; }
 cma_warn() { printf "%s[!]%s %s\n" "$CMA_C_WARN" "$CMA_C_END" "$*" >&2; }
-cma_err()  { printf "%s[✗]%s %s\n" "$CMA_C_ERR" "$CMA_C_END" "$*" >&2; }
-cma_die()  { cma_err "$*"; exit 1; }
-cma_dim()  { printf "%s%s%s\n" "$CMA_C_DIM" "$*" "$CMA_C_END" >&2; }
+cma_err() { printf "%s[✗]%s %s\n" "$CMA_C_ERR" "$CMA_C_END" "$*" >&2; }
+cma_die() {
+  cma_err "$*"
+  exit 1
+}
+cma_dim() { printf "%s%s%s\n" "$CMA_C_DIM" "$*" "$CMA_C_END" >&2; }
 
 # ── Tooling ────────────────────────────────────────────────────────────────
 
@@ -75,10 +83,10 @@ if [[ -d "$HOME/.local/share/mise/installs" ]]; then
   shopt -q nullglob && _cma_had_nullglob=0 || true
   shopt -s nullglob
   for _cma_tool_dir in "$HOME/.local/share/mise/installs/yq"/* \
-                       "$HOME/.local/share/mise/installs/shellcheck"/*/bin \
-                       "$HOME/.local/share/mise/installs/bats"/*/libexec/bin \
-                       "$HOME/.local/share/mise/installs/gitleaks"/*/bin \
-                       "$HOME/.local/share/mise/installs/yamllint"/*/bin; do
+    "$HOME/.local/share/mise/installs/shellcheck"/*/bin \
+    "$HOME/.local/share/mise/installs/bats"/*/libexec/bin \
+    "$HOME/.local/share/mise/installs/gitleaks"/*/bin \
+    "$HOME/.local/share/mise/installs/yamllint"/*/bin; do
     [[ -d "$_cma_tool_dir" ]] && PATH="$_cma_tool_dir:$PATH"
   done
   [[ $_cma_had_nullglob -eq 0 ]] || shopt -u nullglob
@@ -89,7 +97,7 @@ fi
 # Require a binary on PATH; die loud if missing.
 cma_require() {
   local bin="$1"
-  command -v "$bin" >/dev/null 2>&1 || cma_die "missing dependency: $bin (install via \`mise install\` from the repo root)"
+  command -v "$bin" > /dev/null 2>&1 || cma_die "missing dependency: $bin (install via \`mise install\` from the repo root)"
 }
 
 # ── Label validation ──────────────────────────────────────────────────────
@@ -100,8 +108,8 @@ CMA_LABEL_RE='^[a-z0-9]([a-z0-9-]*[a-z0-9])?$'
 
 cma_validate_label() {
   local label="$1"
-  [[ "$label" =~ $CMA_LABEL_RE ]] || \
-    cma_die "invalid label '$label' — must match ${CMA_LABEL_RE#^} (lowercase letters, digits, hyphens; no leading/trailing hyphen)"
+  [[ "$label" =~ $CMA_LABEL_RE ]] \
+    || cma_die "invalid label '$label' — must match ${CMA_LABEL_RE#^} (lowercase letters, digits, hyphens; no leading/trailing hyphen)"
   [[ "$label" != "primary" ]] || cma_die "label 'primary' is reserved for the primary instance"
 }
 
@@ -120,7 +128,8 @@ CMA_SOURCE_CLAUDE_APP="${CMA_SOURCE_CLAUDE_APP:-/Applications/Claude.app}"
 cma_default_userdata() {
   local label="$1"
   # Titlecase the label for the userData folder name (matches how Claude-B is named).
-  local title; title="$(tr '[:lower:]' '[:upper:]' <<<"${label:0:1}")${label:1}"
+  local title
+  title="$(tr '[:lower:]' '[:upper:]' <<< "${label:0:1}")${label:1}"
   printf '%s\n' "$HOME/Library/Application Support/Claude-$title"
 }
 cma_default_configdir() {
@@ -133,7 +142,8 @@ cma_default_cli_launcher() {
 }
 cma_default_app_bundle() {
   local label="$1"
-  local title; title="$(tr '[:lower:]' '[:upper:]' <<<"${label:0:1}")${label:1}"
+  local title
+  title="$(tr '[:lower:]' '[:upper:]' <<< "${label:0:1}")${label:1}"
   printf '%s\n' "$HOME/Applications/Claude Account $title.app"
 }
 cma_default_bundle_id() {
@@ -148,8 +158,8 @@ cma_default_bundle_id() {
 
 # Read instances.yaml. Refuse if not initialised.
 cma_require_config() {
-  [[ -f "$CMA_CONFIG_FILE" ]] || \
-    cma_die "$CMA_CONFIG_FILE not found — run \`claude-multiacct init\` first"
+  [[ -f "$CMA_CONFIG_FILE" ]] \
+    || cma_die "$CMA_CONFIG_FILE not found — run \`claude-multiacct init\` first"
 }
 
 # List all labels from instances.yaml, one per line.
@@ -177,10 +187,14 @@ cma_resolve_instance() {
   [[ -n "$email" ]] || cma_die "instance '$label' not found in $CMA_CONFIG_FILE"
 
   # Expand ~ and defaults.
-  cdir="${cdir/#\~/$HOME}"; [[ -n "$cdir" ]] || cdir="$(cma_default_configdir "$label")"
-  udata="${udata/#\~/$HOME}"; [[ -n "$udata" ]] || udata="$(cma_default_userdata "$label")"
-  launcher="${launcher/#\~/$HOME}"; [[ -n "$launcher" ]] || launcher="$(cma_default_cli_launcher "$label")"
-  app="${app/#\~/$HOME}"; [[ -n "$app" ]] || app="$(cma_default_app_bundle "$label")"
+  cdir="${cdir/#\~/$HOME}"
+  [[ -n "$cdir" ]] || cdir="$(cma_default_configdir "$label")"
+  udata="${udata/#\~/$HOME}"
+  [[ -n "$udata" ]] || udata="$(cma_default_userdata "$label")"
+  launcher="${launcher/#\~/$HOME}"
+  [[ -n "$launcher" ]] || launcher="$(cma_default_cli_launcher "$label")"
+  app="${app/#\~/$HOME}"
+  [[ -n "$app" ]] || app="$(cma_default_app_bundle "$label")"
   [[ -n "$bid" ]] || bid="$(cma_default_bundle_id "$label")"
 
   # Print as a TSV row so callers can `read -r label email cdir udata launcher app bid <<<"$(cma_resolve_instance x)"`.
@@ -213,9 +227,9 @@ cma_primary_uuids() {
   local dir="$userdata/claude-code-sessions"
   [[ -d "$dir" ]] || cma_die "primary claude-code-sessions dir missing at $dir — has Claude Desktop been run at least once?"
   local acct org
-  acct="$(find "$dir" -mindepth 1 -maxdepth 1 -type d ! -name '.*' 2>/dev/null | head -1)"
+  acct="$(find "$dir" -mindepth 1 -maxdepth 1 -type d ! -name '.*' 2> /dev/null | head -1)"
   [[ -n "$acct" ]] || cma_die "no account UUID found under $dir"
-  org="$(find "$acct" -mindepth 1 -maxdepth 1 -type d ! -name '.*' 2>/dev/null | head -1)"
+  org="$(find "$acct" -mindepth 1 -maxdepth 1 -type d ! -name '.*' 2> /dev/null | head -1)"
   [[ -n "$org" ]] || cma_die "no org UUID found under $acct"
   printf '%s\t%s\n' "$(basename "$acct")" "$(basename "$org")"
 }
@@ -238,7 +252,7 @@ try:
   print(d.get("oauthAccount", {}).get("emailAddress") or d.get("userEmail") or "")
 except Exception:
   print("")
-' "$cfg" 2>/dev/null)"
+' "$cfg" 2> /dev/null)"
     [[ -n "$email" ]] && break
   done
   printf '%s\n' "$email"
@@ -249,7 +263,8 @@ except Exception:
 cma_backup_snapshot() {
   local src="$1" label="${2:-}"
   [[ -e "$src" ]] || return 0
-  local ts; ts="$(date +%Y%m%d-%H%M%S)"
+  local ts
+  ts="$(date +%Y%m%d-%H%M%S)"
   local dst="$CMA_BACKUP_DIR/$ts${label:+-$label}"
   mkdir -p "$dst"
   cp -R "$src" "$dst/"

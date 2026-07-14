@@ -33,13 +33,15 @@ main() {
   [[ -d "$src" ]] || cma_die "source Claude Desktop bundle missing at $src (override with CMA_SOURCE_CLAUDE_APP)"
   [[ -f "$src/Contents/Info.plist" ]] || cma_die "source bundle at $src has no Contents/Info.plist"
 
-  local title; title="$(tr '[:lower:]' '[:upper:]' <<<"${label:0:1}")${label:1}"
+  local title
+  title="$(tr '[:lower:]' '[:upper:]' <<< "${label:0:1}")${label:1}"
 
   # Snapshot the existing Info.plist ONLY. Rebuilds happen automatically after
   # every Claude Desktop update (via the WatchPaths agent), so a 745 MB snapshot
   # per rebuild would blow up ~/.claude-multiacct-backups within a week.
   if [[ -f "$app/Contents/Info.plist" ]]; then
-    local snap; snap="$(cma_backup_snapshot "$app/Contents/Info.plist" "clone-plist-$label")"
+    local snap
+    snap="$(cma_backup_snapshot "$app/Contents/Info.plist" "clone-plist-$label")"
     cma_dim "  snapshot: $snap (Info.plist only)"
   fi
 
@@ -80,8 +82,8 @@ main() {
   #
   # CFBundleDisplayName drives what the user sees in the Dock, app switcher,
   # and menu bar. It does NOT affect helper resolution. Rewriting it is safe.
-  plutil -replace CFBundleIdentifier  -string "$bid"                    "$app/Contents/Info.plist"
-  plutil -replace CFBundleDisplayName -string "Claude Account $title"   "$app/Contents/Info.plist"
+  plutil -replace CFBundleIdentifier -string "$bid" "$app/Contents/Info.plist"
+  plutil -replace CFBundleDisplayName -string "Claude Account $title" "$app/Contents/Info.plist"
 
   # Move the real binary out of the way so we can put the wrapper at its name.
   mv "$app/Contents/MacOS/$exe" "$app/Contents/MacOS/$exe.real"
@@ -99,7 +101,7 @@ main() {
   # "Contents/Frameworks/Claude.real Helper.app" — which doesn't exist —
   # and fatally exit with "Unable to find helper app" before any window opens.
   # 2026-07-13 verified by direct-exec of the wrapper without `-a`.
-  cat >"$app/Contents/MacOS/$exe" <<WRAPPER
+  cat > "$app/Contents/MacOS/$exe" << WRAPPER
 #!/usr/bin/env bash
 # Injects the mirror instance's config + user-data-dir before exec-ing the real
 # Claude Desktop binary. Regenerate via \`claude-multiacct repair $label\`.
@@ -116,7 +118,7 @@ WRAPPER
   #      work (verified via `open -b <bundleId>` spawning the guest Claude).
   # Keep the call for older macOS versions where it does something; ignore the
   # rc since it's now expected to be a no-op.
-  xattr -rd com.apple.provenance "$app" 2>/dev/null || true
+  xattr -rd com.apple.provenance "$app" 2> /dev/null || true
 
   # Ad-hoc re-sign the entire clone. Required because we mutated Info.plist
   # (breaks the original signature's plist hash) and injected a wrapper
@@ -126,12 +128,12 @@ WRAPPER
   # Developer ID signature which no longer matches the mutated outer bundle.
   # Errors here are fatal — a bundle that can't be codesigned won't Dock-launch.
   cma_say "codesign --force --deep --sign - $app (~10-30s for a full Electron bundle)"
-  codesign --force --deep --sign - "$app" >/dev/null
+  codesign --force --deep --sign - "$app" > /dev/null
 
   # Register with LaunchServices so the Dock knows about the bundle-id → path
   # mapping. `-f` forces re-register even if the path was previously registered
   # under a different (stale) bundle-id.
-  "$LSREGISTER" -f "$app" >/dev/null
+  "$LSREGISTER" -f "$app" > /dev/null
 
   cma_ok "built clone $app (bundleId=$bid, ad-hoc codesigned)"
 }

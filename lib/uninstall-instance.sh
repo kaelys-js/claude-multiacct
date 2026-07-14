@@ -15,27 +15,36 @@ LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 
 main() {
-  local label="$1"; shift
+  local label="$1"
+  shift
   cma_validate_label "$label"
 
   local keep_ud=0 keep_cd=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --keep-userdata)  keep_ud=1; shift ;;
-      --keep-configdir) keep_cd=1; shift ;;
+      --keep-userdata)
+        keep_ud=1
+        shift
+        ;;
+      --keep-configdir)
+        keep_cd=1
+        shift
+        ;;
       *) cma_die "uninstall-instance: unknown flag: $1" ;;
     esac
   done
 
-  local row; row="$(cma_resolve_instance "$label")"
+  local row
+  row="$(cma_resolve_instance "$label")"
   local _l _e cdir udata cli app _bid
-  IFS=$'\t' read -r _l _e cdir udata cli app _bid <<<"$row"
+  IFS=$'\t' read -r _l _e cdir udata cli app _bid <<< "$row"
 
   cma_say "uninstall-instance: label=$label"
 
   # 1. Remove the CLI launcher (snapshot first).
   if [[ -e "$cli" ]]; then
-    local snap; snap="$(cma_backup_snapshot "$cli" "cli-$label")"
+    local snap
+    snap="$(cma_backup_snapshot "$cli" "cli-$label")"
     cma_dim "  snapshot: $snap"
     rm -f "$cli"
     cma_ok "removed $cli"
@@ -48,17 +57,19 @@ main() {
   # /Applications/Claude.app of the same version.
   if [[ -d "$app" ]]; then
     if [[ -f "$app/Contents/Info.plist" ]]; then
-      local snap; snap="$(cma_backup_snapshot "$app/Contents/Info.plist" "clone-plist-$label")"
+      local snap
+      snap="$(cma_backup_snapshot "$app/Contents/Info.plist" "clone-plist-$label")"
       cma_dim "  snapshot: $snap (Info.plist only; the 745 MB payload is not snapshotted)"
     fi
-    "$LSREGISTER" -u "$app" >/dev/null 2>&1 || true
+    "$LSREGISTER" -u "$app" > /dev/null 2>&1 || true
     rm -rf "$app"
     cma_ok "removed $app"
   fi
 
   # 3. Remove the configDir (unless --keep-configdir).
   if [[ "$keep_cd" -eq 0 ]] && [[ -e "$cdir" ]]; then
-    local snap; snap="$(cma_backup_snapshot "$cdir" "configdir-$label")"
+    local snap
+    snap="$(cma_backup_snapshot "$cdir" "configdir-$label")"
     cma_dim "  snapshot: $snap"
     rm -rf "$cdir"
     cma_ok "removed $cdir"
@@ -71,7 +82,8 @@ main() {
   # deleting them logs the user out of that account. Explicit override drops it.
   if [[ "$keep_ud" -eq 0 ]] && [[ -e "$udata" ]]; then
     cma_warn "  userData contains the account's OAuth cookies; use --keep-userdata to preserve"
-    local snap; snap="$(cma_backup_snapshot "$udata" "userdata-$label")"
+    local snap
+    snap="$(cma_backup_snapshot "$udata" "userdata-$label")"
     cma_dim "  snapshot: $snap"
     rm -rf "$udata"
     cma_ok "removed $udata"

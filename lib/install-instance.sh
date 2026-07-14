@@ -18,8 +18,11 @@ LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Removes: oauthAccount, userID, sessionID (all binding to the primary).
 mirror_claude_json() {
   local src="$1" dst="$2"
-  [[ -f "$src" ]] || { cma_warn "primary .claude.json not present at $src — skipping"; return 0; }
-  python3 - "$src" "$dst" <<'PY'
+  [[ -f "$src" ]] || {
+    cma_warn "primary .claude.json not present at $src — skipping"
+    return 0
+  }
+  python3 - "$src" "$dst" << 'PY'
 import json, sys
 src, dst = sys.argv[1], sys.argv[2]
 with open(src) as f:
@@ -38,9 +41,10 @@ main() {
   cma_validate_label "$label"
 
   # Resolve target paths (defaults + any overrides from instances.yaml).
-  local row; row="$(cma_resolve_instance "$label")"
+  local row
+  row="$(cma_resolve_instance "$label")"
   local _l email cdir udata cli app bid
-  IFS=$'\t' read -r _l email cdir udata cli app bid <<<"$row"
+  IFS=$'\t' read -r _l email cdir udata cli app bid <<< "$row"
 
   cma_say "install-instance: label=$label email=$email"
   cma_dim "  configDir=$cdir"
@@ -49,11 +53,12 @@ main() {
   cma_dim "  app=$app"
   cma_dim "  bundleId=$bid"
 
-  local p_cdir; p_cdir="$(cma_primary_configdir)"
+  local p_cdir
+  p_cdir="$(cma_primary_configdir)"
 
   # ── 1. Config dir + symlinks + private files ──────────────────────────
   mkdir -p "$cdir"
-  chmod 700 "$cdir" 2>/dev/null || true
+  chmod 700 "$cdir" 2> /dev/null || true
 
   # Independent .claude.json (identity stripped, MCP/trust kept). Only write
   # if missing — repeat runs don't clobber a live config.
@@ -67,7 +72,7 @@ main() {
   # Minimal per-instance settings.json — matches the current on-disk B instance's
   # shape (a small settings.json + settings.local.json). Skip if user has one.
   if [[ ! -f "$cdir/settings.json" ]]; then
-    cat >"$cdir/settings.json" <<JSON
+    cat > "$cdir/settings.json" << JSON
 {
   "\$schema": "https://json.schemastore.org/claude-code-settings.json"
 }
@@ -76,7 +81,7 @@ JSON
     cma_ok "wrote $cdir/settings.json"
   fi
   if [[ ! -f "$cdir/settings.local.json" ]]; then
-    cat >"$cdir/settings.local.json" <<JSON
+    cat > "$cdir/settings.local.json" << JSON
 {
   "\$schema": "https://json.schemastore.org/claude-code-settings.json"
 }

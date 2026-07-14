@@ -1,6 +1,6 @@
 # mise.toml — self-contained toolchain pin for claude-multiacct.
-# Clone + `mise install` gets shellcheck + bats + gitleaks with no machine-global dependency.
-# Docs: https://mise.jdx.dev/configuration.html
+# Clone + `mise install` gets shellcheck + bats + gitleaks + shfmt + related
+# tools with no machine-global dependency. Docs: https://mise.jdx.dev/configuration.html
 
 min_version = "2026.5.0"
 
@@ -21,3 +21,16 @@ gitleaks = "8.30.1"
 yamllint = "1.38.0"
 # YAML query/edit — read instances.yaml + inject into launchd plist template.
 yq = "4.53.3"
+
+# ── Shell formatter (matches the .editorconfig indent/binary-next-line
+# preferences). Run via `qa format`; checked in `qa lint` (--diff mode).
+shfmt = "3.13.1"
+
+# ── Markdown lint for the README + docs.
+"npm:markdownlint-cli2" = "0.23.0"
+
+# ── Node + commitlint (@commitlint/cli via npm-managed pnpm store isn't a
+# pattern we want in a bash repo, so use pipx-style npm install via mise).
+node = "26.5.0"
+"npm:@commitlint/cli" = "21.2.0"
+"npm:@commitlint/config-conventional" = "21.2.0"

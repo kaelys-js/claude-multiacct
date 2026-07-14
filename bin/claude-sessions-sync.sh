@@ -21,16 +21,18 @@ CMA_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)"
 LOG="$CMA_LOG_DIR/sessions-sync.log"
 mkdir -p "$(dirname "$LOG")"
 
-log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"$LOG"; }
+log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$LOG"; }
 
 # Sync a single primary → mirror pair.
 sync_one() {
   local mirror_label="$1"
-  local row; row="$(cma_resolve_instance "$mirror_label")"
+  local row
+  row="$(cma_resolve_instance "$mirror_label")"
   local _l _e _cdir m_udata _cli _app _bid
-  IFS=$'\t' read -r _l _e _cdir m_udata _cli _app _bid <<<"$row"
+  IFS=$'\t' read -r _l _e _cdir m_udata _cli _app _bid <<< "$row"
 
-  local p_udata; p_udata="$(cma_primary_userdata)"
+  local p_udata
+  p_udata="$(cma_primary_userdata)"
 
   if [[ ! -d "$p_udata" ]]; then
     log "  ✗ primary userData missing at $p_udata — skip $mirror_label"
@@ -51,7 +53,7 @@ sync_one() {
     fi
     # `--delete` mirrors the exact primary state so a session removed on primary
     # is removed on mirror. Preserves inode-level flags via -a.
-    if rsync -a --delete "$p_udata/$sub/" "$m_udata/$sub/" 2>>"$LOG"; then
+    if rsync -a --delete "$p_udata/$sub/" "$m_udata/$sub/" 2>> "$LOG"; then
       log "  ✓ $sub"
     else
       log "  ✗ $sub — rsync failed (see stderr above)"
@@ -71,7 +73,7 @@ main() {
   # matches both the primary and any mirror since they share the same executable.
   # SC2310 disable — assigning the pgrep rc explicitly avoids the pattern.
   local claude_running=0
-  pgrep -f 'com.anthropic.claudefordesktop|Claude Helper' >/dev/null 2>&1 && claude_running=1
+  pgrep -f 'com.anthropic.claudefordesktop|Claude Helper' > /dev/null 2>&1 && claude_running=1
   if [[ $claude_running -eq 1 ]]; then
     log "SKIP: at least one Claude Desktop instance is running (would rsync mid-flight state)"
     return 0

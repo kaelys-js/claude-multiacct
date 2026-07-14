@@ -36,7 +36,7 @@ CMA_LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)"
 LOG="$CMA_LOG_DIR/metadata-watcher.log"
 mkdir -p "$(dirname "$LOG")"
 
-log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >>"$LOG"; }
+log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$LOG"; }
 
 # Does the mirror have any org-level symlink installed under
 # <userData>/claude-code-sessions/<acct>/<org>? Returns 0 if yes, 1 if no. Used
@@ -48,7 +48,7 @@ mirror_has_symlinks() {
   local m_udata="$1"
   local ccs="$m_udata/claude-code-sessions"
   [[ -d "$ccs" ]] || return 1
-  find "$ccs" -mindepth 2 -maxdepth 2 -type l 2>/dev/null | grep -q . || return 1
+  find "$ccs" -mindepth 2 -maxdepth 2 -type l 2> /dev/null | grep -q . || return 1
   return 0
 }
 
@@ -92,7 +92,7 @@ handle_first_install() {
 
   # First install path. Match ONLY the mirror by its --user-data-dir arg.
   local match_pattern="--user-data-dir=$m_udata"
-  if ! pgrep -f "$match_pattern" >/dev/null 2>&1; then
+  if ! pgrep -f "$match_pattern" > /dev/null 2>&1; then
     log "  $label: mirror not running — first launch will pick up symlinks naturally"
     return 0
   fi
@@ -100,7 +100,7 @@ handle_first_install() {
   log "  $label: auto-restarting mirror (first symlink install)"
   # `|| true`: pkill returns non-zero if no process matched, which is a race
   # (mirror exited between our pgrep and this pkill) — not a script failure.
-  pkill -TERM -f "$match_pattern" 2>/dev/null || true
+  pkill -TERM -f "$match_pattern" 2> /dev/null || true
 
   # Poll for graceful exit. Cap adjustable via CMA_RESTART_WAIT_S for tests
   # (bats overrides to a small value; live default is 5s). Poll at 0.1s so a
@@ -109,22 +109,22 @@ handle_first_install() {
   local ticks
   ticks="$(awk -v w="$wait_s" 'BEGIN { printf "%d", w*10 }')"
   local i=0
-  while (( i < ticks )); do
-    if ! pgrep -f "$match_pattern" >/dev/null 2>&1; then
+  while ((i < ticks)); do
+    if ! pgrep -f "$match_pattern" > /dev/null 2>&1; then
       break
     fi
     sleep 0.1
     i=$((i + 1))
   done
 
-  if pgrep -f "$match_pattern" >/dev/null 2>&1; then
+  if pgrep -f "$match_pattern" > /dev/null 2>&1; then
     log "  $label: WARN mirror did not exit within ${wait_s}s — skipping relaunch (do NOT SIGKILL)"
     return 0
   fi
 
   # Brief beat before relaunch so LaunchServices sees a clean state.
   sleep 0.1
-  if open "$m_app" 2>/dev/null; then
+  if open "$m_app" 2> /dev/null; then
     log "  $label: relaunched $m_app"
   else
     log "  $label: WARN open $m_app failed"
@@ -151,20 +151,20 @@ main() {
     # a failure here (e.g. missing yaml row) should be logged, not fatal.
     local row _l _e _cdir m_udata _cli m_app _bid
     # shellcheck disable=SC2310  # continue with next mirror on one's failure
-    if ! row="$(cma_resolve_instance "$label" 2>/dev/null)"; then
+    if ! row="$(cma_resolve_instance "$label" 2> /dev/null)"; then
       log "  ERR $label: cma_resolve_instance failed"
       errored=$((errored + 1))
       continue
     fi
-    IFS=$'\t' read -r _l _e _cdir m_udata _cli m_app _bid <<<"$row"
+    IFS=$'\t' read -r _l _e _cdir m_udata _cli m_app _bid <<< "$row"
 
     # shellcheck disable=SC2310  # continue with next mirror on one's failure
-    if "$CMA_LIB/metadata-symlinks.sh" "$label" >>"$LOG" 2>&1; then
+    if "$CMA_LIB/metadata-symlinks.sh" "$label" >> "$LOG" 2>&1; then
       log "  ok $label"
       # Post-install (sentinel + auto-restart) wrapped so a failure here
       # doesn't abort the outer loop — other mirrors still get their pass.
-      handle_first_install "$label" "$m_udata" "$m_app" || \
-        log "  WARN $label: handle_first_install returned non-zero"
+      handle_first_install "$label" "$m_udata" "$m_app" \
+        || log "  WARN $label: handle_first_install returned non-zero"
     else
       log "  ERR $label (rc=$?)"
       errored=$((errored + 1))
