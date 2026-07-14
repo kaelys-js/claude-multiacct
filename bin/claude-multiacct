@@ -366,8 +366,22 @@ cmd_qa() {
       cma_ok "gitleaks clean"
 
       cma_require yamllint
-      cma_say "yamllint config/"
-      yamllint "$CMA_REPO_ROOT/config"/*.yaml 2>&1 || return $?
+      cma_say "yamllint config/ + .github/"
+      # config/ holds our own scaffold yaml; .github/ holds Actions workflows,
+      # dependabot.yml, ISSUE_TEMPLATE forms, all of which should stay
+      # yamllint-clean so CI never breaks silently.
+      local yaml_targets=(
+        "$CMA_REPO_ROOT/config"/*.yaml
+      )
+      # Only add .github if it exists (some checkouts might not).
+      if [[ -d "$CMA_REPO_ROOT/.github" ]]; then
+        # Glob every .yml + .yaml under .github without pulling in dot-dirs.
+        local f
+        for f in $(find "$CMA_REPO_ROOT/.github" -type f \( -name '*.yml' -o -name '*.yaml' \)); do
+          yaml_targets+=("$f")
+        done
+      fi
+      yamllint "${yaml_targets[@]}" 2>&1 || return $?
       cma_ok "yamllint clean"
       ;;
     test)

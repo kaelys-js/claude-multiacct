@@ -1,7 +1,9 @@
 ---
 name: CI
 
-on:
+# `on:` is quoted to avoid yamllint's truthy warning — it's the YAML 1.1
+# boolean alias for `true`.
+"on":
   push:
     branches: [main]
   pull_request:
