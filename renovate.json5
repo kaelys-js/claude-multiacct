@@ -1,0 +1,119 @@
+{
+	// Self-hosted Renovate config for kaelys-js/claude-multiacct — a Bash + bats
+	// CLI whose tool pins live in mise.toml. Scope: mise-managed tools + GitHub
+	// Actions used by .github/workflows/*.
+	//
+	// 1. mise tools. The built-in `mise` manager reads mise.toml `[tools]`
+	//    (shellcheck, bats, gitleaks, yamllint, yq). patch/minor auto-merge
+	//    after CI (`bin/claude-multiacct qa lint && qa test` on macOS-14);
+	//    major -> review PR (a shellcheck major, say, could reject constructs
+	//    the codebase relies on).
+	//
+	// 2. GitHub Actions. The built-in `github-actions` manager reads every
+	//    `uses:` line in .github/workflows/*.yml — actions/checkout,
+	//    jdx/mise-action, actions/create-github-app-token. Same policy:
+	//    patch/minor/digest auto-merge, major review PR.
+	//
+	// npm/dockerfile/custom.regex are out of scope — no node deps, no
+	// containers, no non-standard configs to parse in this repo.
+	//
+	// Every Renovate commit is `chore(deps): …`. This repo has no commitlint
+	// today; keeping the shape identical to stardust means adopting commitlint
+	// later is a no-op for Renovate PRs.
+	$schema: "https://docs.renovatebot.com/renovate-schema.json",
+
+	extends: [
+		"config:recommended",
+		":dependencyDashboard",
+		":semanticCommits",
+	],
+
+	timezone: "America/Vancouver",
+
+	// Same overnight window as stardust + kaelys-js so all three bots stay off
+	// the day.
+	schedule: ["* 0-5 * * *"],
+
+	dependencyDashboard: true,
+
+	// --- Commit / PR message shape -------------------------------------------
+	// Format matches stardust's Renovate: `chore(deps): update <pkg> to <ver>`.
+	semanticCommits: "enabled",
+	semanticCommitType: "chore",
+	semanticCommitScope: "deps",
+	commitMessagePrefix: "chore(deps):",
+
+	// --- DCO signoff -----------------------------------------------------------
+	// This repo doesn't have probot/dco installed today, but stardust does, and
+	// we use the same GitHub App identity across the org. Injecting the trailer
+	// here keeps every kaelys-js-renovate[bot] commit consistent.
+	commitBody: "Signed-off-by: kaelys-js-renovate[bot] <304942767+kaelys-js-renovate[bot]@users.noreply.github.com>",
+
+	// --- Concurrency / noise control -----------------------------------------
+	prConcurrentLimit: 4,
+	prHourlyLimit: 2,
+	rebaseWhen: "behind-base-branch",
+
+	// Cool-down: never auto-merge a release younger than this. Guards against
+	// a compromised/yanked just-published version landing hands-off.
+	minimumReleaseAge: "3 days",
+
+	// Enabled managers:
+	//   - mise            -> mise.toml [tools] versions
+	//   - github-actions  -> .github/workflows/*.yml `uses:` lines
+	// Everything else stays off — no npm/dockerfile/custom.regex here.
+	enabledManagers: ["mise", "github-actions"],
+
+	// --- packageRules --------------------------------------------------------
+	// Automerge matrix (all automerges gated on green CI + minimumReleaseAge):
+	//   mise            patch/minor             -> automerge (grouped)
+	//   mise            major                   -> review PR (never grouped)
+	//   github-actions  patch/minor/digest      -> automerge (grouped)
+	//   github-actions  major                   -> review PR (never grouped)
+	packageRules: [
+		// ── mise toolchain ───────────────────────────────────────────────────
+		{
+			// patch/minor toolchain bumps auto-merge after green CI — the qa
+			// gate runs every tool (shellcheck, bats, gitleaks, yamllint) via
+			// mise, so a broken tool version fails CI before merge. Grouped
+			// to keep PR noise down.
+			matchManagers: ["mise"],
+			matchUpdateTypes: ["patch", "minor"],
+			automerge: true,
+			automergeType: "pr",
+			platformAutomerge: true,
+			groupName: "mise toolchain (non-major)",
+			commitMessageTopic: "mise toolchain",
+		},
+		{
+			// Major toolchain bumps (e.g. shellcheck v0 -> v1) are a human
+			// decision; review PR, its own PR (never grouped).
+			matchManagers: ["mise"],
+			matchUpdateTypes: ["major"],
+			automerge: false,
+			groupName: null,
+		},
+
+		// ── GitHub Actions ───────────────────────────────────────────────────
+		{
+			// patch/minor/digest bumps for the workflow `uses:` pins auto-merge
+			// after green CI. Grouped so a single actions/checkout bump lands
+			// as one PR across every workflow.
+			matchManagers: ["github-actions"],
+			matchUpdateTypes: ["patch", "minor", "digest"],
+			automerge: true,
+			automergeType: "pr",
+			platformAutomerge: true,
+			groupName: "github actions (non-major)",
+			commitMessageTopic: "github actions",
+		},
+		{
+			// Major action bumps (e.g. actions/checkout v4 -> v5) can change
+			// input names; review PR, its own PR (never grouped).
+			matchManagers: ["github-actions"],
+			matchUpdateTypes: ["major"],
+			automerge: false,
+			groupName: null,
+		},
+	],
+}

@@ -1,0 +1,88 @@
+# Self-hosted Renovate for kaelys-js/claude-multiacct. Runs the Renovate CLI
+# on a schedule and on demand. Renovate reads renovate.json5 at the repo root
+# and opens/updates PRs against main. CI (.github/workflows/ci.yml) validates
+# every PR; patch/minor/digest PRs then platform-auto-merge (per
+# renovate.json5), major PRs wait for review.
+#
+# AUTH: this workflow mints a short-lived GitHub App installation token per run
+# via actions/create-github-app-token; no long-lived PAT lives in secrets.
+# See docs/renovate-setup.md for the one-time App setup — the App name is
+# `kaelys-js-renovate` and the same App is installed on stardust, kaelys-js,
+# and this repo.
+---
+name: renovate
+
+"on":
+  schedule:
+    # 09:00 UTC ~= 01:00–02:00 America/Vancouver — matches renovate.json5's
+    # "before 06:00 local" window; the config's own schedule further gates it.
+    - cron: "0 9 * * *"
+  workflow_dispatch:
+    inputs:
+      logLevel:
+        description: "Renovate log level"
+        required: false
+        default: "info"
+        type: choice
+        options: [debug, info, warn]
+
+concurrency:
+  group: renovate
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  renovate:
+    name: renovate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # Pre-flight FIRST (before checkout): fail loud with a pointer to the
+      # runbook if the App secrets aren't set yet. Without this, the workflow
+      # would spend a minute checking out + minting a token before failing with
+      # an opaque "Bad credentials" from create-github-app-token.
+      - name: Verify GitHub App secrets are configured
+        env:
+          APP_CID: ${{ secrets.RENOVATE_APP_CLIENT_ID }}
+          APP_PK: ${{ secrets.RENOVATE_APP_PRIVATE_KEY }}
+        run: |
+          if [[ -z "$APP_CID" || -z "$APP_PK" ]]; then
+            printf 'Renovate is not configured yet.\n'
+            printf '\n'
+            printf 'One-time setup: see docs/renovate-setup.md\n'
+            printf '\n'
+            printf 'Missing secrets:\n'
+            [[ -z "$APP_CID" ]] && printf '  - RENOVATE_APP_CLIENT_ID\n'
+            [[ -z "$APP_PK" ]] && printf '  - RENOVATE_APP_PRIVATE_KEY\n'
+            exit 1
+          fi
+
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Mint GitHub App installation token
+        id: app-token
+        uses: actions/create-github-app-token@v3.2.0
+        with:
+          client-id: ${{ secrets.RENOVATE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RENOVATE_APP_PRIVATE_KEY }}
+          # No owner:/repositories: — the App is installed only on this repo
+          # within the installation, so the token is scoped automatically.
+
+      - name: Run Renovate
+        # Pinned to a tag + digest, like the rest of our workflow deps.
+        # Renovate keeps this line current via the github-actions manager.
+        uses: renovatebot/github-action@v46.1.19
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          configurationFile: renovate.json5
+        env:
+          # Restrict to this repo; the token scopes it too, but be explicit.
+          RENOVATE_REPOSITORIES: kaelys-js/claude-multiacct
+          # Honor the schedule in renovate.json5; on manual dispatch, ignore
+          # it so an on-demand run actually does work.
+          # yamllint disable-line rule:line-length
+          RENOVATE_FORCE: ${{ github.event_name == 'workflow_dispatch' && '{"schedule":null}' || '' }}
+          LOG_LEVEL: ${{ github.event.inputs.logLevel || 'info' }}
