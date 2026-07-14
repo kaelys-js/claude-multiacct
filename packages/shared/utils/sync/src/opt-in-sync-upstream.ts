@@ -120,52 +120,28 @@ export function substitute(template: string, config: OptInConfig): string {
 	return OUTPUT_HEADER + body;
 }
 
-// Turn valibot issues into a stable one-line message that names EVERY
-// offending field and every schema-level rule that fired. valibot's default
-// `error.message` only mentions the first issue, which would let a partial
-// fix slip past a "throws with every missing field" test. Field-level
-// issues appear as `is missing required string fields: a, b`; cross-field
-// checks (like the mode/deployKeySecret rule) attach their own message on a
-// trailing clause so both halves of a partly-invalid payload surface at
-// once.
+// Turn valibot issues + the cross-field rule into a stable one-line message
+// that names EVERY offending field. valibot's default `error.message` only
+// mentions the first issue, which would let a partial fix slip past a
+// "throws with every missing field" test. The cross-field rule (mode ↔
+// deployKeySecret) contributes `deployKeySecret` to the same list so the
+// caller sees one sorted enumeration, not a joined clause.
 function formatValidationError(
 	issues: ReadonlyArray<v.BaseIssue<unknown>>,
 	crossField: string | null,
 ): string {
 	const fields = new Set<string>();
-	const schemaLevel: string[] = [];
 	for (const issue of issues) {
-		const { path } = issue;
-		if (path === undefined || path.length === 0) {
-			schemaLevel.push(issue.message);
-		} else {
-			for (const step of path) {
-				if (typeof step.key === "string" && step.key !== "") {
-					fields.add(step.key);
-				}
+		for (const step of issue.path ?? []) {
+			if (typeof step.key === "string" && step.key !== "") {
+				fields.add(step.key);
 			}
 		}
 	}
-	// The cross-field rule names a field ('deployKeySecret'); if it fired,
-	// add that field to the missing-list so callers get a single sorted
-	// enumeration rather than a mix of joined clauses.
-	if (crossField !== null && crossField.includes("deployKeySecret")) {
+	if (crossField !== null) {
 		fields.add("deployKeySecret");
 	}
-	const parts: string[] = [];
-	if (fields.size > 0) {
-		parts.push(`is missing required string fields: ${[...fields].join(", ")}`);
-	}
-	if (schemaLevel.length > 0) {
-		parts.push(schemaLevel.join("; "));
-	}
-	if (crossField !== null && !crossField.includes("deployKeySecret")) {
-		parts.push(crossField);
-	}
-	if (parts.length === 0) {
-		return "did not match the expected shape";
-	}
-	return parts.join("; ");
+	return `is missing required string fields: ${[...fields].join(", ")}`;
 }
 
 // Parse and validate `.sync-upstream.json` from a caller-supplied working
@@ -185,9 +161,10 @@ export function readConfig(cwd: string): OptInConfig {
 	const parsed = JSON.parse(raw) as unknown;
 	const result = v.safeParse(CONFIG_SCHEMA, parsed);
 	const fieldErrors = result.success ? [] : result.issues;
-	// Only run the cross-field check when we have SOMETHING resembling a
-	// config to inspect. On a total parse failure (input is a string, etc.)
-	// there's no `mode` to reason about.
+	// Run the cross-field check on the raw JSON so a payload that omits BOTH
+	// upstreamRepoSsh AND deployKeySecret surfaces both errors, not just the
+	// one valibot found first. Non-object input skips the check — there's no
+	// `mode` to reason about.
 	const objectShaped = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed);
 	const crossField = objectShaped
 		? crossFieldError({
@@ -196,9 +173,12 @@ export function readConfig(cwd: string): OptInConfig {
 			} as OptInConfig)
 		: null;
 	if (fieldErrors.length > 0 || crossField !== null) {
-		const message = formatValidationError(fieldErrors, crossField);
-		throw new Error(`${CONFIG_FILE} ${message}`);
+		throw new Error(`${CONFIG_FILE} ${formatValidationError(fieldErrors, crossField)}`);
 	}
+	// `result.success` is guaranteed here (fieldErrors would be non-empty
+	// otherwise), so the else branch is unreachable in practice — leave the
+	// non-null assertion off and rely on TypeScript's own narrowing.
+	/* v8 ignore next 3 -- guarded above; result.success is provably true when both fieldErrors and crossField are empty */
 	if (!result.success) {
 		throw new Error(`${CONFIG_FILE} did not match the expected shape`);
 	}
