@@ -28,7 +28,7 @@ jobs:
       # (shellcheck, bats, gitleaks, yq, yamllint). Caches to speed up
       # subsequent runs.
       - name: Install mise + pinned toolchain
-        uses: jdx/mise-action@v2
+        uses: jdx/mise-action@v4
 
       # qa lint = shellcheck + gitleaks + yamllint
       - name: qa lint
