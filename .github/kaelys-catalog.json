@@ -8,7 +8,6 @@
   "primaryLanguage": "Shell",
   "technology": [
     "Bash",
-    "bash",
     "bats",
     "launchd",
     "macos",
