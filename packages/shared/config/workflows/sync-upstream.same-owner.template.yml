@@ -76,11 +76,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # GitHub enforces global-per-account uniqueness on deploy-key material.
-      # Both fork and upstream sit under the same account, so the cross-
-      # owner template's "same key on both repos" pattern refuses the
-      # second install with `key is already in use`. This variant skips
-      # deploy keys and runs both remotes over HTTPS using `secrets.GH_TOKEN`
-      # (a PAT with `repo` + `workflow` scope on the account).
+      # Both `kaelys-js/ttt-studio-cole-30-60-90-plan` (this fork) and
+      # `kaelys-js/foundation-registry` (upstream) sit under the same user
+      # account, so the template's "same key on both repos" pattern refuses
+      # the second install with `key is already in use`. The fork therefore
+      # skips the deploy key and runs both remotes over HTTPS using
+      # `secrets.GH_TOKEN` (a PAT with `repo` scope on the kaelys-js account).
+      # The template stays as-is for the cross-account case it was designed
+      # around; this file is the fork-local deviation.
       - name: Checkout fork main
         uses: actions/checkout@v4
         with:
@@ -179,10 +182,11 @@ jobs:
           # set on this repo for the refresh workflow.
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           # `gh` scans git remotes to decide which repo owns the PR. With
-          # both `origin` (this fork) and `upstream` (the same-owner mirror,
-          # added by the earlier step) registered, it can't guess correctly
-          # and errored `Could not resolve to a Repository with the name
-          # '<upstream>'`. Pin the repo explicitly so gh stops guessing.
+          # both `origin` (this fork) and `upstream` (kaelys-js/foundation-
+          # registry, added by the earlier step) registered, it can't guess
+          # correctly and errored `Could not resolve to a Repository with
+          # the name 'kaelys-js/foundation-registry'`. Pin the repo
+          # explicitly so gh stops guessing.
           GH_REPO: ${{ github.repository }}
         run: |
           gh pr create \
