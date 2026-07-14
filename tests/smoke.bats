@@ -42,6 +42,11 @@ setup() {
   # by the live install run (task #6 in the todo).
   export CMA_SKIP_LAUNCHD=1
 
+  # Auto-migrate runs at CLI startup and would rebuild any drifted clones;
+  # existing tests don't need it and would slow down noticeably. The dedicated
+  # auto-migrate tests further down UNSET this to exercise the migration path.
+  export CMA_SKIP_AUTO_MIGRATE=1
+
   # A hermetic fake Claude.app for build-clone-app.sh to ditto. Small enough to
   # copy in ~10ms per test (real Claude.app is 745 MB — too big for CI). Has
   # the two things build-clone-app.sh reads: Info.plist and MacOS/Claude.
@@ -337,4 +342,117 @@ SH
   run "$CMA" sync-log --bogus
   [ "$status" -ne 0 ]
   [[ "$output" == *"unknown flag"* ]]
+}
+
+# ── Auto-migrate (bundle-id drift auto-healing) ─────────────────────────────
+# These tests deliberately UNSET the setup()-level CMA_SKIP_AUTO_MIGRATE=1 so
+# the migration path actually runs. A per-test pgrep stub controls whether the
+# code thinks a mirror is currently running (auto-migrate refuses to rebuild
+# a live bundle).
+#
+# The contract:
+#   - drift + no mirror running → silent auto-rebuild happens before the
+#     user's subcommand runs
+#   - drift + mirror running → warn, do NOT rebuild, subcommand still runs
+#   - no drift → no chatter (fast no-op)
+#   - no config file → no chatter (early exit)
+
+_setup_pgrep_stub() {
+  # Args: exit code to return. 1 = "no matching process" (default), 0 = "match".
+  local exit_code="$1"
+  local stub_dir="$BATS_TEST_TMPDIR/auto-migrate-stubs"
+  mkdir -p "$stub_dir"
+  cat >"$stub_dir/pgrep" <<SH
+#!/usr/bin/env bash
+exit $exit_code
+SH
+  chmod +x "$stub_dir/pgrep"
+  export PATH="$stub_dir:$PATH"
+}
+
+@test "auto-migrate no-ops silently when there is no config file" {
+  # No init — no config, so auto-migrate should skip cleanly. `--help` is a
+  # command that DOES bypass auto-migrate; use a real subcommand instead to
+  # prove the config-file check works from within _cma_maybe_migrate.
+  unset CMA_SKIP_AUTO_MIGRATE
+  _setup_pgrep_stub 1
+  run "$CMA" list
+  # `list` requires the config file, so it will fail — but the failure must
+  # come from `list`'s cma_require_config, NOT from auto-migrate crashing.
+  # Assert no auto-migrate chatter regardless of exit code.
+  [[ "$output" != *"auto-migrating"* ]]
+  [[ "$output" != *"drift"* ]]
+}
+
+@test "auto-migrate no-ops silently when there is no drift" {
+  "$CMA" init
+  "$CMA" add-instance b --email test-b@example.com
+  unset CMA_SKIP_AUTO_MIGRATE
+  _setup_pgrep_stub 1
+  run "$CMA" list
+  [ "$status" -eq 0 ]
+  # No output about auto-migration — the CLI just runs the intended command.
+  [[ "$output" != *"auto-migrating"* ]]
+  [[ "$output" != *"drift detected"* ]]
+}
+
+@test "auto-migrate rebuilds a drifted clone when no mirror is running" {
+  "$CMA" init
+  "$CMA" add-instance b --email test-b@example.com
+  # Force drift: rewrite the freshly-installed Info.plist's CFBundleIdentifier
+  # to a stale value the tool would never generate.
+  plutil -replace CFBundleIdentifier -string 'com.stale.legacy' \
+    "$HOME/Applications/Claude Account B.app/Contents/Info.plist"
+  local drifted; drifted="$(plutil -extract CFBundleIdentifier raw \
+    "$HOME/Applications/Claude Account B.app/Contents/Info.plist")"
+  [ "$drifted" = "com.stale.legacy" ]
+
+  unset CMA_SKIP_AUTO_MIGRATE
+  _setup_pgrep_stub 1  # no matching mirror process
+  # Any real subcommand triggers auto-migrate. `list` is cheap.
+  run "$CMA" list
+  [ "$status" -eq 0 ]
+  # The migration should have announced itself + healed the bundle-id.
+  [[ "$output" == *"auto-migrating"* ]]
+  local healed; healed="$(plutil -extract CFBundleIdentifier raw \
+    "$HOME/Applications/Claude Account B.app/Contents/Info.plist")"
+  [ "$healed" = "com.claude-multiacct.claude-account-b-desktop" ]
+}
+
+@test "auto-migrate warns + skips rebuild when a mirror is running" {
+  "$CMA" init
+  "$CMA" add-instance b --email test-b@example.com
+  # Force drift.
+  plutil -replace CFBundleIdentifier -string 'com.stale.legacy' \
+    "$HOME/Applications/Claude Account B.app/Contents/Info.plist"
+
+  unset CMA_SKIP_AUTO_MIGRATE
+  _setup_pgrep_stub 0  # simulate a running mirror
+  run "$CMA" list
+  # Subcommand still succeeds — auto-migrate does not block the user's intent.
+  [ "$status" -eq 0 ]
+  # Warning surfaces so the user knows to quit + retry.
+  [[ "$output" == *"drift"* ]]
+  # Bundle-id is UNTOUCHED — a live bundle is never rebuilt.
+  local still_drifted; still_drifted="$(plutil -extract CFBundleIdentifier raw \
+    "$HOME/Applications/Claude Account B.app/Contents/Info.plist")"
+  [ "$still_drifted" = "com.stale.legacy" ]
+}
+
+@test "auto-migrate skipped on --help (no side effects on informational invocations)" {
+  "$CMA" init
+  "$CMA" add-instance b --email test-b@example.com
+  # Force drift.
+  plutil -replace CFBundleIdentifier -string 'com.stale.legacy' \
+    "$HOME/Applications/Claude Account B.app/Contents/Info.plist"
+  unset CMA_SKIP_AUTO_MIGRATE
+  _setup_pgrep_stub 1
+  # `--help` should print usage without ever attempting migration.
+  run "$CMA" --help
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"auto-migrating"* ]]
+  # And the drifted bundle-id stays drifted (proves auto-migrate didn't run).
+  local still_drifted; still_drifted="$(plutil -extract CFBundleIdentifier raw \
+    "$HOME/Applications/Claude Account B.app/Contents/Info.plist")"
+  [ "$still_drifted" = "com.stale.legacy" ]
 }

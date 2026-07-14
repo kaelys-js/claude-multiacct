@@ -379,8 +379,78 @@ cmd_qa() {
   esac
 }
 
+# Auto-migrate: detect + heal bundle-id drift transparently at CLI startup so
+# the user never needs a manual `refresh-clones` after this repo bumps the
+# bundle-id namespace. Runs before every non-informational subcommand.
+#
+# Logic:
+#   - No config file → nothing to migrate; return.
+#   - No yq / plutil → skip (missing tooling; CLI itself will fail loudly
+#     downstream if the user hasn't run `mise install` — no need to double-fire).
+#   - For each instance in yaml: compare live Info.plist CFBundleIdentifier
+#     to `cma_default_bundle_id <label>`. Any mismatch → drifted.
+#   - Drifted set empty → return.
+#   - Drifted set non-empty:
+#       * Any mirror clone RUNNING → warn once and return (rebuild would
+#         corrupt a live bundle). User's subcommand still runs after.
+#       * All mirrors quit → re-run install-instance.sh for each drifted
+#         label (idempotent path used by `repair` + `refresh-clones`), then
+#         re-render launchd plists. Blocks the subcommand for ~30s per
+#         drifted mirror the first time; no-op on every subsequent call.
+#
+# Escape hatch: CMA_SKIP_AUTO_MIGRATE=1 disables auto-migrate. Bats tests
+# set it in setup() so hermetic runs don't accidentally trip auto-migrate
+# when they explicitly mutate a bundle-id fixture (e.g. clone-app.bats).
+_cma_maybe_migrate() {
+  [[ "${CMA_SKIP_AUTO_MIGRATE:-0}" == "1" ]] && return 0
+  [[ -f "$CMA_CONFIG_FILE" ]] || return 0
+  command -v yq >/dev/null 2>&1 || return 0
+  command -v plutil >/dev/null 2>&1 || return 0
+
+  local drifted=()
+  local label
+  while IFS= read -r label; do
+    [[ -z "$label" ]] && continue
+    # cma_resolve_instance dies on invalid rows — swallow so one bad
+    # entry doesn't take down the whole CLI.
+    local row
+    # shellcheck disable=SC2310  # deliberate: swallow per-instance errors to keep the CLI usable
+    row="$(cma_resolve_instance "$label" 2>/dev/null)" || continue
+    local _l _e _cdir _udata _cli app expected_bid
+    IFS=$'\t' read -r _l _e _cdir _udata _cli app expected_bid <<<"$row"
+    [[ -f "$app/Contents/Info.plist" ]] || continue
+    local actual_bid
+    actual_bid="$(plutil -extract CFBundleIdentifier raw "$app/Contents/Info.plist" 2>/dev/null || printf '')"
+    [[ -z "$actual_bid" || "$actual_bid" == "$expected_bid" ]] && continue
+    drifted+=("$label")
+  done < <(yq -r '.instances[].label' "$CMA_CONFIG_FILE" 2>/dev/null || true)
+
+  [[ ${#drifted[@]} -eq 0 ]] && return 0
+
+  # Any mirror clone running → refuse to auto-rebuild (would corrupt a live
+  # bundle) but let the user's subcommand proceed.
+  if pgrep -f 'Claude Account .*\.app/Contents/MacOS' >/dev/null 2>&1; then
+    cma_warn "bundle-id drift on: ${drifted[*]} — quit all Claude Account *.app processes and re-run any command to auto-migrate"
+    return 0
+  fi
+
+  cma_say "auto-migrating bundle-id drift on: ${drifted[*]}"
+  local l
+  for l in "${drifted[@]}"; do
+    "$CMA_LIB/install-instance.sh" "$l" >&2
+  done
+  "$CMA_LIB/install-launchd.sh" >&2
+  cma_ok "auto-migrated: ${drifted[*]}"
+}
+
 main() {
   local cmd="${1:-}"; shift || true
+  # Skip auto-migrate on informational commands — no side effects wanted for
+  # `--help`. Every real subcommand gets the drift check.
+  case "$cmd" in
+    ""|-h|--help|help) ;;
+    *) _cma_maybe_migrate ;;
+  esac
   case "$cmd" in
     ""|-h|--help|help) usage ;;
     install)           cmd_install "$@" ;;

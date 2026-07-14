@@ -43,6 +43,7 @@ setup() {
   export CMA_BACKUP_DIR="$HOME/.claude-multiacct-backups"
   export CMA_LOG_DIR="$HOME/Library/Logs/claude-multiacct"
   export CMA_SKIP_LAUNCHD=1
+  export CMA_SKIP_AUTO_MIGRATE=1
 
   # PATH stubs. Default posture: pgrep reports NO matching Claude process
   # (exit 1) so the worker proceeds; sleep is a no-op so the intentional

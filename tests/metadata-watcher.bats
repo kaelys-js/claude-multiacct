@@ -66,6 +66,7 @@ setup() {
   export CMA_BACKUP_DIR="$HOME/.claude-multiacct-backups"
   export CMA_LOG_DIR="$HOME/Library/Logs/claude-multiacct"
   export CMA_SKIP_LAUNCHD=1
+  export CMA_SKIP_AUTO_MIGRATE=1
 
   # Fake Claude.app for build-clone-app.sh (the add-instance step calls it).
   export CMA_SOURCE_CLAUDE_APP="$BATS_TEST_TMPDIR/fake-claude.app"

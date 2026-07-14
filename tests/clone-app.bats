@@ -49,6 +49,7 @@ setup() {
   export CMA_BACKUP_DIR="$HOME/.claude-multiacct-backups"
   export CMA_LOG_DIR="$HOME/Library/Logs/claude-multiacct"
   export CMA_SKIP_LAUNCHD=1
+  export CMA_SKIP_AUTO_MIGRATE=1
 
   # Fake /Applications/Claude.app under the scratch dir. Includes a canary
   # payload in MacOS/Claude so we can prove the ditto copied the original

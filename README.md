@@ -79,19 +79,6 @@ claude-multiacct repair b
 claude-multiacct doctor
 ```
 
-## Upgrading from a previous install
-
-If you installed a previous version of this repo and see `bundle-id-drift` under `claude-multiacct doctor`, rebuild every clone against the current bundle-id namespace:
-
-```sh
-git pull
-claude-multiacct refresh-clones     # rebuilds every mirror clone; refuses if any mirror is running
-# or, per instance:
-claude-multiacct repair <label>
-```
-
-Then `claude-multiacct doctor` should report each instance `→ ok`. Dock launch of the rebuilt clones is served from the new bundle-id via LaunchServices.
-
 ## Uninstall
 
 ```sh
