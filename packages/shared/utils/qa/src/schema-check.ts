@@ -220,17 +220,33 @@ const COVERAGE_EXCLUDED_PREFIXES: readonly string[] = [
 	".mise/",
 	".git/",
 ];
-const COVERAGE_EXCLUDED_EXACT = new Set(["pnpm-lock.yaml", "mise.lock"]);
+const COVERAGE_EXCLUDED_EXACT = new Set([
+	"pnpm-lock.yaml",
+	"mise.lock",
+	// `.sync-upstream.json` is a per-fork config consumed by
+	// `packages/shared/utils/sync/src/opt-in-sync-upstream.ts`. No public
+	// upstream schema exists for it and the CLI's `readConfig()` already
+	// enforces the three required string fields at read time, so requiring a
+	// `$schema` marker would add ceremony without catching anything the CLI
+	// does not already catch.
+	".sync-upstream.json",
+]);
 
 // Whether a tracked config file is exempt from the schema-coverage requirement.
 // Test fixtures under any `**/tests/fixtures/` directory are data files, not repo
 // config — the coverage gate exists to catch un-schemad config, not to force a
 // `$schema` marker into every fixture input/output byte-for-byte on disk.
+// `*.template.yml` / `*.template.yaml` are pre-substitution workflow templates
+// (see `packages/shared/config/workflows/`); the CLI that consumes them writes
+// the schema-ref appropriate to the OUTPUT location, so the template itself is
+// intentionally schema-ref-less at rest.
 function isCoverageExcluded(file: string): boolean {
 	if (
 		COVERAGE_EXCLUDED_EXACT.has(file) ||
 		file.endsWith(".lock") ||
 		file.endsWith(".schema.json") ||
+		file.endsWith(".template.yml") ||
+		file.endsWith(".template.yaml") ||
 		file.includes("/tests/fixtures/")
 	) {
 		return true;
