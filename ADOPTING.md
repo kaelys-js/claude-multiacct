@@ -69,3 +69,21 @@ Re-running `pnpm sync-upstream:opt-in` is a no-op when the workflow file already
 ## Cross-linking a runtime product to its records
 
 Every runtime product ships its own PRD (linked from the package README), its own ADR log at `packages/products/<name>/docs/adr/`, and its own SPEC. The governing PRD and the top-level ADRs live in the registry spine at `packages/products/registry/records/<domain>/`. Cross-link with two fields: the record's frontmatter carries `runtime_package: "@foundation/trp"`, and the product's `package.json` carries `foundationRegistry.governingPrd: "PRD-0042"`. The schema validator checks both sides resolve.
+
+## Renovate (dependency PRs)
+
+`renovate.json5` at the repo root drives Renovate's PRs against `packages/**/package.json` + `pnpm-lock.yaml` and `mise.toml`'s `[tools]` block. Patch/minor/digest updates auto-merge after CI + a 3-day cool-down; major updates open a review PR. Every commit reads `chore(deps): update <dep> to <new>` — that passes this repo's commitlint (`chore` in type-enum, `deps` in scope-enum).
+
+Two setup paths, matching how sibling repos already run Renovate:
+
+**Renovate hosted GitHub App (simplest).** Open `https://github.com/apps/renovate` and install on the target repository. `renovate.json5` at the repo root is the only config. Within a few hours Renovate opens the **Dependency Dashboard** issue and starts filing PRs.
+
+**Self-hosted GitHub App (matches `kaelys-js/stardust`).** Follow `kaelys-js/stardust`'s `docs/renovate-setup.md`. Two secrets need to land on the repo (`RENOVATE_APP_CLIENT_ID`, `RENOVATE_APP_PRIVATE_KEY`), plus `.github/workflows/renovate.yml` + `renovate-fixup.yml` copied from stardust. This path keeps every credential inside your own account instead of trusting the Mend-hosted service.
+
+Validate the config before pushing changes:
+
+```sh
+pnpm dlx renovate-config-validator renovate.json5
+```
+
+The current `renovate.json5` enables the `npm` and `mise` managers only. GitHub Actions, container images, and other managers stay off — this repo pins no images and does not consume GH Actions versions Renovate would upgrade.
