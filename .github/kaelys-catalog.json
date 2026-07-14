@@ -1,0 +1,22 @@
+{
+	"$schema": "https://raw.githubusercontent.com/kaelys-js/kaelys-js/main/schema/kaelys-catalog.schema.json",
+	"name": "claude-multiacct",
+	"tagline": "Run any number of Claude Desktop instances under different accounts on the same Mac.",
+	"sellMe": "Claude Desktop stores OAuth per-userData directory. `--user-data-dir` lets you point at a second one; combined with `CLAUDE_CONFIG_DIR` for the embedded Claude Code CLI, the same app binary boots into a different identity. This CLI automates the install (per-instance configDir + userData + Dock-clickable clone with rewritten CFBundleIdentifier), safe cross-instance session sharing (symlinks for JSONL + UI + agent metadata; rsync for Chromium storage), repair + doctor diagnostics, and three launchd agents that keep everything current.",
+	"status": "stable",
+	"since": 2026,
+	"primaryLanguage": "Shell",
+	"technology": ["Bash", "launchd", "bats", "mise"],
+	"topics": ["bash", "claude", "claude-desktop", "electron", "launchd", "macos", "multi-account", "oauth"],
+	"products": [
+		{
+			"name": "claude-multiacct",
+			"description": "The CLI — install / uninstall / init / add-instance / remove-instance / list / repair / sync-now / sync-log / refresh-clones / doctor / qa."
+		}
+	],
+	"links": {
+		"homepage": "https://github.com/kaelys-js/claude-multiacct",
+		"issues": "https://github.com/kaelys-js/claude-multiacct/issues",
+		"discussions": "https://github.com/kaelys-js/claude-multiacct/discussions"
+	}
+}
