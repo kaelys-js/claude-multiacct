@@ -1,0 +1,21 @@
+{
+  "exit_code": 0,
+  "stdout_contains": [
+    "wrote discovery/proof/clickup_support-meta/comment-payload.json"
+  ],
+  "stderr_contains": [],
+  "files_present": [
+    "discovery/proof/clickup_support-meta/comment-payload.json"
+  ],
+  "files_absent": [],
+  "payload_shape": {
+    "path": "discovery/proof/clickup_support-meta/comment-payload.json",
+    "expect": {
+      "task_id": "clickup:SUPPORT-META",
+      "task_id_slug": "clickup_support-meta",
+      "mode": "support",
+      "source.title": "Login redirect loops on Safari 17"
+    },
+    "expect_comment_contains": "Login redirect loops on Safari 17"
+  }
+}

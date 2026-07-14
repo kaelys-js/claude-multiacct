@@ -1,0 +1,19 @@
+{
+  "exit_code": 0,
+  "stdout_contains": [
+    "wrote discovery/proof/clickup_support-repo/comment-payload.json",
+    "done (mode=support"
+  ],
+  "stderr_contains": [],
+  "files_present": [
+    "discovery/proof/clickup_support-repo/comment-payload.json"
+  ],
+  "files_absent": [],
+  "payload_shape": {
+    "path": "discovery/proof/clickup_support-repo/comment-payload.json",
+    "expect": {
+      "task_id": "clickup:SUPPORT-REPO",
+      "mode": "support"
+    }
+  }
+}

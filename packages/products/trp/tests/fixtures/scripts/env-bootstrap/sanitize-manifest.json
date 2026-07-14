@@ -1,0 +1,7 @@
+{
+  "_comment": "env-bootstrap emits status lines to stdout and, for the SKIP branch, one stderr line that carries the fix-src absolute path. The parity test materialises a scratch fix-src per case (uniquely-named tempdir) and feeds it to main(argv). The only ephemeral bytes are that scratch path when it lands in stderr; the sanitize pass replaces the scratch prefix with the literal token <FIX_SRC> before comparing to expected.json. No timestamps, no SHAs, no cwds leak — dry-run mode short-circuits every subprocess so the observable is a fixed sequence of echoed commands.",
+  "fixture": "env-bootstrap",
+  "sanitize_impl": "Replace every occurrence of the runtime scratch fix-src path (equal to the per-test tempdir absolute path) with the literal string '<FIX_SRC>' in the captured stdout+stderr bytes, then compare byte-for-byte against expected.stdout / expected.stderr. Sanitization is driven by sanitize-fixture's runPipeline() with a per-case manifest built at runtime — the scratch path is only known when the tempdir is created.",
+  "shape": "b",
+  "shape_reason": "primary output is captured stdout+stderr+exit as free-form text plus a numeric exit code — the driver's callers do not JSON.parse it; they gate on the exit code and log the streams for the operator"
+}

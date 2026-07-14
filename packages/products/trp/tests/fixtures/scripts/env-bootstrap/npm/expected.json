@@ -1,0 +1,12 @@
+{
+  "_case": "package-lock.json alone — npm branch. `npm ci --ignore-scripts` differs from the other three (no `--frozen-lockfile`; npm has no such flag)",
+  "tree": {
+    "package-lock.json": ""
+  },
+  "argv_extra": ["--dry-run"],
+  "expected": {
+    "stdout": "PM: npm\n+ npm ci --ignore-scripts\nCOMPOSE: none found.\n",
+    "stderr": "",
+    "exit": 0
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "_comment": "auto-repair stage=preflight attempt=n/a — an argv element with no colon and not matching any known flag is rejected. The REVISE loop wrapper composes args by concatenation; a stray token from a corrupted previous_attempt must surface loudly, not be silently absorbed.",
+  "argv": ["--unknown-flag"],
+  "env": {},
+  "files": {},
+  "task_mode": null
+}

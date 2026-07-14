@@ -1,0 +1,12 @@
+{
+  "_comment": "auto-repair stage=0-bootstrap attempt=5 (loop cap edge) — support mode always wins over the loop cap: even at TRP_FIX_LOOP_MAX_ATTEMPTS the driver returns 0, never 6. Guards against a regression that would mis-count attempts and refuse a valid support ticket.",
+  "argv": ["clickup:SUPPORT-A5", "--mode=support", "--attempt=5"],
+  "env": {
+    "TRP_FIX_LOOP_MAX_ATTEMPTS": "5"
+  },
+  "files": {
+    "sfp.env": "SFP_REPO_HAND=handled:tttstudios/handled-monorepo-poc:main\n",
+    "trp.env": "TRP_FIX_LOOP_ENABLED=true\nTRP_FIX_LOOP_MAX_ATTEMPTS=5\n"
+  },
+  "task_mode": "support"
+}

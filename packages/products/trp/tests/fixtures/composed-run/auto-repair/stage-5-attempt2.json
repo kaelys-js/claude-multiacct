@@ -1,0 +1,55 @@
+{
+  "_comment": "Auto-repair fixture: stage 5 (apply-patch) failure at attempt 2. On attempt N>=2 the driver additionally runs a chain-apply against the prior attempt's bundle before giving up (fix-task.ts stage5ApplyPatch chain-apply branch). The fixture encodes the prior bundle content (what attempt 1 produced) so the chain-apply path has an on-disk artefact to load, and the prior_failure JSON that the REVISE workflow consumed to author the revised bundle. Expected auto-repair loop exit 66 + fresh trp-fail-a2 record.",
+  "stage": 5,
+  "attempt": 2,
+  "task_id": "clickup:AR-STAGE5-A2",
+  "task_id_slug": "clickup_ar-stage5-a2",
+  "argv": [
+    "clickup:AR-STAGE5-A2",
+    "--mode=solve",
+    "--after-workflow=discovery/trp-bundle-clickup_ar-stage5-a2.json",
+    "--attempt=2"
+  ],
+  "env": {
+    "TRP_FIX_LOOP_ENABLED": "true",
+    "TRP_FIX_LOOP_MAX_ATTEMPTS": "5"
+  },
+  "prior_bundle": {
+    "ready_to_ship": false,
+    "branch_name": "security/ar-stage5-a1",
+    "commit_message": "fix(security): ar-stage5 attempt 1\n\nAuto-authored by trp-fix-task workflow.",
+    "files_to_modify": [
+      {
+        "path": "apps/api/src/auth/verify.ts",
+        "full_content": "// attempt 1 draft — patch would not apply cleanly\n",
+        "rationale": "attempt 1 patch"
+      }
+    ]
+  },
+  "prior_failure": {
+    "attempt_number": 1,
+    "stage_label": "TRP5 apply-patch",
+    "bundle_missing": false,
+    "ci_failure": {
+      "command": "apply-bundle",
+      "exit_code": 5,
+      "stage": "TRP5 apply-patch",
+      "stderr_tail": "patch does not apply cleanly against pinned SHA"
+    },
+    "prior_bundle": {},
+    "style_recon": null
+  },
+  "emit_env": {
+    "STAGE_LABEL": "TRP5 apply-patch",
+    "FAILING_CMD": "apply-bundle exited non-zero (direct + chain both failed)",
+    "ATTEMPT": "2"
+  },
+  "expected": {
+    "exit_code": 66,
+    "stage_label": "TRP5 apply-patch",
+    "attempt_number": 2,
+    "next_attempt_number": 3,
+    "next_bundle_path": "discovery/trp-bundle-clickup_ar-stage5-a2.json",
+    "trp_fail_written_at": "discovery/trp-fail-clickup_ar-stage5-a2-a2.json"
+  }
+}

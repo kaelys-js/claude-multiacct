@@ -1,0 +1,10 @@
+{
+	"scrub_rules": [
+		{
+			"pattern": "\\d+ bytes",
+			"replacement": "__BYTES__",
+			"reason": "byte counts vary as the comment-payload JSON layout edits"
+		}
+	],
+	"structural_shape_only": []
+}

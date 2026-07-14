@@ -1,0 +1,55 @@
+{
+  "_comment": "Auto-repair fixture: stage 7b (docker attack) failure at attempt 2. Prior_failure records the attempt-1 docker log tail showing the attack succeeded (e.g., 'ACCOUNT TAKEOVER' or 'HTTP 200'); the REVISE workflow uses that context to author the attempt-2 bundle. Auto-repair loop stays hot on attempt 2 — exit 66 + fresh trp-fail record.",
+  "stage": "7b",
+  "attempt": 2,
+  "task_id": "clickup:AR-STAGE7B-A2",
+  "task_id_slug": "clickup_ar-stage7b-a2",
+  "argv": [
+    "clickup:AR-STAGE7B-A2",
+    "--mode=solve",
+    "--after-workflow=discovery/trp-bundle-clickup_ar-stage7b-a2.json",
+    "--attempt=2"
+  ],
+  "env": {
+    "TRP_FIX_LOOP_ENABLED": "true",
+    "TRP_FIX_LOOP_MAX_ATTEMPTS": "5"
+  },
+  "prior_bundle": {
+    "ready_to_ship": true,
+    "branch_name": "security/ar-stage7b-a1",
+    "commit_message": "fix(security): ar-stage7b attempt 1",
+    "files_to_modify": [
+      {
+        "path": "apps/api/src/auth/verify.ts",
+        "full_content": "// attempt 1 — allow-list algorithm but still trust email claim\n",
+        "rationale": "attempt 1 pinned the algorithm; docker attack still succeeded via email-identity"
+      }
+    ]
+  },
+  "prior_failure": {
+    "attempt_number": 1,
+    "stage_label": "TRP8 docker attack",
+    "bundle_missing": false,
+    "ci_failure": {
+      "command": "attack SUCCEEDED against patched source",
+      "exit_code": 1,
+      "stage": "TRP8 docker attack",
+      "stderr_tail": "HTTP 200 ACCOUNT TAKEOVER — attack log shows takeover via email-identity claim"
+    },
+    "prior_bundle": {},
+    "style_recon": null
+  },
+  "emit_env": {
+    "STAGE_LABEL": "TRP8 docker attack",
+    "FAILING_CMD": "attack SUCCEEDED against patched source",
+    "ATTEMPT": "2"
+  },
+  "expected": {
+    "exit_code": 66,
+    "stage_label": "TRP8 docker attack",
+    "attempt_number": 2,
+    "next_attempt_number": 3,
+    "next_bundle_path": "discovery/trp-bundle-clickup_ar-stage7b-a2.json",
+    "trp_fail_written_at": "discovery/trp-fail-clickup_ar-stage7b-a2-a2.json"
+  }
+}

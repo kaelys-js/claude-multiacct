@@ -1,0 +1,41 @@
+{
+	"artifacts": {
+		"discovery/fix-log-clickup_hand_itc-308.txt": "__PLACEHOLDER_FIX_LOG__\n",
+		"discovery/trp-fail-clickup_hand_itc-308-a1.json": {
+			"attempt_number": 1,
+			"bundle_missing": true,
+			"ci_failure": {
+				"command": "__PLACEHOLDER_COMMAND__",
+				"exit_code": 1,
+				"stage": "TRP4 bundle absent",
+				"stderr_tail": "__PLACEHOLDER_STDERR_TAIL__"
+			},
+			"prior_bundle": {},
+			"stage_label": "TRP4 bundle absent",
+			"style_recon": null
+		},
+		"discovery/trp-input-clickup_hand_itc-308.json": {
+			"branch_prefix": "security/",
+			"clickup_task_id": "",
+			"clickup_task_url": "",
+			"client_repo": "tttstudios/handled-monorepo-poc",
+			"client_slug": "handled-monorepo-poc",
+			"default_branch": "main",
+			"pinned_files": [],
+			"pinned_sha": "5d47be3a593effe56e35991476b5e0efe93f01eb",
+			"poc_evidence_lock": "",
+			"poc_readme": "__PLACEHOLDER_POC_README__",
+			"summary_section": "",
+			"task_id": "clickup:HAND_ITC-308",
+			"trp_parallel_safe": true
+		}
+	},
+	"exit_code": 66,
+	"mode": "reproduce",
+	"task_id": "clickup:HAND_ITC-308",
+	"wrapper_stdout": {
+		"sanitized": true,
+		"len": 751,
+		"hash": "fnv1a-0a597df55e962af6"
+	}
+}

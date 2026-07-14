@@ -1,0 +1,9 @@
+{
+  "_comment": "auto-repair stage=preflight attempt=n/a — sfp.env present, trp.env absent. Guards against a partial rehydration where only one env file survives; both are required.",
+  "argv": ["clickup:HAND_ITC-101"],
+  "env": {},
+  "files": {
+    "sfp.env": "SFP_REPO_HAND=handled:tttstudios/handled-monorepo-poc:main\n"
+  },
+  "task_mode": null
+}

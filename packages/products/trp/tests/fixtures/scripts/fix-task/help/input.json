@@ -1,0 +1,7 @@
+{
+  "_comment": "auto-repair stage=argparse attempt=n/a — --help short-circuits before any pipeline stage; exercised at parseArgs() to prove --help wins over any later argv position.",
+  "argv": ["--help"],
+  "env": {},
+  "files": {},
+  "task_mode": null
+}

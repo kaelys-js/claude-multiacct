@@ -1,0 +1,10 @@
+{
+  "_comment": "auto-repair stage=0-bootstrap attempt=3 with --repo filter set — support mode short-circuits before stage 1's --repo enforcement runs, so the payload is written regardless of whether the slug exists in sfp.env. Documents that --repo is inert during support (a footgun the REVISE loop must not tighten into a false failure).",
+  "argv": ["clickup:SUPPORT-REPO", "--mode=support", "--attempt=3", "--repo=handled"],
+  "env": {},
+  "files": {
+    "sfp.env": "SFP_REPO_HAND=handled:tttstudios/handled-monorepo-poc:main\n",
+    "trp.env": ""
+  },
+  "task_mode": "support"
+}

@@ -1,0 +1,7 @@
+{
+  "_comment": "auto-repair stage=preflight attempt=n/a — cwd carries no sfp.env. The revise loop wrapper (trp-run-loop) may re-invoke the driver from a stale sandbox; this test proves the pre-source check refuses cleanly with a stable stderr byte.",
+  "argv": ["clickup:HAND_ITC-100"],
+  "env": {},
+  "files": {},
+  "task_mode": null
+}

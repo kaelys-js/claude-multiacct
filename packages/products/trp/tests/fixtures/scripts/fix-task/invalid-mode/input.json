@@ -1,0 +1,7 @@
+{
+  "_comment": "auto-repair stage=preflight attempt=n/a — --mode=<garbage> must fail early with the six valid modes listed. Ensures the revise loop can't smuggle a made-up mode past the guard by rehydrating a stale trp-fail JSON.",
+  "argv": ["clickup:HAND_ITC-999", "--mode=not-a-mode"],
+  "env": {},
+  "files": {},
+  "task_mode": null
+}

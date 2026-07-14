@@ -1,0 +1,10 @@
+{
+  "exit_code": 2,
+  "stdout_contains": [],
+  "stderr_contains": [
+    "invalid TRP_TASK_MODE=not-a-mode",
+    "spike-writeup|spike-solve|spike-full|solve|reproduce|support"
+  ],
+  "files_present": [],
+  "files_absent": []
+}

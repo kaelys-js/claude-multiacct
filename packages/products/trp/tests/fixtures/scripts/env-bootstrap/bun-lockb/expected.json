@@ -1,0 +1,12 @@
+{
+  "_case": "bun.lockb — bun branch, left-hand side of the `bun.lockb || bun.lock` OR",
+  "tree": {
+    "bun.lockb": ""
+  },
+  "argv_extra": ["--dry-run"],
+  "expected": {
+    "stdout": "PM: bun\n+ bun install --frozen-lockfile --ignore-scripts\nCOMPOSE: none found.\n",
+    "stderr": "",
+    "exit": 0
+  }
+}

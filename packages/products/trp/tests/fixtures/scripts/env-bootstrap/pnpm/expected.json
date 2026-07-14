@@ -1,0 +1,12 @@
+{
+  "_case": "pnpm-lock.yaml alone — first-priority PM branch, no compose file, dry-run",
+  "tree": {
+    "pnpm-lock.yaml": ""
+  },
+  "argv_extra": ["--dry-run"],
+  "expected": {
+    "stdout": "PM: pnpm\n+ pnpm install --frozen-lockfile --ignore-scripts\nCOMPOSE: none found.\n",
+    "stderr": "",
+    "exit": 0
+  }
+}

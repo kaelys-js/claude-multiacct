@@ -1,0 +1,10 @@
+{
+  "_comment": "auto-repair stage=0-bootstrap attempt=1 — support mode short-circuit on the first attempt. No task JSON on disk yet, so the payload's title/description are empty strings but the file must still land at discovery/proof/<slug>/comment-payload.json. Anchors the auto-repair loop's baseline: attempt 1 with no prior state.",
+  "argv": ["clickup:SUPPORT-A1", "--mode=support", "--attempt=1"],
+  "env": {},
+  "files": {
+    "sfp.env": "SFP_REPO_HAND=handled:tttstudios/handled-monorepo-poc:main\n",
+    "trp.env": "TRP_FIX_LOOP_ENABLED=true\n"
+  },
+  "task_mode": "support"
+}

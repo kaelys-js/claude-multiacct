@@ -1,0 +1,10 @@
+{
+  "_comment": "auto-repair stage=0-bootstrap attempt=NaN — --attempt=abc parses to 1 (Math.trunc(Number('abc')) || 1). Covers the fallback branch in parseArgs so a corrupted revise-loop wrapper output can't jam the driver into a NaN-driven loop counter.",
+  "argv": ["clickup:SUPPORT-BOUND", "--mode=support", "--attempt=abc", "--after-workflow=discovery/trp-bundle-clickup_support-bound.json"],
+  "env": {},
+  "files": {
+    "sfp.env": "SFP_REPO_HAND=handled:tttstudios/handled-monorepo-poc:main\n",
+    "trp.env": ""
+  },
+  "task_mode": "support"
+}

@@ -1,0 +1,11 @@
+{
+  "exit_code": 0,
+  "stdout_contains": [
+    "fix-task.sh — TRP driver",
+    "Exit code legend",
+    "66   stage 5-8 failed"
+  ],
+  "stderr_contains": [],
+  "files_present": [],
+  "files_absent": ["discovery/proof"]
+}

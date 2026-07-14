@@ -1,0 +1,28 @@
+=== exit ===
+0
+=== stdout ===
+=== TRP-EE loop wrapper for clickup:HAND_ITC-308 (attempt=1) ===
+   TRP_TASK_MODE=spike-writeup (explicit --mode)
+
+== [0] bootstrap ==
+   tools ready
+
+== [1] load POC context ==
+   no POC dir for clickup:HAND_ITC-308 — using task JSON at discovery/task-clickup_hand_itc-308.json as context
+   spike-writeup: skipping client-repo resolution (client_repo=<none>)
+   ClickUp task:   ()
+
+== [SW] spike-writeup emit (spike-writeup) ==
+   TRP_ALLOW_INLINE_SPIKE!=true — driver will NOT produce a writeup (LiveWriteup owns canonical)
+   wrote /tmp/trp-spike-input-clickup_hand_itc-308.json (__BYTES__, 0 criterion(s))
+
+== NEXT (main-context step): ==
+  Workflow({ scriptPath: 'workflows/trp-fix-task.js',
+             args: <contents of /tmp/trp-spike-input-clickup_hand_itc-308.json (already carries trp_task_mode='spike-writeup')> })
+  Then write the returned bundle to discovery/trp-bundle-clickup_hand_itc-308.json and re-run this driver.
+   no bundle at discovery/trp-bundle-clickup_hand_itc-308.json — using canonical writeup (discovery/proof/clickup_hand_itc-308/spike-writeup.md) for comment payload
+   wrote discovery/proof/clickup_hand_itc-308/comment-payload.json (__BYTES__, from spike-writeup.md)
+== done (mode=spike-writeup, comment-payload from canonical source) ==
+
+=== TRP-EE: SUCCESS (attempt 1) ===
+=== stderr ===

@@ -1,0 +1,7 @@
+{
+  "_comment": "auto-repair stage=preflight attempt=n/a — no <TRACKER>:<TASK_ID> positional argv; main() must refuse before touching sfp.env / trp.env. Empty argv is the crux (would-be attempt loops that lose the task id must never fall through silently).",
+  "argv": [],
+  "env": {},
+  "files": {},
+  "task_mode": null
+}

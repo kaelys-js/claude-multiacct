@@ -1,0 +1,1 @@
+../../_shared/bin/fixture-setup.sh

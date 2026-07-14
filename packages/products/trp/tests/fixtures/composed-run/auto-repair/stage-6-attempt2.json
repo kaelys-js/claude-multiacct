@@ -1,0 +1,55 @@
+{
+  "_comment": "Auto-repair fixture: stage 6 (client CI) failure at attempt 2. The prior_failure captures the attempt-1 stderr_tail the workflow's REVISE mode used to author the attempt-2 bundle (e.g., a widened globalEnv entry in turbo.json). Attempt 2 should still route through the same emitTrpJFailure branch — auto-repair loop counter advances to a2 without changing the emitted stage_label shape.",
+  "stage": 6,
+  "attempt": 2,
+  "task_id": "clickup:AR-STAGE6-A2",
+  "task_id_slug": "clickup_ar-stage6-a2",
+  "argv": [
+    "clickup:AR-STAGE6-A2",
+    "--mode=solve",
+    "--after-workflow=discovery/trp-bundle-clickup_ar-stage6-a2.json",
+    "--attempt=2"
+  ],
+  "env": {
+    "TRP_FIX_LOOP_ENABLED": "true",
+    "TRP_FIX_LOOP_MAX_ATTEMPTS": "5"
+  },
+  "prior_bundle": {
+    "ready_to_ship": true,
+    "branch_name": "security/ar-stage6-a1",
+    "commit_message": "fix(security): ar-stage6 attempt 1",
+    "files_to_modify": [
+      {
+        "path": "turbo.json",
+        "full_content": "{\"globalEnv\":[\"NODE_ENV\"]}",
+        "rationale": "attempt 1 forgot to widen globalEnv for the test env var"
+      }
+    ]
+  },
+  "prior_failure": {
+    "attempt_number": 1,
+    "stage_label": "TRP7 client CI",
+    "bundle_missing": false,
+    "ci_failure": {
+      "command": "pnpm run lint",
+      "exit_code": 1,
+      "stage": "TRP7 client CI",
+      "stderr_tail": "turbo.json globalEnv missing ENTRA_TEST_SECRET — pre-commit lint refuses"
+    },
+    "prior_bundle": {},
+    "style_recon": null
+  },
+  "emit_env": {
+    "STAGE_LABEL": "TRP7 client CI",
+    "FAILING_CMD": "pnpm run test",
+    "ATTEMPT": "2"
+  },
+  "expected": {
+    "exit_code": 66,
+    "stage_label": "TRP7 client CI",
+    "attempt_number": 2,
+    "next_attempt_number": 3,
+    "next_bundle_path": "discovery/trp-bundle-clickup_ar-stage6-a2.json",
+    "trp_fail_written_at": "discovery/trp-fail-clickup_ar-stage6-a2-a2.json"
+  }
+}

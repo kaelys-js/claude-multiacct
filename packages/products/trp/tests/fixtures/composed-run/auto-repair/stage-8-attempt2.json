@@ -1,0 +1,57 @@
+{
+  "_comment": "Auto-repair fixture: stage 8 (pre-commit) failure at attempt 2. Prior_failure carries the attempt-1 husky error the REVISE workflow used to author a bundle that either widens the client's lint config, adds the missing tool to node_modules, or removes the offending file class. Auto-repair loop stays live for attempt 2.",
+  "stage": 8,
+  "attempt": 2,
+  "task_id": "clickup:AR-STAGE8-A2",
+  "task_id_slug": "clickup_ar-stage8-a2",
+  "argv": [
+    "clickup:AR-STAGE8-A2",
+    "--mode=solve",
+    "--after-workflow=discovery/trp-bundle-clickup_ar-stage8-a2.json",
+    "--attempt=2",
+    "--push"
+  ],
+  "env": {
+    "TRP_FIX_LOOP_ENABLED": "true",
+    "TRP_FIX_LOOP_MAX_ATTEMPTS": "5",
+    "TRP_ALLOW_REMOTE_MUTATE": "true"
+  },
+  "prior_bundle": {
+    "ready_to_ship": true,
+    "branch_name": "security/ar-stage8-a1",
+    "commit_message": "fix(security): ar-stage8 attempt 1",
+    "files_to_modify": [
+      {
+        "path": ".husky/pre-commit",
+        "full_content": "#!/usr/bin/env sh\nnpx --no -- lint-staged\n",
+        "rationale": "attempt 1 tried to noop the hook; husky refused because tool missing"
+      }
+    ]
+  },
+  "prior_failure": {
+    "attempt_number": 1,
+    "stage_label": "TRP7 pre-commit hook",
+    "bundle_missing": false,
+    "ci_failure": {
+      "command": "git commit (husky): error Command \"prettier\" not found.",
+      "exit_code": 1,
+      "stage": "TRP7 pre-commit hook",
+      "stderr_tail": "husky - pre-commit hook exited with code 1 (error)"
+    },
+    "prior_bundle": {},
+    "style_recon": null
+  },
+  "emit_env": {
+    "STAGE_LABEL": "TRP7 pre-commit hook",
+    "FAILING_CMD": "git commit (husky): error missing peer dep 'prettier'",
+    "ATTEMPT": "2"
+  },
+  "expected": {
+    "exit_code": 66,
+    "stage_label": "TRP7 pre-commit hook",
+    "attempt_number": 2,
+    "next_attempt_number": 3,
+    "next_bundle_path": "discovery/trp-bundle-clickup_ar-stage8-a2.json",
+    "trp_fail_written_at": "discovery/trp-fail-clickup_ar-stage8-a2-a2.json"
+  }
+}
