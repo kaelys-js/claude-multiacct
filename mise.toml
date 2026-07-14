@@ -16,8 +16,8 @@ shellcheck = "0.11.0"
 # Hermetic install/uninstall smoke tests.
 bats = "1.13.0"
 # Secrets scanning — .gitleaks.toml lives at the repo root.
-gitleaks = "8.28.0"
+gitleaks = "8.30.1"
 # YAML lint for instances.yaml + launchd plist templates.
-yamllint = "1.35.1"
+yamllint = "1.38.0"
 # YAML query/edit — read instances.yaml + inject into launchd plist template.
-yq = "4.44.6"
+yq = "4.53.3"
