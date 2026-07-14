@@ -1,8 +1,8 @@
 {
   "$schema": "https://raw.githubusercontent.com/kaelys-js/kaelys-js/main/schema/kaelys-catalog.schema.json",
   "name": "claude-multiacct",
-  "tagline": "Run any number of Claude Desktop instances under different accounts on the same Mac.",
-  "sellMe": "Claude Desktop stores OAuth per-userData directory. `--user-data-dir` lets you point at a second one; combined with `CLAUDE_CONFIG_DIR` for the embedded Claude Code CLI, the same app binary boots into a different identity. This CLI automates the install (per-instance configDir + userData + Dock-clickable clone with rewritten CFBundleIdentifier), safe cross-instance session sharing (symlinks for JSONL + UI + agent metadata; rsync for Chromium storage), repair + doctor diagnostics, and three launchd agents that keep everything current.",
+  "tagline": "Sign in to more than one Claude Desktop account on the same Mac, each in its own Dock-clickable app.",
+  "sellMe": "Claude Desktop only signs in to one Anthropic account at a time — switching means signing out and back in, and losing session history in between. This CLI clones the app once per account, wires each clone to its own OAuth directory (`--user-data-dir` + `CLAUDE_CONFIG_DIR`), and rewrites just enough of the bundle so the Dock lights the right icon for the right window. Sessions and agent metadata are shared safely across clones via symlinks (JSONL, UI, agent) and rsync (Chromium storage), so history follows you between accounts. Ships with three launchd agents that keep clones fresh when Anthropic pushes an update.",
   "status": "stable",
   "since": 2026,
   "primaryLanguage": "Shell",
@@ -26,7 +26,7 @@
   "products": [
     {
       "name": "claude-multiacct",
-      "description": "The CLI \u2014 install / uninstall / init / add-instance / remove-instance / list / repair / sync-now / sync-log / refresh-clones / doctor / qa."
+      "description": "CLI for installing account instances, sharing sessions between them, repairing drifted clones, and following the sync log."
     }
   ],
   "links": {
