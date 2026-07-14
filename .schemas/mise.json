@@ -397,7 +397,7 @@
 							"type": "boolean"
 						},
 						"registries": {
-							"description": "Aqua registry repositories to fetch before the baked-in registry.",
+							"description": "Aqua registry sources to load before the baked-in registry.",
 							"type": "array",
 							"items": { "type": "string" }
 						},
@@ -460,7 +460,12 @@
 						},
 						"binstall_only": {
 							"default": false,
-							"description": "Only use cargo-binstall for installation, fail if not available.",
+							"description": "Require cargo-binstall for Cargo tools without an explicit Git source. Fail if no prebuilt binary is available or if tool options require cargo install.",
+							"type": "boolean"
+						},
+						"binstall_quickinstall": {
+							"default": false,
+							"description": "Allow cargo-binstall to use third-party cargo-quickinstall artifacts.",
 							"type": "boolean"
 						},
 						"registry_name": {
@@ -854,6 +859,11 @@
 						}
 					}
 				},
+				"http_download_timeout": {
+					"default": "30m",
+					"description": "Total time allowed for an HTTP download, including retries.",
+					"type": "string"
+				},
 				"http_retries": {
 					"default": 3,
 					"description": "Number of retries for transient HTTP failures in mise.",
@@ -861,7 +871,7 @@
 				},
 				"http_timeout": {
 					"default": "30s",
-					"description": "Timeout in seconds for all HTTP requests in mise.",
+					"description": "Timeout for connecting or waiting between reads during HTTP requests.",
 					"type": "string"
 				},
 				"idiomatic_version_file": {
@@ -1296,6 +1306,37 @@
 						"rustup_home": {
 							"description": "Path to the rustup home directory. Defaults to `~/.rustup` or `%USERPROFILE%\\.rustup`",
 							"type": "string"
+						}
+					}
+				},
+				"sandbox": {
+					"type": "object",
+					"unevaluatedProperties": false,
+					"properties": {
+						"deny_all": {
+							"default": false,
+							"description": "Deny filesystem reads and writes, network access, and environment variable inheritance by default for `mise run` and `mise exec`.",
+							"type": "boolean"
+						},
+						"deny_env": {
+							"default": false,
+							"description": "Deny environment variable inheritance by default for `mise run` and `mise exec`.",
+							"type": "boolean"
+						},
+						"deny_net": {
+							"default": false,
+							"description": "Deny network access by default for `mise run` and `mise exec`.",
+							"type": "boolean"
+						},
+						"deny_read": {
+							"default": false,
+							"description": "Deny filesystem reads by default for `mise run` and `mise exec`.",
+							"type": "boolean"
+						},
+						"deny_write": {
+							"default": false,
+							"description": "Deny filesystem writes by default for `mise run` and `mise exec`.",
+							"type": "boolean"
 						}
 					}
 				},
@@ -2173,6 +2214,11 @@
 							"type": "object"
 						}
 					]
+				},
+				"output": {
+					"description": "output style for this task (prefix, interleave, keep-order, replacing, timed, quiet, silent). Independent of the quiet/silent verbosity fields.",
+					"enum": ["prefix", "interleave", "keep-order", "replacing", "timed", "quiet", "silent"],
+					"type": "string"
 				},
 				"quiet": {
 					"default": false,
