@@ -22,7 +22,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # jdx/mise-action installs mise + every tool pinned in mise.toml
       # (shellcheck, bats, gitleaks, yq, yamllint). Caches to speed up
