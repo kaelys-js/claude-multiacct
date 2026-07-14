@@ -1,8 +1,8 @@
 {
 	"$schema": "https://raw.githubusercontent.com/kaelys-js/kaelys-js/main/schema/kaelys-catalog.schema.json",
 	"name": "foundation-registry",
-	"tagline": "Business-as-Code governance registry — owned decision records for a shared client foundation.",
-	"sellMe": "A pnpm workspace that holds the firm's decision spine as Markdown-with-YAML-frontmatter records — PRDs, PDRs, ADRs, SPECs, Tasks, Releases — validated by a JSON Schema and routed to named GitHub teams via CODEOWNERS. Records are partitioned by domain (governance, build, design, frontend, backend, infra, security, data, observability) and cross-link into a PRD → PDR/ADR → SPEC → Tasks → Release spine. Not a runtime application; the record of what the firm decided and why.",
+	"tagline": "Every decision the firm has made, stored as versioned Markdown records with schemas and clear ownership.",
+	"sellMe": "Firm-level decisions scatter across wikis, chat, and one-off docs, and nobody can find the reasoning six months later. This repo keeps them as Markdown-with-YAML-frontmatter records — PRDs, PDRs, ADRs, SPECs, Tasks, Releases — validated by JSON Schema and routed to named teams via CODEOWNERS. Records partition by domain (governance, design, frontend, backend, infra, security, data, observability) and cross-link forward: PRD → PDR/ADR → SPEC → Tasks → Release. It's the record of what the firm decided and why — not a runtime application.",
 	"status": "wip",
 	"since": 2026,
 	"primaryLanguage": "TypeScript",
@@ -19,23 +19,23 @@
 	"products": [
 		{
 			"name": "config",
-			"description": "@foundation/config — shared tsconfig base + every tool config (oxlint, oxfmt, taplo, syncpack, markdownlint, yamllint, commitlint, gitleaks, editorconfig, lefthook base)."
+			"description": "Shared configs for every tool the firm uses — tsconfig base, oxlint, oxfmt, taplo, syncpack, markdownlint, yamllint, commitlint, gitleaks, editorconfig, lefthook."
 		},
 		{
 			"name": "core",
-			"description": "@foundation/core — repoRoot() + miseExec() helpers, shared by qa and sync."
+			"description": "Small runtime helpers (repoRoot, miseExec) that qa and sync both depend on."
 		},
 		{
 			"name": "qa",
-			"description": "@foundation/qa — lint/format dispatch over the whole tree, plus gitmeta / editorconfig / lefthook / schema checks."
+			"description": "Lint, format, and structural checks across the whole tree — gitmeta, editorconfig, lefthook, and JSON-schema validation, all under one command."
 		},
 		{
 			"name": "sync",
-			"description": "@foundation/sync — generated-file drift guards (versions, vendored schemas, turbo config, post-checkout/merge sync)."
+			"description": "Drift guard for generated files — version pins, vendored schemas, Turbo config, and the post-checkout/merge hooks that keep them in step."
 		},
 		{
 			"name": "registry",
-			"description": "@foundation/registry — the record spine (PRD/PDR/ADR/SPEC/tasks/release) + its JSON Schema validator + generated index site."
+			"description": "The record spine itself — PRD, PDR, ADR, SPEC, tasks, releases — validated against a JSON Schema and rendered as a browseable index site."
 		}
 	]
 }
