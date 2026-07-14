@@ -28,6 +28,7 @@ import { join } from "node:path";
 import {
 	main,
 	readConfig,
+	readTemplate,
 	substitute,
 	writeIdempotent,
 	type OptInConfig,
@@ -166,6 +167,45 @@ describe("writeIdempotent", () => {
 		const outcome = writeIdempotent(target, "new\n", true);
 		expect(outcome).toBe("written");
 		expect(readFileSync(target, "utf8")).toBe("new\n");
+	});
+});
+
+describe("readTemplate", () => {
+	it("reads the shipped template file with all three placeholder names present", () => {
+		// Load-bearing behaviour: the CLI's default template is the file the
+		// opt-in flow actually writes into a fork. If the template goes missing
+		// (path skew during a refactor, wrong build output) `readTemplate` throws
+		// on first call — a silent regression, since default-argument reads only
+		// happen when a caller lets it default. This test executes that code
+		// path and asserts the shape of the returned content.
+		const template = readTemplate();
+		expect(template).toContain("${UPSTREAM_REPO_SSH}");
+		expect(template).toContain("${UPSTREAM_BRANCH}");
+		expect(template).toContain("${UPSTREAM_DEPLOY_KEY_SECRET}");
+	});
+
+	it("survives `main()` running with the DEFAULT template arg (not a fixture)", () => {
+		// The CLI's `main()` accepts an optional `template` for tests; when
+		// omitted it delegates to `readTemplate()`. This test drives the
+		// default-argument arm end-to-end so the fallback is not a coverage
+		// blind spot — a future refactor that broke `readTemplate` would
+		// otherwise slip past every test that passed a fixture template.
+		writeFileSync(join(workDir, ".sync-upstream.json"), JSON.stringify(CONFIG));
+		let out = "";
+		let errText = "";
+		const code = main(
+			[],
+			workDir,
+			(s) => {
+				out += s;
+			},
+			(s) => {
+				errText += s;
+			},
+		);
+		expect(code).toBe(0);
+		expect(errText).toBe("");
+		expect(out).toMatch(/wrote \.github\/workflows\/sync-upstream\.yml/u);
 	});
 });
 

@@ -165,6 +165,11 @@ export function main(
 }
 
 // Run as CLI only when invoked as `node <this-script>` (mirrors schemas.ts).
+// The body is exercised in production but not from the vitest worker
+// (`import.meta.filename !== process.argv[1]` under vitest), so the coverage
+// tool sees these six lines as untaken; the tests below cover `main()`
+// directly against a tmpdir instead.
+/* v8 ignore start -- CLI-entry block; main() is unit-tested against a tmpdir */
 if (import.meta.filename === process.argv[1]) {
 	const code = main(
 		process.argv.slice(2),
@@ -174,3 +179,4 @@ if (import.meta.filename === process.argv[1]) {
 	);
 	process.exit(code);
 }
+/* v8 ignore stop */
