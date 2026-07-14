@@ -1,6 +1,6 @@
 # AGENTS.md -- engineering rules + orientation
 
-_Part of the strach-poc security proof-of-concept workspace._
+_Part of the foundation-registry — the Business-as-Code governance workspace._
 
 > **What this file is.** The engineering rules every AI agent follows when doing CODE work in this repo (refactors, feature work, docs, security reviews, PoC builds). It's deliberately short -- read these first. The rules apply to interactive Claude Code sessions and to any workflow sub-agents spawned from this repo.
 >
