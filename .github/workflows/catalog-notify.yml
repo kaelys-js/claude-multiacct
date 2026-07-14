@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=../../.schemas/github-workflow.json
 # Notifies kaelys-js/kaelys-js when this repo's .github/kaelys-catalog.json
 # changes on main. The sync-catalog workflow over there listens for the
 # `catalog-updated` repository_dispatch event and re-renders the profile
