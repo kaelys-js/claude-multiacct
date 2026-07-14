@@ -45,6 +45,32 @@ setup() {
   export CMA_SKIP_LAUNCHD=1
   export CMA_SKIP_AUTO_MIGRATE=1
 
+  # Hermetic fake Claude.app so `add-instance` can call build-clone-app.sh
+  # without depending on a real /Applications/Claude.app being present
+  # (which is the case in CI runners).
+  export CMA_SOURCE_CLAUDE_APP="$BATS_TEST_TMPDIR/fake-claude.app"
+  mkdir -p "$CMA_SOURCE_CLAUDE_APP/Contents/MacOS"
+  cat >"$CMA_SOURCE_CLAUDE_APP/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>        <string>com.fake.claude</string>
+    <key>CFBundleExecutable</key>        <string>Claude</string>
+    <key>CFBundleName</key>              <string>Claude</string>
+    <key>CFBundleDisplayName</key>       <string>Claude</string>
+    <key>CFBundleShortVersionString</key><string>0.0.1-fake</string>
+    <key>CFBundleVersion</key>           <string>1</string>
+    <key>CFBundlePackageType</key>       <string>APPL</string>
+</dict>
+</plist>
+PLIST
+  cat >"$CMA_SOURCE_CLAUDE_APP/Contents/MacOS/Claude" <<'BIN'
+#!/usr/bin/env bash
+echo "fake claude ran with args: $*"
+BIN
+  chmod +x "$CMA_SOURCE_CLAUDE_APP/Contents/MacOS/Claude"
+
   # PATH stubs. Default posture: pgrep reports NO matching Claude process
   # (exit 1) so the worker proceeds; sleep is a no-op so the intentional
   # 5s Chromium-flush wait doesn't accumulate across the suite. Individual
