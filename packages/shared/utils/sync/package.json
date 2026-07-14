@@ -8,7 +8,8 @@
 	"license": "SEE LICENSE IN LICENSE",
 	"dependencies": {
 		"@foundation/core": "workspace:*",
-		"@foundation/qa": "workspace:*"
+		"@foundation/qa": "workspace:*",
+		"valibot": "1.4.2"
 	},
 	"devDependencies": {
 		"@foundation/config": "workspace:*"

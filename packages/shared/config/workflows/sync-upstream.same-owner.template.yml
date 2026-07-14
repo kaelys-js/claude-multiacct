@@ -1,0 +1,195 @@
+# SPDX-FileCopyrightText: 2026 TTT Studios
+# SPDX-License-Identifier: LicenseRef-Proprietary
+#
+# Template for a fork's daily auto-merge of its upstream mirror into `main`
+# WHEN the fork and the upstream sit under the SAME GitHub account. GitHub
+# enforces global-per-account uniqueness on deploy-key material, so the
+# cross-owner "same key installed on both repos" pattern is refused with
+# `key is already in use` in this topology. This variant carries no deploy
+# key at all: both remotes ride HTTPS with a repo-scoped personal access
+# token (`secrets.GH_TOKEN`, `repo` + `workflow` scope on the account).
+#
+# Consumed by `pnpm sync-upstream:opt-in` when `.sync-upstream.json` sets
+# `"mode": "same-owner"`. Two placeholders are substituted on write:
+#
+#   UPSTREAM_REPO_PATH — owner/repo of the upstream, e.g.
+#                        `kaelys-js/foundation-registry`. Derived by the CLI
+#                        from `upstreamRepoSsh` (`git@github.com:<path>.git`).
+#   UPSTREAM_BRANCH    — the upstream branch to track, e.g. `main`.
+#
+# Substitution is a literal ${NAME} string-replace; GHA's own ${{ ... }}
+# expressions pass through untouched because the outer braces do not match
+# a placeholder start. The lines that reach for the token look like
+# `${{ secrets.GH_TOKEN }}` in both the template and the generated file —
+# same-owner hardcodes GH_TOKEN as the secret name, so there is no
+# deploy-key placeholder here (unlike the cross-owner template).
+#
+# The template intentionally omits the yaml-language-server schema-ref line —
+# the CLI prepends the correct ref for the OUTPUT location on write, so the
+# template file itself is not schema-checked (its own path differs from
+# where the generated file lands and the ref would resolve to nowhere).
+#
+# Token setup sequence (do this once per fork before enabling):
+#
+#   1. On the same GitHub account that owns both repos, create a classic
+#      PAT (`repo` + `workflow` scope) or a fine-grained PAT with
+#      `Contents: read/write` + `Pull requests: read/write` on this fork
+#      AND `Contents: read` on the upstream.
+#   2. Store the token as the repo secret `GH_TOKEN` on the fork.
+#   3. Nothing on the upstream side — HTTPS reads under the same account
+#      are already authorised by the token.
+#
+# What the workflow does at run time:
+#
+#   1. Checkout `main` with fetch-depth 0 using `GH_TOKEN` (read of upstream
+#      + write of fork under the same account).
+#   2. Add the HTTPS `upstream` remote (token embedded via
+#      `x-access-token`) and fetch the tracked branch.
+#   3. Try `git merge --ff-only`. On success, push and exit.
+#   4. On non-fast-forward: cut branch `sync/upstream-YYYY-MM-DD-<sha>`,
+#      merge with a fixed rule (upstream wins under `packages/shared` and
+#      `.schemas`; product code, product-specific workflows, and
+#      `TOLARIA.md` win locally), push (`--force-with-lease` so a same-day
+#      rerun against the same upstream tip replaces the previous attempt's
+#      branch), open a PR, enable squash auto-merge with branch delete.
+#   5. If a merged path outside the two allowlists conflicts, the commit
+#      lands with conflict markers, the PR stays open, GitHub CI reports
+#      the failure, and the reviewer resolves by hand.
+
+name: sync-upstream
+
+on:
+  schedule:
+    - cron: "0 10 * * *" # every day 10:00 UTC (03:00 America/Los_Angeles under PT)
+  workflow_dispatch:
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      # GitHub enforces global-per-account uniqueness on deploy-key material.
+      # Both fork and upstream sit under the same account, so the cross-
+      # owner template's "same key on both repos" pattern refuses the
+      # second install with `key is already in use`. This variant skips
+      # deploy keys and runs both remotes over HTTPS using `secrets.GH_TOKEN`
+      # (a PAT with `repo` + `workflow` scope on the account).
+      - name: Checkout fork main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Configure git identity
+        run: |
+          git config user.name "Cole Beuker"
+          git config user.email "cole.beuker@ttt.studio"
+
+      - name: Add upstream remote and fetch
+        run: |
+          git remote add upstream "https://x-access-token:${{ secrets.GH_TOKEN }}@github.com/${UPSTREAM_REPO_PATH}.git"
+          git fetch upstream ${UPSTREAM_BRANCH}
+
+      - name: Try fast-forward
+        id: ff
+        run: |
+          if git merge --ff-only upstream/${UPSTREAM_BRANCH}; then
+            echo "result=ff" >>"$GITHUB_OUTPUT"
+            git push origin main
+          else
+            echo "result=conflict" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Create sync branch on non-fast-forward
+        if: steps.ff.outputs.result == 'conflict'
+        id: branch
+        run: |
+          git reset --hard origin/main
+          UPSTREAM_SHA=$(git rev-parse --short upstream/${UPSTREAM_BRANCH})
+          BRANCH="sync/upstream-$(date -u +%Y-%m-%d)-${UPSTREAM_SHA}"
+          echo "branch=${BRANCH}" >>"$GITHUB_OUTPUT"
+          git checkout -b "${BRANCH}"
+
+      - name: Merge upstream with fixed conflict rule
+        if: steps.ff.outputs.result == 'conflict'
+        run: |
+          set +e
+          git merge --no-ff --no-commit upstream/${UPSTREAM_BRANCH}
+          set -e
+
+          for p in packages/shared .schemas mise.toml turbo.json; do
+            if [ -e "$p" ] || git ls-files -u "$p" | grep -q .; then
+              git checkout --theirs -- "$p" 2>/dev/null || true
+              git add -A "$p" 2>/dev/null || true
+            fi
+          done
+
+          for p in \
+            packages/products/cole-30-60-90 \
+            .github/workflows/refresh.yml \
+            .github/workflows/reminders.yml \
+            .github/workflows/sync-upstream.yml \
+            TOLARIA.md \
+          ; do
+            if [ -e "$p" ] || git ls-files -u "$p" | grep -q .; then
+              git checkout --ours -- "$p" 2>/dev/null || true
+              git add -A "$p" 2>/dev/null || true
+            fi
+          done
+
+          # Commit whatever was resolved. If the rule-based checkouts left
+          # unmerged paths outside both allowlists, `commit --no-edit` fails;
+          # fall through to a commit that captures the working tree with
+          # conflict markers so the PR opens for a human to resolve.
+          git -c "user.name=Cole Beuker" -c "user.email=cole.beuker@ttt.studio" \
+            commit --no-edit || {
+              git -c "user.name=Cole Beuker" -c "user.email=cole.beuker@ttt.studio" \
+                commit -am "sync: upstream merge with unresolved conflicts (needs review)"
+            }
+          # No `exit ${MERGE_STATUS}` — the docstring's contract is that a
+          # conflict PR still opens ("the commit lands with conflict markers,
+          # the PR stays open"). Failing this step here would short-circuit
+          # Push + PR-open below and leave the operator with nothing to
+          # review. Merge cleanliness is reported by the opened PR's own CI.
+
+      - name: Push sync branch
+        if: steps.ff.outputs.result == 'conflict'
+        run: |
+          # `--force-with-lease` because the branch name is deterministic
+          # (`sync/upstream-<date>-<upstream-sha>`); a rerun on the same day
+          # against the same upstream tip needs to replace the previous
+          # attempt's branch, not error `non-fast-forward`. The lease guards
+          # against overwriting a push from a concurrent run.
+          git push --force-with-lease origin "${{ steps.branch.outputs.branch }}"
+
+      - name: Open PR and enable auto-merge
+        if: steps.ff.outputs.result == 'conflict'
+        env:
+          # `github.token` (the ambient GITHUB_TOKEN) cannot create pull
+          # requests: GitHub blocks it with `GitHub Actions is not permitted
+          # to create or approve pull requests`. Use the personal PAT
+          # (`secrets.GH_TOKEN`, `repo` + `workflow` scope) which is already
+          # set on this repo for the refresh workflow.
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          # `gh` scans git remotes to decide which repo owns the PR. With
+          # both `origin` (this fork) and `upstream` (the same-owner mirror,
+          # added by the earlier step) registered, it can't guess correctly
+          # and errored `Could not resolve to a Repository with the name
+          # '<upstream>'`. Pin the repo explicitly so gh stops guessing.
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh pr create \
+            --base main \
+            --head "${{ steps.branch.outputs.branch }}" \
+            --title "sync: upstream $(date -u +%Y-%m-%d)" \
+            --body "Automated sync of upstream/${UPSTREAM_BRANCH} into this fork. Conflict rule: upstream wins under \`packages/shared\` and \`.schemas\`; product and product-workflow paths win locally. If CI passes, this PR auto-merges (squash) and the branch is deleted."
+          gh pr merge \
+            "${{ steps.branch.outputs.branch }}" \
+            --auto --squash --delete-branch

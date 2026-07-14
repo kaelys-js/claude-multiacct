@@ -42,11 +42,16 @@ Not recommended. A second repo doubles the surface for drift and forces a sync l
 
 ## Opting into upstream sync
 
-Runtime forks (`kaelys-js/ttt-studio-cole-30-60-90-plan` is the first) track this repo's `main` branch through a daily GitHub Actions workflow. The workflow lives in the fork, but its shape is versioned here at `packages/shared/config/workflows/sync-upstream.template.yml`; a fork generates its own copy with `pnpm sync-upstream:opt-in` and never hand-copies.
+Runtime forks (`kaelys-js/ttt-studio-cole-30-60-90-plan` is the first) track this repo's `main` branch through a daily GitHub Actions workflow. The workflow lives in the fork, but its shape is versioned here at `packages/shared/config/workflows/sync-upstream.<mode>.template.yml`; a fork generates its own copy with `pnpm sync-upstream:opt-in` and never hand-copies.
 
-Steps, in order:
+Two topologies are supported, picked by the `mode` field in `.sync-upstream.json`:
 
-1. In the fork checkout, create `.sync-upstream.json` at the repo root with three fields:
+- `"cross-owner"` (default) — the fork and the upstream sit under different GitHub accounts, so a single deploy key installed on both repos is unique per-account. This is the shape the template was originally designed around.
+- `"same-owner"` — both repos sit under the same account, and GitHub refuses to install the same deploy key twice. The variant carries no deploy key: origin push and upstream fetch both ride HTTPS with a repo-scoped PAT stored as `secrets.GH_TOKEN` on the fork.
+
+Steps, cross-owner:
+
+1. In the fork checkout, create `.sync-upstream.json` at the repo root:
 
    ```json
    {
@@ -56,13 +61,34 @@ Steps, in order:
    }
    ```
 
+   `mode` may be omitted; it defaults to `"cross-owner"`.
+
 2. Generate an Ed25519 deploy key locally: `ssh-keygen -t ed25519 -N '' -f /tmp/upstream-deploy-key -C "sync-upstream <fork>"`.
 3. Add `/tmp/upstream-deploy-key.pub` as a READ-ONLY deploy key on the upstream repo (Settings → Deploy keys → Add).
 4. Add the SAME public key as a WRITE deploy key on the fork (Settings → Deploy keys → check "Allow write access").
 5. Store the private key as the `UPSTREAM_DEPLOY_KEY` (or whatever `deployKeySecret` was set to) repo secret on the fork: `gh secret set UPSTREAM_DEPLOY_KEY --repo <owner>/<fork> < /tmp/upstream-deploy-key`.
 6. Wipe the local private key: `rm /tmp/upstream-deploy-key*`.
-7. From the fork root, run `pnpm sync-upstream:opt-in`. That writes `.github/workflows/sync-upstream.yml` in the fork with the three placeholders substituted.
+7. From the fork root, run `pnpm sync-upstream:opt-in`. That writes `.github/workflows/sync-upstream.yml` in the fork with placeholders substituted.
 8. Commit `.sync-upstream.json` and the generated workflow, push, and the daily cron takes over. `workflow_dispatch` triggers a run on demand.
+
+Steps, same-owner:
+
+1. In the fork checkout, create `.sync-upstream.json` at the repo root:
+
+   ```json
+   {
+   	"mode": "same-owner",
+   	"upstreamRepoSsh": "git@github.com:<owner>/foundation-registry.git",
+   	"upstreamBranch": "main"
+   }
+   ```
+
+   The SSH URL is only there so the CLI can derive `owner/repo` for the HTTPS URL it composes; the workflow itself never fetches over SSH in this mode. `deployKeySecret` is omitted (and rejected if set).
+
+2. On the same account that owns both repos, create a classic PAT (`repo` + `workflow` scope) or a fine-grained PAT with `Contents: read/write` + `Pull requests: read/write` on the fork AND `Contents: read` on the upstream.
+3. Store the token as the `GH_TOKEN` repo secret on the fork: `gh secret set GH_TOKEN --repo <owner>/<fork> < /path/to/token`.
+4. From the fork root, run `pnpm sync-upstream:opt-in`. Same output path; the CLI picks the same-owner template automatically off `mode`.
+5. Commit `.sync-upstream.json` and the generated workflow, push, and the daily cron takes over.
 
 Re-running `pnpm sync-upstream:opt-in` is a no-op when the workflow file already matches. If the fork owner hand-edits the generated workflow (for instance to widen the fork-wins path list) and the config later changes, the tool exits with a conflict message and preserves the local edit; pass `--force` to overwrite.
 

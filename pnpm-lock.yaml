@@ -126,6 +126,9 @@ importers:
       '@foundation/qa':
         specifier: workspace:*
         version: link:../qa
+      valibot:
+        specifier: 1.4.2
+        version: 1.4.2(typescript@6.0.3)
     devDependencies:
       '@foundation/config':
         specifier: workspace:*
