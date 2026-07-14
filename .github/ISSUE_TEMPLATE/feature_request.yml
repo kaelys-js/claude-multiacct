@@ -1,0 +1,30 @@
+---
+name: Feature request
+description: An idea for the tool.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that's currently painful?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: >
+        What behaviour would you like to see? Include any specific commands or
+        flags you're imagining.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you've considered
+      description: Other approaches you thought about + why you dismissed them.
+    validations:
+      required: false

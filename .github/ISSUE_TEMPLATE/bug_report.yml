@@ -1,0 +1,63 @@
+---
+name: Bug report
+description: Something's broken. Include output from `claude-multiacct doctor`.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing! Please include the `doctor` output + macOS/Claude
+        Desktop versions so we can reproduce.
+
+  - type: input
+    id: macos_version
+    attributes:
+      label: macOS version
+      description: Output of `sw_vers -productVersion`
+      placeholder: "e.g. 15.2"
+    validations:
+      required: true
+
+  - type: input
+    id: claude_version
+    attributes:
+      label: Claude Desktop version
+      description: >
+        Output of
+        `plutil -extract CFBundleShortVersionString raw
+        /Applications/Claude.app/Contents/Info.plist`
+      placeholder: "e.g. 1.20186.1"
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction steps
+      description: What did you run? What did you expect vs what happened?
+      placeholder: |
+        1. `claude-multiacct add-instance b --email you@example.com`
+        2. Expected: mirror clone at ~/Applications/Claude Account B.app
+        3. Actually got: <the error>
+    validations:
+      required: true
+
+  - type: textarea
+    id: doctor
+    attributes:
+      label: '`claude-multiacct doctor` output'
+      description: Paste the full output. Redact any account UUIDs if desired.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: >
+        Anything from ~/Library/Logs/claude-multiacct/ — sessions-sync.log,
+        clone-refresh.log, metadata-watcher.log.
+      render: shell
+    validations:
+      required: false

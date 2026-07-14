@@ -1,0 +1,39 @@
+---
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel in-progress runs for the same branch when a new push arrives.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qa:
+    name: qa lint + qa test
+    runs-on: macos-14
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # jdx/mise-action installs mise + every tool pinned in mise.toml
+      # (shellcheck, bats, gitleaks, yq, yamllint). Caches to speed up
+      # subsequent runs.
+      - name: Install mise + pinned toolchain
+        uses: jdx/mise-action@v2
+
+      # qa lint = shellcheck + gitleaks + yamllint
+      - name: qa lint
+        run: bin/claude-multiacct qa lint
+
+      # qa test = hermetic bats suite (all four .bats files).
+      # Runs under scratch $HOME (CMA_SKIP_LAUNCHD=1 + CMA_SKIP_AUTO_MIGRATE=1
+      # set by each file's setup()), so no live macOS state is touched.
+      - name: qa test
+        run: bin/claude-multiacct qa test

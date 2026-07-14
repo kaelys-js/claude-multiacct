@@ -1,0 +1,14 @@
+---
+# https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+version: 2
+
+updates:
+  # Track GitHub Actions used in workflows. The mise-managed toolchain
+  # (shellcheck, bats, gitleaks, yq, yamllint) is pinned in mise.toml and
+  # not tracked here — Dependabot doesn't understand mise; those tools are
+  # updated by the maintainer via `mise upgrade`.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5

@@ -2,6 +2,8 @@
 
 **Run any number of Claude Desktop instances under different accounts on the same Mac, sharing sessions between them, without logout/login.**
 
+[![CI](https://github.com/kaelys-js/claude-multiacct/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kaelys-js/claude-multiacct/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
 [![shellcheck](https://img.shields.io/badge/shellcheck-clean-brightgreen?style=flat-square)](#quality-gates)
 [![bats](https://img.shields.io/badge/bats-hermetic-brightgreen?style=flat-square)](#quality-gates)
 [![gitleaks](https://img.shields.io/badge/gitleaks-clean-brightgreen?style=flat-square)](#quality-gates)
@@ -152,3 +154,11 @@ Both must pass on `main`. `.gitleaks.toml` covers OAuth-adjacent paths that the 
 ## Engineering
 
 This repo follows the 13 rules in [AGENTS.md](AGENTS.md). AI agents load `AGENTS.md` automatically; humans reading the code should skim it once too.
+
+## Contributing / feedback
+
+- **Questions, ideas, use cases:** [GitHub Discussions](https://github.com/kaelys-js/claude-multiacct/discussions).
+- **Bugs / feature requests:** open an [Issue](https://github.com/kaelys-js/claude-multiacct/issues) — the templates cover what to include.
+- **Security issues:** please use [private vulnerability reporting](https://github.com/kaelys-js/claude-multiacct/security/advisories/new), see [SECURITY.md](SECURITY.md).
+- **Code of Conduct:** [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+- **License:** MIT — see [LICENSE](LICENSE).
