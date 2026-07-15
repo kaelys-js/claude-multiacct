@@ -63,8 +63,11 @@ jobs:
       - name: Install mise + pinned toolchain
         uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d  # v4.2.0
 
-      - name: Install kcov (apt)
-        run: sudo apt-get update && sudo apt-get install -y kcov
+      - name: Install kcov (apt — enable universe)
+        run: |
+          sudo add-apt-repository -y universe
+          sudo apt-get update
+          sudo apt-get install -y kcov
 
       # Runs `kcov + bats` and enforces ≥90% line coverage. Fails the job if
       # below threshold; uploads the HTML report either way.
