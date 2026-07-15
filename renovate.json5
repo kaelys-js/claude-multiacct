@@ -91,7 +91,7 @@
 		{
 			customType: "regex",
 			managerFilePatterns: ["/^mise\\.toml$/"],
-			matchStrings: ["^node\\s*=\\s*\"(?<currentValue>[^\"]+)\""],
+			matchStrings: ['^node\\s*=\\s*"(?<currentValue>[^"]+)"'],
 			depNameTemplate: "node",
 			packageNameTemplate: "nodejs/node",
 			datasourceTemplate: "github-releases",
@@ -101,7 +101,7 @@
 		{
 			customType: "regex",
 			managerFilePatterns: ["/^mise\\.toml$/"],
-			matchStrings: ["^pnpm\\s*=\\s*\"(?<currentValue>[^\"]+)\""],
+			matchStrings: ['^pnpm\\s*=\\s*"(?<currentValue>[^"]+)"'],
 			depNameTemplate: "pnpm",
 			packageNameTemplate: "pnpm",
 			datasourceTemplate: "npm",
