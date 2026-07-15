@@ -207,7 +207,7 @@ jobs:
           P1=$(git rev-parse HEAD^1)
           P2=$(git rev-parse HEAD^2)
           MSG=$(git log -1 --format=%B HEAD)
-          SIGNED=$(gh api POST /repos/${{ github.repository }}/git/commits \
+          SIGNED=$(gh api -X POST /repos/${{ github.repository }}/git/commits \
             -f tree="$TREE" \
             -f parents[]="$P1" -f parents[]="$P2" \
             -f message="$MSG" \
