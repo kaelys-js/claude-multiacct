@@ -76,6 +76,11 @@ labels and emails everywhere, and empty `issues` arrays.
 
 ## Troubleshooting
 
+Cross-Mac-specific failure modes are below. Everything else lives in the
+main [docs/troubleshooting.md](troubleshooting.md) (Dock icon click no-op,
+sidebar shows no sessions, sync log skips, launchd plist errors, mirror
+carrying primary's identity, IndexedDB drift, add / remove / reset flows).
+
 - **Sessions from Mac A don't appear on Mac B yet.**
   Cloud sync latency. Wait a few minutes; on very large session histories the
   first sync after sign-in can take longer. Launch and re-launch the mirror

@@ -108,6 +108,77 @@ claude-multiacct uninstall                 # removes the ~/.local/bin symlink
 # Nuke every trace (launchd + config + backups): see docs/troubleshooting.md → "Complete reset".
 ```
 
+## What changed in this update
+
+Recent user-visible additions since the initial `add-instance` / `doctor`
+CLI surface:
+
+- **`exec <label> [--] <cmd>` subcommand** — run any command with
+  `$CLAUDE_CONFIG_DIR` and `$CHROMIUM_USER_DATA_DIR` set to the mirror's
+  paths. Point the standalone `claude` CLI (or any Claude Code SDK tool)
+  at a specific mirror without launching Desktop. With no `<cmd>`, prints
+  the two `export` lines a wrapper would use — usable via
+  `eval "$(claude-multiacct exec b)"`.
+- **`doctor --json` flag** — structured JSON report suitable for piping
+  to `jq` or `diff`ing between two Macs. See
+  [docs/cross-mac-setup.md](docs/cross-mac-setup.md) for the field-by-field
+  cross-Mac diff protocol.
+- **`docs/cross-mac-setup.md`** — walkthrough for running the same
+  mirrors on more than one Mac. Anthropic's per-account cloud already syncs
+  each account's sessions across devices, so the local work is just
+  running the same `add-instance` commands on each machine.
+- **Auto-migration of bundle-id drift** — on every non-informational CLI
+  invocation, `claude-multiacct` reads each mirror's live `Info.plist`
+  `CFBundleIdentifier` and, if it disagrees with the current expected
+  namespace, silently re-runs `install-instance.sh` for the drifted
+  labels (unless a mirror is running — then it warns and skips the
+  rebuild to avoid corrupting a live bundle). No manual step required
+  after a `git pull` that bumps the bundle-id shape.
+
+## Upgrading an existing install
+
+If `claude-multiacct` is already installed on this machine, pick up the
+changes above with:
+
+```sh
+# 1. Pull latest.
+cd ~/Documents/work/@personal/claude-multiacct
+git pull
+
+# 2. Re-run install so the CLI symlink at ~/.local/bin/claude-multiacct
+#    picks up any new subcommands (idempotent — safe to re-run any time;
+#    only rewrites the symlink if the target has changed).
+bin/claude-multiacct install
+
+# 3. Verify. `doctor --json` is new; pipe to jq to skim the tree.
+claude-multiacct doctor
+claude-multiacct doctor --json | jq .
+
+# 4. Try the new exec form (points $CLAUDE_CONFIG_DIR at a mirror).
+claude-multiacct exec <label> -- claude   # e.g. exec b -- claude
+```
+
+**On the Mac mini (primary + mirror host):** run steps 1-4 above. No
+per-mirror re-sign or re-clone is required — bundle-id drift, if any,
+heals itself on the next CLI invocation (see "What changed in this
+update" above).
+
+**On the work MacBook (or any second Mac):** run the identical steps 1-4.
+Then read [docs/cross-mac-setup.md](docs/cross-mac-setup.md) —
+Anthropic's per-account cloud already syncs each account's sessions
+across devices, so as long as each mirror on the second Mac is signed
+in with the same account as on the first, the sessions appear on both.
+
+To verify the two installs are structurally identical, run on each Mac:
+
+```sh
+claude-multiacct doctor --json > "$(hostname -s).json"
+```
+
+then copy both JSON files to one machine and diff them (see
+[docs/cross-mac-setup.md](docs/cross-mac-setup.md) for which fields
+should match and which are expected to differ).
+
 ## Cross-Mac setup
 
 See [docs/cross-mac-setup.md](docs/cross-mac-setup.md) for running the same

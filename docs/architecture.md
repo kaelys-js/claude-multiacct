@@ -88,4 +88,6 @@ two env vars set:
 
 The child's stdin/stdout/stderr pass through unchanged and its exit code becomes ours (via `exec`, so this shell is replaced). With no command after `<label>`, prints the two `export` assignments and exits — a dry-run form suitable for `eval` or manual inspection.
 
+Architecturally, `exec` is the terminal-side counterpart to the Dock-clone launcher: the same `CLAUDE_CONFIG_DIR` that the Dock clone injects via its `MacOS/Claude` shell wrapper (see "The Dock-clone layer" above) is exactly what `exec` `export`s to its child. Anthropic's standalone CLI, Claude Code SDK, and any other Electron/Chromium child that respects `CHROMIUM_USER_DATA_DIR` therefore boot into the mirror's identity — no separate mirror-aware code path in the child, just the env vars it already reads.
+
 `exec` is a read-only wrapper: it never touches instances.yaml, launchd plists, or on-disk clone bundles. It's the intended way for scripts, editors, and one-off command-line invocations to target a specific mirror without shelling into the mirror's `.app`.
