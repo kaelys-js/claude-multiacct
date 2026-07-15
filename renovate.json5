@@ -67,10 +67,47 @@
 
 	// Enabled managers:
 	//   - npm             -> package.json (× workspace) + pnpm-lock.yaml
-	//   - mise            -> mise.toml [tools] versions
+	//   - mise            -> mise.toml [tools] versions (all tools EXCEPT node + pnpm,
+	//                       which are handled by custom.regex below for bump-together)
+	//   - custom.regex    -> mise.toml `node = "..."` + `pnpm = "..."` lines, matched
+	//                       with depName == the npm engines depName so Renovate groups
+	//                       mise.toml + package.json engines into ONE PR
 	//   - github-actions  -> .github/workflows/*.yml `uses:` lines (SHA-pinned)
 	// Everything else stays off.
-	enabledManagers: ["npm", "mise", "github-actions"],
+	enabledManagers: ["npm", "mise", "custom.regex", "github-actions"],
+
+	// --- customManager: mise.toml node + pnpm (bump-together) ----------------
+	// The built-in `mise` manager reads mise.toml [tools], but its datasources for
+	// node + pnpm differ from what npm's engines manager emits — so without help,
+	// a node bump and its matching engines.node bump land in TWO separate PRs.
+	//
+	// These customManagers match ONLY the `node = "..."` and `pnpm = "..."` lines
+	// in mise.toml and re-declare them with the same depName the npm manager uses
+	// for package.json engines. Combined with the `node + pnpm toolchain` group
+	// rule below, Renovate groups mise.toml + package.json engines into a single
+	// PR per version. Built-in mise handling of node + pnpm is disabled via a
+	// packageRule below so there is no double-management.
+	customManagers: [
+		{
+			customType: "regex",
+			managerFilePatterns: ["/^mise\\.toml$/"],
+			matchStrings: ["^node\\s*=\\s*\"(?<currentValue>[^\"]+)\""],
+			depNameTemplate: "node",
+			packageNameTemplate: "nodejs/node",
+			datasourceTemplate: "github-releases",
+			versioningTemplate: "node",
+			extractVersionTemplate: "^v(?<version>.+)$",
+		},
+		{
+			customType: "regex",
+			managerFilePatterns: ["/^mise\\.toml$/"],
+			matchStrings: ["^pnpm\\s*=\\s*\"(?<currentValue>[^\"]+)\""],
+			depNameTemplate: "pnpm",
+			packageNameTemplate: "pnpm",
+			datasourceTemplate: "npm",
+			versioningTemplate: "npm",
+		},
+	],
 
 	// Keep pnpm-lock.yaml fresh (dedupe / transitive security bumps) via a
 	// scheduled lockfile-only PR. Auto-merged after CI (see packageRules).
@@ -88,6 +125,39 @@
 	//   mise    major                   -> review PR (never grouped)
 	//   lockFileMaintenance             -> automerge (configured above)
 	packageRules: [
+		// ── node + pnpm bump-together (mise.toml + package.json engines) ────
+		{
+			// Prevent double-management: the built-in mise manager also reads
+			// mise.toml [tools], so disable its handling of node + pnpm SPECIFICALLY.
+			// Every OTHER mise tool (typescript, oxlint, ruff, etc.) still runs
+			// under the mise manager unchanged.
+			matchManagers: ["mise"],
+			matchDepNames: ["node", "pnpm"],
+			enabled: false,
+		},
+		{
+			// Group mise.toml (custom.regex) + package.json engines (npm) into
+			// ONE PR per bump — same depName + same target version = one branch.
+			// patch/minor auto-merges (CI validates both files together).
+			matchDepNames: ["node", "pnpm"],
+			matchManagers: ["custom.regex", "npm"],
+			groupName: "node + pnpm toolchain",
+			commitMessageTopic: "node + pnpm toolchain",
+			matchUpdateTypes: ["patch", "minor", "digest"],
+			automerge: true,
+			automergeType: "pr",
+			platformAutomerge: true,
+		},
+		{
+			// Major bumps of node/pnpm (a new Node major etc.) are a human
+			// decision; review PR.
+			matchDepNames: ["node", "pnpm"],
+			matchManagers: ["custom.regex", "npm"],
+			matchUpdateTypes: ["major"],
+			groupName: "node + pnpm toolchain",
+			automerge: false,
+		},
+
 		// ── npm / pnpm workspace deps ────────────────────────────────────────
 		{
 			// patch/minor/digest are non-breaking by semver; CI (format/lint/types/
