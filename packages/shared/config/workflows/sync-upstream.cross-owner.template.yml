@@ -142,7 +142,9 @@ jobs:
             .github/workflows/ci.yml \
             .github/workflows/refresh.yml \
             .github/workflows/reminders.yml \
+            .github/workflows/renovate.yml \
             .github/workflows/sync-upstream.yml \
+            pnpm-lock.yaml \
           ; do
             if [ -e "$p" ] || git ls-files -u "$p" | grep -q .; then
               git checkout --ours -- "$p" 2>/dev/null || true
@@ -210,10 +212,18 @@ jobs:
           # without branch protection has none, so a clean sync PR hits
           # "Pull request is in clean status (enablePullRequestAutoMerge)".
           # Fall through to a direct squash-merge so the flow works on both
-          # branch-protected and unprotected forks.
+          # branch-protected and unprotected forks. If the sync branch
+          # carries conflict markers (a rule-based checkout left unmerged
+          # paths outside both allowlists), the direct merge is refused so
+          # a human resolves the PR by hand — dirty content never lands
+          # on main.
           if ! gh pr merge \
               "${{ steps.branch.outputs.branch }}" \
               --auto --squash --delete-branch; then
+            if git grep -q -E '^(<<<<<<< |>>>>>>> )' HEAD; then
+              echo "::error::Sync branch has conflict markers; leaving PR ${{ steps.branch.outputs.branch }} open for hand review." >&2
+              exit 1
+            fi
             gh pr merge \
               "${{ steps.branch.outputs.branch }}" \
               --squash --delete-branch
