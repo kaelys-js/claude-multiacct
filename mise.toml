@@ -29,11 +29,11 @@ pnpm = "11.12.0"
 # itself is bootstrapped by bin/mise.
 
 # Python — hosts the pipx-backed tools below so they need no system Python.
-python = "3.13"
+python = "3.14.6"
 
 # ── ts/js + json/yaml/md formatting & js/ts lint ─────────────────────
-"npm:oxlint" = "1.72.0"
-"npm:oxfmt" = "0.57.0"
+"npm:oxlint" = "1.73.0"
+"npm:oxfmt" = "0.58.0"
 
 # ── toml (lint + format) ─────────────────────────────────────────────
 "npm:@taplo/cli" = "0.7.0"
