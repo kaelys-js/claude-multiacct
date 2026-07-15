@@ -64,6 +64,38 @@ url = "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8
 checksum = "sha256:d29144deff3a68aa93ced33dddf84b7fdc26070add4aa0f4513094c8332afc4e"
 url = "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_windows_x64.zip"
 
+[[tools."aqua:nektos/act"]]
+version = "0.2.89"
+backend = "aqua:nektos/act"
+
+[tools."aqua:nektos/act"."platforms.linux-arm64"]
+checksum = "sha256:daa8679ba9615a74d2d0cec321dc593f21948a2a11bb65862b063d8b930f4bcb"
+url = "https://github.com/nektos/act/releases/download/v0.2.89/act_Linux_arm64.tar.gz"
+
+[tools."aqua:nektos/act"."platforms.linux-arm64-musl"]
+checksum = "sha256:daa8679ba9615a74d2d0cec321dc593f21948a2a11bb65862b063d8b930f4bcb"
+url = "https://github.com/nektos/act/releases/download/v0.2.89/act_Linux_arm64.tar.gz"
+
+[tools."aqua:nektos/act"."platforms.linux-x64"]
+checksum = "sha256:0191d6f1f3b716b5c55820032605d05fc3c1cdbf581ebeff655019e5dd1524c0"
+url = "https://github.com/nektos/act/releases/download/v0.2.89/act_Linux_x86_64.tar.gz"
+
+[tools."aqua:nektos/act"."platforms.linux-x64-musl"]
+checksum = "sha256:0191d6f1f3b716b5c55820032605d05fc3c1cdbf581ebeff655019e5dd1524c0"
+url = "https://github.com/nektos/act/releases/download/v0.2.89/act_Linux_x86_64.tar.gz"
+
+[tools."aqua:nektos/act"."platforms.macos-arm64"]
+checksum = "sha256:48ae218af96725f7635a66de2b87e1e346893b02add0f16b92f560296b2151fc"
+url = "https://github.com/nektos/act/releases/download/v0.2.89/act_Darwin_arm64.tar.gz"
+
+[tools."aqua:nektos/act"."platforms.macos-x64"]
+checksum = "sha256:41b31488e7c254baec31cce12c7dade3e35973b8a31b9486206ad43f233d814e"
+url = "https://github.com/nektos/act/releases/download/v0.2.89/act_Darwin_x86_64.tar.gz"
+
+[tools."aqua:nektos/act"."platforms.windows-x64"]
+checksum = "sha256:0f8cf866ad7e32421a219fc551a0a0ea5d12ead464de12ebfeafd334a5973b50"
+url = "https://github.com/nektos/act/releases/download/v0.2.89/act_Windows_x86_64.zip"
+
 [[tools.node]]
 version = "26.5.0"
 backend = "core:node"
