@@ -9,9 +9,13 @@
 # separate `types` or `schema` job. The `validate` job runs the record validator
 # (`pnpm validate` — schema + cross-record invariants over the governance
 # records); the validator's own types are covered by the `lint` job's tsc, so
-# they are not re-run. The `validate` job runs only when the registry product is
-# present (`hashFiles(...) != ''`), so a fork without that package gets 4
-# required jobs and upstream + forks that carry the registry get 5.
+# they are not re-run. The `validate` job runs only when the registry product
+# package is present; a small `detect` job checks for it and exposes an output,
+# and `validate` gates on that output via `needs`. GHA does not accept
+# `hashFiles()` inside `jobs.<job>.if` (only steps.if), which is why the check
+# lives in a step rather than inline on the job. A fork without the registry
+# gets 4 real jobs plus the tiny detect probe; upstream + forks that carry the
+# registry get 5 real jobs plus detect.
 #
 # `pnpm ci:local` runs this workflow via nektos/act, which `docker cp`s the
 # whole working tree into the container — including the host's darwin-native
@@ -42,6 +46,25 @@ env:
   CI: "true" # pnpm 11: allow non-interactive node_modules rebuild
 
 jobs:
+  detect:
+    name: detect
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      has-registry: ${{ steps.check.outputs.has-registry }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 1
+      - id: check
+        name: Detect registry product
+        run: |
+          if [ -f packages/products/registry/package.json ]; then
+            echo "has-registry=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has-registry=false" >> "$GITHUB_OUTPUT"
+          fi
+
   format:
     name: format
     runs-on: ubuntu-latest
@@ -159,12 +182,14 @@ jobs:
         run: ./bin/mise exec -- pnpm run qa:test:coverage
 
   validate:
-    # Only runs when the registry product package is present. Forks without the
-    # registry never carry `packages/products/registry/package.json`, so this
-    # `hashFiles(...) != ''` gate lets the identical ci.yml file live in both
-    # upstream and the forks — the fork's checkout simply skips the job at
-    # runtime. See the workflow header for the 4-vs-5-jobs consequence.
-    if: ${{ hashFiles('packages/products/registry/package.json') != '' }}
+    # Only runs when the registry product package is present. The `detect` job
+    # above sets `has-registry` by probing the checked-out tree; validate needs
+    # detect and gates on that output. Forks without the registry never carry
+    # `packages/products/registry/package.json`, so `has-registry == 'false'`
+    # skips validate — the identical ci.yml file lives in both upstream and
+    # the forks. See the workflow header for the 4-vs-5-jobs consequence.
+    needs: detect
+    if: needs.detect.outputs.has-registry == 'true'
     name: validate
     runs-on: ubuntu-latest
     timeout-minutes: 15
