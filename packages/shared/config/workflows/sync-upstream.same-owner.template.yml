@@ -79,14 +79,6 @@ permissions:
 jobs:
   sync:
     runs-on: ubuntu-latest
-    env:
-      # mise's Python backend verifies GitHub artifact attestations before
-      # unpacking the release tarball. The call is unauthenticated and
-      # shares the runner's public IP with every other GitHub-hosted job,
-      # so it 403s under the 60-req/hr rate limit on busy days. Trust the
-      # aqua/core-registry checksums the lockfile already pins and skip
-      # the extra signature check — scoped to this workflow only.
-      MISE_PYTHON_GITHUB_ATTESTATIONS: "false"
     steps:
       # GitHub enforces global-per-account uniqueness on deploy-key material.
       # Both `kaelys-js/ttt-studio-cole-30-60-90-plan` (this fork) and
