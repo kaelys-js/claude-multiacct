@@ -168,14 +168,19 @@ jobs:
       - name: Replace merge commit with API-signed variant
         if: steps.ff.outputs.result == 'conflict'
         env:
+          # The ambient GITHUB_TOKEN, not a PAT. `POST /git/commits`
+          # produces a `web-flow`-signed commit only when the caller is
+          # an OAuth app or a GitHub App installation; PATs yield an
+          # unsigned commit. The ambient token IS the "GitHub Actions"
+          # App installation token, so it triggers the signature.
           GH_TOKEN: ${{ github.token }}
         run: |
           # Local merge commits are signed with whatever key the runner has,
           # if any. To land a Verified merge on the PR, re-create the commit
-          # via `gh api POST /git/commits` — GitHub signs everything routed
-          # through the REST API with the `web-flow` bot key, producing a
-          # `verified: true` record without any per-runner key setup. Same
-          # tree, same parents, same message → identical content, different
+          # via `gh api POST /git/commits` — with the ambient GITHUB_TOKEN,
+          # GitHub signs the result with the `web-flow` bot key, producing
+          # `verified: true` without any per-runner key setup. Same tree,
+          # same parents, same message → identical content, different
           # signature layer.
           TREE=$(git rev-parse HEAD^{tree})
           P1=$(git rev-parse HEAD^1)
@@ -200,6 +205,16 @@ jobs:
             --head "${{ steps.branch.outputs.branch }}" \
             --title "sync: upstream $(date -u +%Y-%m-%d)" \
             --body "Automated sync of upstream/${UPSTREAM_BRANCH} into this fork. Conflict rule: upstream wins under \`packages/shared\` and \`.schemas\`; product and product-workflow paths win locally. If CI passes, this PR auto-merges (squash) and the branch is deleted."
-          gh pr merge \
-            "${{ steps.branch.outputs.branch }}" \
-            --auto --squash --delete-branch
+          # `--auto` refuses when the PR is in `clean` status — GitHub only
+          # enables auto-merge on PRs with pending required checks. A fork
+          # without branch protection has none, so a clean sync PR hits
+          # "Pull request is in clean status (enablePullRequestAutoMerge)".
+          # Fall through to a direct squash-merge so the flow works on both
+          # branch-protected and unprotected forks.
+          if ! gh pr merge \
+              "${{ steps.branch.outputs.branch }}" \
+              --auto --squash --delete-branch; then
+            gh pr merge \
+              "${{ steps.branch.outputs.branch }}" \
+              --squash --delete-branch
+          fi
