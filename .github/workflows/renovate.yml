@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=../../.schemas/github-workflow.json
-# Self-hosted Renovate for kaelys-js/foundation-registry (private repo).
+# Self-hosted Renovate (private repo).
 #
 # Runs the Renovate CLI on a schedule and on demand. Renovate reads
 # renovate.json5 at the repo root and opens/updates PRs against main.
@@ -83,7 +83,9 @@ jobs:
           configurationFile: renovate.json5
         env:
           # Restrict to this repo; the token scopes it too, but be explicit.
-          RENOVATE_REPOSITORIES: kaelys-js/foundation-registry
+          # github.repository resolves to `<owner>/<repo>` — the same repo
+          # renovate.json5 lives in, so fork and upstream share this file.
+          RENOVATE_REPOSITORIES: ${{ github.repository }}
           # Honor the schedule in renovate.json5; on manual dispatch, ignore
           # it so an on-demand run actually does work.
           # yamllint disable-line rule:line-length

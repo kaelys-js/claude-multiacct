@@ -149,16 +149,17 @@ jobs:
             fi
           done
 
+          # Fork-wins allowlist — narrowed to files that legitimately diverge
+          # per fork today. Fork-only paths (`packages/products/cole-30-60-90`,
+          # `refresh.yml`, `reminders.yml`, `sync-upstream.yml`, `TOLARIA.md`)
+          # can't conflict because upstream doesn't carry them, so listing them
+          # is dead weight. `renovate.yml` is now byte-identical between fork
+          # and upstream (parametrised on `${{ github.repository }}`), so it
+          # also doesn't need protection here.
           for p in \
-            packages/products/cole-30-60-90 \
             .github/workflows/catalog-notify.yml \
             .github/workflows/ci.yml \
-            .github/workflows/refresh.yml \
-            .github/workflows/reminders.yml \
-            .github/workflows/renovate.yml \
-            .github/workflows/sync-upstream.yml \
             pnpm-lock.yaml \
-            TOLARIA.md \
           ; do
             if [ -e "$p" ] || git ls-files -u "$p" | grep -q .; then
               git checkout --ours -- "$p" 2>/dev/null || true
