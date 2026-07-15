@@ -136,6 +136,8 @@ jobs:
 
           for p in \
             packages/products/cole-30-60-90 \
+            .github/workflows/catalog-notify.yml \
+            .github/workflows/ci.yml \
             .github/workflows/refresh.yml \
             .github/workflows/reminders.yml \
             .github/workflows/sync-upstream.yml \
