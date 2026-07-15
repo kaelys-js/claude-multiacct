@@ -448,13 +448,16 @@ cmd_qa() {
 		rm -rf "$cov_dir"
 		mkdir -p "$cov_dir"
 		cma_say "kcov + bats tests/ (threshold: 90% line coverage)"
+		# Resolve bats to its real binary — kcov re-exec's under bash and can
+		# miss mise's shim-directory search when running from another shell
+		# depth. Passing the absolute path sidesteps the shim entirely.
+		local bats_bin
+		bats_bin="$(command -v bats)"
 		kcov \
 			--include-path="$CMA_BIN,$CMA_LIB" \
 			--exclude-path="$CMA_REPO_ROOT/node_modules,$CMA_REPO_ROOT/.mise,$CMA_REPO_ROOT/coverage,$CMA_REPO_ROOT/tests" \
-			--bash-parse-files-in-dir="$CMA_BIN,$CMA_LIB" \
-			--bash-dont-parse-binary-dir \
 			"$cov_dir" \
-			bats "$CMA_REPO_ROOT/tests" || return $?
+			"$bats_bin" "$CMA_REPO_ROOT/tests" || return $?
 		# Extract percent-covered from kcov's summary JSON. kcov drops
 		# coverage.json next to index.html in the top-level output dir.
 		local pct
