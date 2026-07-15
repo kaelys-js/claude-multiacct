@@ -34,6 +34,12 @@ export default defineConfig({
 		// affects test execution.
 		fileParallelism: false,
 		passWithNoTests: false,
+		// Bumped from vitest's 5s default: `schema-check.test.ts` under act's
+		// Ubuntu container fetches vendored schemas over the network on some
+		// runs, which can push a single case past 5s and flake the whole
+		// pre-push. 10s gives the slower path headroom without letting a
+		// genuinely stuck test hang indefinitely.
+		testTimeout: 10_000,
 		include: ["packages/**/*.test.ts"],
 		coverage: {
 			provider: "v8",
