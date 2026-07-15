@@ -32,5 +32,5 @@ shfmt = "3.13.1"
 # ── Node + commitlint (@commitlint/cli via npm-managed pnpm store isn't a
 # pattern we want in a bash repo, so use pipx-style npm install via mise).
 node = "26.5.0"
-"npm:@commitlint/cli" = "21.2.0"
+"npm:@commitlint/cli" = "21.2.1"
 "npm:@commitlint/config-conventional" = "21.2.0"
