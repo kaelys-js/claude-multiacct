@@ -458,7 +458,7 @@ cmd_qa() {
 		# so bats-spawned bash finds yq + shellcheck when the tests fork
 		# claude-multiacct + its lib/*.sh helpers.
 		PATH="$(dirname "$bats_bin"):$(dirname "$yq_bin"):$PATH" \
-		kcov \
+			kcov \
 			--include-path="$CMA_BIN,$CMA_LIB" \
 			--exclude-path="$CMA_REPO_ROOT/node_modules,$CMA_REPO_ROOT/.mise,$CMA_REPO_ROOT/coverage,$CMA_REPO_ROOT/tests" \
 			"$cov_dir" \
