@@ -108,6 +108,14 @@ claude-multiacct uninstall                 # removes the ~/.local/bin symlink
 # Nuke every trace (launchd + config + backups): see docs/troubleshooting.md → "Complete reset".
 ```
 
+## Cross-Mac setup
+
+See [docs/cross-mac-setup.md](docs/cross-mac-setup.md) for running the same
+mirrors on multiple Macs. Short version: Anthropic's cloud already syncs each
+account's sessions across every device — you just run the same `add-instance`
+commands on each Mac and sign into each mirror with the same account. Verify
+via `claude-multiacct doctor --json` on both Macs and `diff` the outputs.
+
 ## Sharing model
 
 See [docs/sync-model.md](docs/sync-model.md) for the full four-layer breakdown. Short version:

@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # lib/discover.sh — inspect on-disk state of all instances. Emits a health
-# report + machine-parseable TSV (via --tsv). Used by `list` and `doctor`.
+# report + machine-parseable TSV (via --tsv) or JSON (via --json). Used by
+# `list` and `doctor`.
 #
 # Usage:
 #   discover.sh                # human report to stderr, no output to stdout
 #   discover.sh --tsv          # TSV to stdout: label\thealth\tissues
+#   discover.sh --json         # JSON array of instance objects to stdout,
+#                              # human report suppressed (cross-mac diff format)
 
 set -euo pipefail
 
@@ -15,7 +18,36 @@ LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LSREGISTER="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 
 TSV=0
-[[ "${1:-}" == "--tsv" ]] && TSV=1
+JSON=0
+case "${1:-}" in
+  --tsv) TSV=1 ;;
+  --json) JSON=1 ;;
+esac
+
+# --json suppresses the human-readable report entirely — the caller wants ONLY
+# a machine-parseable object. cma_say / cma_ok / cma_warn / cma_dim all write to
+# stderr; --json redirects stderr to /dev/null via the wrapper below so a diff
+# between two Macs' outputs is clean.
+_cma_quiet=""
+if [[ $JSON -eq 1 ]]; then
+  _cma_quiet=1
+fi
+
+# JSON collector — one line per instance, joined at the end. Populated only in
+# --json mode.
+_json_rows=()
+
+# JSON-escape a single string. Handles the four escapes JSON requires:
+# backslash, double-quote, newline, tab. Sufficient for label / email / config
+# paths — none of our fields contain control chars beyond \n / \t.
+_json_esc() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  s="${s//$'\n'/\\n}"
+  s="${s//$'\t'/\\t}"
+  printf '%s' "$s"
+}
 
 # Check a single instance and print a report + optionally a TSV row.
 check_one() {
@@ -27,10 +59,12 @@ check_one() {
 
   local issues=()
 
-  cma_say "instance: $label"
-  cma_dim "  email:       $email"
-  cma_dim "  configDir:   $cdir"
-  cma_dim "  userData:    $udata"
+  if [[ -z "${_cma_quiet:-}" ]]; then
+    cma_say "instance: $label"
+    cma_dim "  email:       $email"
+    cma_dim "  configDir:   $cdir"
+    cma_dim "  userData:    $udata"
+  fi
 
   # 1. configDir + its symlinks
   if [[ -d "$cdir" ]]; then
@@ -158,7 +192,7 @@ check_one() {
 
   local health="ok"
   [[ ${#issues[@]} -eq 0 ]] || health="degraded"
-  cma_dim "  → $health"
+  [[ -z "${_cma_quiet:-}" ]] && cma_dim "  → $health"
 
   if [[ $TSV -eq 1 ]]; then
     local issues_joined=""
@@ -168,12 +202,36 @@ check_one() {
     )"
     printf '%s\t%s\t%s\n' "$label" "$health" "$issues_joined"
   fi
+
+  if [[ $JSON -eq 1 ]]; then
+    # Build the JSON object for this instance. Issues become a JSON array of
+    # short kebab-slug strings (they never contain quotes / newlines, so
+    # trivial escaping suffices).
+    local issues_json="[]"
+    if [[ ${#issues[@]} -gt 0 ]]; then
+      local first=1 iss
+      issues_json="["
+      for iss in "${issues[@]}"; do
+        [[ $first -eq 1 ]] || issues_json+=","
+        first=0
+        issues_json+="\"$(_json_esc "$iss")\""
+      done
+      issues_json+="]"
+    fi
+    _json_rows+=(
+      "{\"label\":\"$(_json_esc "$label")\",\"email\":\"$(_json_esc "$email")\",\"configDir\":\"$(_json_esc "$cdir")\",\"userData\":\"$(_json_esc "$udata")\",\"health\":\"$health\",\"issues\":$issues_json}"
+    )
+  fi
 }
 
 main() {
   # If no config file, only report the primary state.
   if [[ ! -f "$CMA_CONFIG_FILE" ]]; then
-    cma_warn "no config file at $CMA_CONFIG_FILE — run \`claude-multiacct init\`"
+    if [[ $JSON -eq 1 ]]; then
+      printf '[]\n'
+    else
+      cma_warn "no config file at $CMA_CONFIG_FILE — run \`claude-multiacct init\`"
+    fi
     return 0
   fi
   local label
@@ -181,6 +239,22 @@ main() {
     [[ -z "$label" ]] && continue
     check_one "$label"
   done < <(cma_list_labels)
+
+  if [[ $JSON -eq 1 ]]; then
+    # Join the per-instance rows into a JSON array. Using printf + IFS keeps
+    # the join in pure bash (no jq dependency — see metadata-symlinks.sh note
+    # on why jq is deliberately avoided in this repo).
+    if [[ ${#_json_rows[@]} -eq 0 ]]; then
+      printf '[]\n'
+    else
+      local joined
+      joined="$(
+        IFS=,
+        printf '%s' "${_json_rows[*]}"
+      )"
+      printf '[%s]\n' "$joined"
+    fi
+  fi
 }
 
 main "$@"

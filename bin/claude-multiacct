@@ -19,7 +19,10 @@
 #                                     CHROMIUM_USER_DATA_DIR pointing at <label>'s
 #                                     data; with NO cmd, prints the env-var
 #                                     assignments the wrapper would export (dry-run)
-#   doctor                            deep diagnostic report
+#   doctor [--json]                   deep diagnostic report; --json emits a
+#                                     machine-parseable report suitable for
+#                                     diffing between two Macs (see
+#                                     docs/cross-mac-setup.md)
 #   qa {lint|test}                    dev helpers (shellcheck + bats)
 
 set -euo pipefail
@@ -55,7 +58,7 @@ usage:
   claude-multiacct sync-now
   claude-multiacct sync-log [--tail]
   claude-multiacct exec <label> [--] <cmd> [args…]
-  claude-multiacct doctor
+  claude-multiacct doctor [--json]
   claude-multiacct qa {lint|test}
 
 labels: lowercase [a-z0-9-]+, no leading/trailing hyphen. 'primary' is reserved.
@@ -409,6 +412,20 @@ cmd_exec() {
 }
 
 cmd_doctor() {
+	# --json → machine-parseable report; suppresses the human formatting so a
+	# diff between two Macs' outputs is clean. See docs/cross-mac-setup.md for
+	# the intended cross-mac verification workflow.
+	local json=0
+	if [[ "${1:-}" == "--json" ]]; then
+		json=1
+		shift
+	fi
+
+	if [[ $json -eq 1 ]]; then
+		_cmd_doctor_json
+		return
+	fi
+
 	cma_say "claude-multiacct doctor"
 	cma_dim "  repo:   $CMA_REPO_ROOT"
 	cma_dim "  config: $CMA_CONFIG_FILE"
@@ -438,6 +455,51 @@ cmd_doctor() {
 	# Per-instance discovery.
 	printf '\n' >&2
 	"$CMA_LIB/discover.sh"
+}
+
+# JSON doctor report — wraps discover.sh --json with launchd agent state +
+# repo/config metadata. Designed for cross-mac diffing: two Macs' outputs
+# should be structurally identical when the config is in sync.
+#
+# Uses printf-only JSON assembly (no jq — see metadata-symlinks.sh comment on
+# why jq is deliberately avoided in this repo).
+_cmd_doctor_json() {
+	# JSON-escape a single value using the same rules as discover.sh's helper.
+	local _escape='s/\\/\\\\/g;s/"/\\"/g;s/\t/\\t/g'
+
+	local repo cfg logs backups
+	repo="$(printf '%s' "$CMA_REPO_ROOT" | sed "$_escape")"
+	cfg="$(printf '%s' "$CMA_CONFIG_FILE" | sed "$_escape")"
+	logs="$(printf '%s' "$CMA_LOG_DIR" | sed "$_escape")"
+	backups="$(printf '%s' "$CMA_BACKUP_DIR" | sed "$_escape")"
+
+	# Launchd agent states.
+	local ld_json="{"
+	local first=1 label state
+	for label in com.user.claude-sessions-sync com.user.claude-clone-refresh com.user.claude-metadata-symlink; do
+		state="not-loaded"
+		if launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; then
+			state="loaded"
+		fi
+		[[ $first -eq 1 ]] || ld_json+=","
+		first=0
+		ld_json+="\"$label\":\"$state\""
+	done
+	ld_json+="}"
+
+	# Instances — discover.sh --json emits a JSON array (or `[]` if no config).
+	# Suppress the human report by pointing stderr at /dev/null.
+	local instances_json
+	if [[ -f "$CMA_CONFIG_FILE" ]]; then
+		instances_json="$("$CMA_LIB/discover.sh" --json 2>/dev/null)"
+	else
+		instances_json="[]"
+	fi
+	# Fallback if discover.sh produced nothing (e.g. yq missing).
+	[[ -n "$instances_json" ]] || instances_json="[]"
+
+	printf '{"repo":"%s","config":"%s","logs":"%s","backups":"%s","launchd_agents":%s,"instances":%s}\n' \
+		"$repo" "$cfg" "$logs" "$backups" "$ld_json" "$instances_json"
 }
 
 cmd_qa() {

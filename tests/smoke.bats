@@ -551,3 +551,52 @@ SH
 	[ "$status" -ne 0 ]
 	[[ "$output" == *"invalid label"* ]]
 }
+
+# ── doctor --json ────────────────────────────────────────────────────────────
+# JSON mode is the cross-mac verification path: two Macs' outputs should be
+# structurally identical (modulo repo/config/logs paths + the launchd-agent
+# state) when the config is in sync. See docs/cross-mac-setup.md.
+
+@test "doctor --json emits valid JSON with expected top-level keys" {
+	"$CMA" init
+	"$CMA" add-instance b --email test-b@example.com
+	run "$CMA" doctor --json
+	[ "$status" -eq 0 ]
+	# Use python (available on every macOS by default) to parse — proves the
+	# output is real JSON, not just braces-and-strings.
+	python3 -c "import json,sys; d=json.loads('''$output'''); assert 'repo' in d and 'config' in d and 'launchd_agents' in d and 'instances' in d; sys.exit(0)"
+}
+
+@test "doctor --json includes each configured instance" {
+	"$CMA" init
+	"$CMA" add-instance b --email test-b@example.com
+	run "$CMA" doctor --json
+	[ "$status" -eq 0 ]
+	# Instance labels + emails must round-trip through JSON.
+	run python3 -c "
+import json
+d = json.loads('''$output''')
+labels = [i['label'] for i in d['instances']]
+emails = [i['email'] for i in d['instances']]
+assert 'b' in labels, f'missing b: {labels}'
+assert 'test-b@example.com' in emails, f'missing email: {emails}'
+print('OK')
+"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"OK"* ]]
+}
+
+@test "doctor --json produces empty instances array when no config" {
+	# No `init` — CMA_CONFIG_FILE won't exist.
+	run "$CMA" doctor --json
+	[ "$status" -eq 0 ]
+	# Should still produce valid JSON with an empty instances array.
+	run python3 -c "
+import json
+d = json.loads('''$output''')
+assert d['instances'] == [], f'expected empty instances: {d[\"instances\"]}'
+print('OK')
+"
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"OK"* ]]
+}
