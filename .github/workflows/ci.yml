@@ -1,14 +1,17 @@
 # yaml-language-server: $schema=../../.schemas/github-workflow.json
-# Five parallel jobs (format, lint, sync, test, validate) — wall-time is the slowest
-# job, not the sum. Every job sources its toolchain from the repo's own mise (via the
-# vendored bin/mise wrapper), so CI uses the exact node/pnpm/linter versions
-# pinned in mise.toml + mise.lock — identical to local, no external setup
-# action. Each job is self-contained and a required gate (no `if:`).
+# Four or five parallel jobs — wall-time is the slowest job, not the sum. Every
+# job sources its toolchain from the repo's own mise (via the vendored bin/mise
+# wrapper), so CI uses the exact node/pnpm/linter versions pinned in mise.toml +
+# mise.lock — identical to local, no external setup action. Each job is
+# self-contained and a required gate (no `if:` outside of `validate`).
 # Typecheck (tsc), REUSE license compliance, AND schema instance validation all
 # run inside the `lint` job as members of the qa:lint pipeline, so there is no
 # separate `types` or `schema` job. The `validate` job runs the record validator
-# (`pnpm validate` — schema + cross-record invariants over the governance records);
-# the validator's own types are covered by the `lint` job's tsc, so they are not re-run.
+# (`pnpm validate` — schema + cross-record invariants over the governance
+# records); the validator's own types are covered by the `lint` job's tsc, so
+# they are not re-run. The `validate` job runs only when the registry product is
+# present (`hashFiles(...) != ''`), so a fork without that package gets 4
+# required jobs and upstream + forks that carry the registry get 5.
 #
 # `pnpm ci:local` runs this workflow via nektos/act, which `docker cp`s the
 # whole working tree into the container — including the host's darwin-native
@@ -156,6 +159,12 @@ jobs:
         run: ./bin/mise exec -- pnpm run qa:test:coverage
 
   validate:
+    # Only runs when the registry product package is present. Forks without the
+    # registry never carry `packages/products/registry/package.json`, so this
+    # `hashFiles(...) != ''` gate lets the identical ci.yml file live in both
+    # upstream and the forks — the fork's checkout simply skips the job at
+    # runtime. See the workflow header for the 4-vs-5-jobs consequence.
+    if: ${{ hashFiles('packages/products/registry/package.json') != '' }}
     name: validate
     runs-on: ubuntu-latest
     timeout-minutes: 15
