@@ -76,12 +76,33 @@ permissions:
 jobs:
   sync:
     runs-on: ubuntu-latest
+    env:
+      # mise's Python backend verifies GitHub artifact attestations before
+      # unpacking the release tarball. The call is unauthenticated and
+      # shares the runner's public IP with every other GitHub-hosted job,
+      # so it 403s under the 60-req/hr rate limit on busy days. Trust the
+      # aqua/core-registry checksums the lockfile already pins and skip
+      # the extra signature check — scoped to this workflow only.
+      MISE_PYTHON_GITHUB_ATTESTATIONS: "false"
     steps:
       - name: Checkout fork main
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ssh-key: ${{ secrets.${UPSTREAM_DEPLOY_KEY_SECRET} }}
+
+      # Warm the mise toolchain BEFORE the merge step's inline install.
+      # jdx/mise-action activates mise on PATH so subsequent
+      # `./bin/mise install` calls (after the merge picks up any upstream
+      # tool bumps) run with node + pnpm already resolved. Without the
+      # warmup, the merge step's fresh `./bin/mise install` occasionally
+      # kicks off `npm install -g` for the npm-backed tools (@taplo/cli,
+      # markdownlint-cli2, oxfmt, oxlint) before node's binary lands on
+      # PATH, and each fails with `exit code 127`.
+      - name: Warm mise toolchain
+        uses: jdx/mise-action@v3
+        with:
+          install: true
 
       - name: Configure git identity
         run: |
