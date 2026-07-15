@@ -152,6 +152,19 @@ jobs:
             fi
           done
 
+          # Regenerate pnpm-lock.yaml against the merged package manifests.
+          # `pnpm-lock.yaml` is fork-wins (fork carries products the upstream
+          # doesn't, so upstream's lock would miss entries), but the merged
+          # tree can pick up upstream's package.json bumps. Without regen,
+          # fork CI's `pnpm install --frozen-lockfile` fails on the mismatch.
+          # `--lockfile-only` skips actual package downloads; the whole step
+          # is a no-op when nothing changed.
+          if command -v ./bin/mise >/dev/null; then
+            ./bin/mise install
+            ./bin/mise exec -- pnpm install --lockfile-only --no-frozen-lockfile
+            git add pnpm-lock.yaml
+          fi
+
           git -c "user.name=Cole Beuker" -c "user.email=cole.beuker@ttt.studio" \
             commit --no-edit || {
               git -c "user.name=Cole Beuker" -c "user.email=cole.beuker@ttt.studio" \
