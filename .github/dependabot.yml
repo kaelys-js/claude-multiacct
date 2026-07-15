@@ -1,0 +1,7 @@
+# Managed by kaelys-js-infra (terraform/repository_files.tf).
+# Renovate handles all dependency updates on this repo.
+# Dependabot security alerts (Dependabot Security Updates) remain
+# enabled per-repo via github_repository_dependabot_security_updates
+# — this file only disables Dependabot version updates.
+version: 2
+updates: []
