@@ -54,7 +54,12 @@ jobs:
   # so Linux is a valid environment for them.
   coverage:
     name: qa test:coverage (kcov)
-    runs-on: ubuntu-latest
+    # ubuntu-22.04 pinned deliberately: Ubuntu 24.04 (noble) DROPPED the
+    # kcov package entirely — it's only in the 22.04 (jammy) universe repo.
+    # kcov has no upstream binary release + building from source adds ~5m to
+    # every run, so 22.04 is the pragmatic pin. Switch to a from-source path
+    # if 22.04 gets deprecated.
+    runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
       - name: Checkout
@@ -63,11 +68,8 @@ jobs:
       - name: Install mise + pinned toolchain
         uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d  # v4.2.0
 
-      - name: Install kcov (apt — enable universe)
-        run: |
-          sudo add-apt-repository -y universe
-          sudo apt-get update
-          sudo apt-get install -y kcov
+      - name: Install kcov (apt — jammy has it in universe by default)
+        run: sudo apt-get update && sudo apt-get install -y kcov
 
       # Runs `kcov + bats` and enforces ≥90% line coverage. Fails the job if
       # below threshold; uploads the HTML report either way.
