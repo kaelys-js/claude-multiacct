@@ -230,6 +230,13 @@ const COVERAGE_EXCLUDED_EXACT = new Set([
 	// `$schema` marker would add ceremony without catching anything the CLI
 	// does not already catch.
 	".sync-upstream.json",
+	// The next two files are terraform-managed by `kaelys-js-infra`. The fleet-sync
+	// workflow re-emits them from that source on every sync and strips any local
+	// edits, so an inline `# yaml-language-server: $schema=…` marker is silently
+	// removed on the next sync. Exempting them here lets the gate stay strict
+	// everywhere else without fighting a loop with the sync workflow.
+	".github/ISSUE_TEMPLATE/config.yml",
+	".github/dependabot.yml",
 ]);
 
 // Whether a tracked config file is exempt from the schema-coverage requirement.
