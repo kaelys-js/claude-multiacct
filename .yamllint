@@ -18,6 +18,12 @@ rules:
   # `comments` rule is layout, not correctness — disable and rely on review.
   comments: disable
 
+  # Trailing block-comments explaining WHY a step isn't gated (e.g. the
+  # `test:coverage` rationale in ci.yml) sit at the jobs-level indent even
+  # though they aren't followed by same-indent content. That's still a valid
+  # documentation shape — disable the rule.
+  comments-indentation: disable
+
   # `on:` in GitHub Actions is a YAML 1.1 boolean alias, but it's the
   # workflow-trigger key; not a bug.
   truthy:
