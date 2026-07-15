@@ -75,4 +75,17 @@ Three `launchd` `LaunchAgents` back the runtime behaviour:
 
 ## Config file of record
 
-`~/.config/claude-multiacct/instances.yaml` lists every instance and any per-instance path overrides. Every runtime action (`add-instance`, `remove-instance`, `repair`, `sync-now`, `doctor`) reads this file and never persists derived state elsewhere. Snapshot-before-write: any change to `instances.yaml` creates a backup under `~/.claude-multiacct-backups/<timestamp>-config/`.
+`~/.config/claude-multiacct/instances.yaml` lists every instance and any per-instance path overrides. Every runtime action (`add-instance`, `remove-instance`, `repair`, `sync-now`, `doctor`, `exec`) reads this file and never persists derived state elsewhere. Snapshot-before-write: any change to `instances.yaml` creates a backup under `~/.claude-multiacct-backups/<timestamp>-config/`.
+
+## `exec` — running a command as a mirror instance
+
+`claude-multiacct exec <label> [--] <cmd> [args…]` resolves `<label>` against
+`instances.yaml` (dying loud if it isn't there), then `exec env`s the child with
+two env vars set:
+
+- `CLAUDE_CONFIG_DIR` — the mirror's `configDir` (`~/.claude-<label>` by default)
+- `CHROMIUM_USER_DATA_DIR` — the mirror's `userData` (`~/Library/Application Support/Claude-<Title>` by default), for any nested Electron/Chromium tool that respects it
+
+The child's stdin/stdout/stderr pass through unchanged and its exit code becomes ours (via `exec`, so this shell is replaced). With no command after `<label>`, prints the two `export` assignments and exits — a dry-run form suitable for `eval` or manual inspection.
+
+`exec` is a read-only wrapper: it never touches instances.yaml, launchd plists, or on-disk clone bundles. It's the intended way for scripts, editors, and one-off command-line invocations to target a specific mirror without shelling into the mirror's `.app`.

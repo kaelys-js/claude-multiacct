@@ -81,6 +81,25 @@ claude-multiacct repair b
 claude-multiacct doctor
 ```
 
+### Running a command against a mirror instance
+
+`claude-multiacct exec <label> [--] <cmd> [args…]` sets `CLAUDE_CONFIG_DIR` and
+`CHROMIUM_USER_DATA_DIR` to the mirror's paths and execs the given command:
+
+```sh
+# Point `claude` at the 'b' mirror for one invocation:
+claude-multiacct exec b -- claude
+# Any tool that reads $CLAUDE_CONFIG_DIR (Anthropic's CLI, Claude Code SDK, etc.)
+# sees the mirror's config, not the primary.
+
+# No command → dry-run: prints the two `export` lines the wrapper would use.
+# Useful for `eval "$(claude-multiacct exec b)"` in a subshell.
+claude-multiacct exec b
+```
+
+The subcommand's exit code is the child command's exit code, so it composes
+cleanly in scripts and Makefiles.
+
 ## Uninstall
 
 ```sh

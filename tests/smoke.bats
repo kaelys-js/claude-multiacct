@@ -463,3 +463,91 @@ SH
 		"$HOME/Applications/Claude Account B.app/Contents/Info.plist")"
 	[ "$still_drifted" = "com.stale.legacy" ]
 }
+
+# ── exec subcommand ──────────────────────────────────────────────────────────
+# Runs a command with CLAUDE_CONFIG_DIR + CHROMIUM_USER_DATA_DIR pointing at a
+# mirror instance's data. The important invariants are:
+#   - unknown label fails loud with a helpful error
+#   - the env vars reach the child command (verified via `env` / `printenv`)
+#   - with no cmd, prints the env-var assignments as a dry-run
+#   - the `--` separator is optional
+#
+# `assert` semantics: `[[ ]]` mid-test is silent (SC2314 / [[bats-vacuous-asserts]]),
+# so match assertions use `run ! ...` + `[ "$status" ... ]` or `[[ "$output" == ... ]]`
+# on the line immediately after `run`, which IS checked.
+
+@test "exec with unknown label fails loud" {
+	"$CMA" init
+	"$CMA" add-instance b --email test-b@example.com
+	run "$CMA" exec no-such-label -- true
+	[ "$status" -ne 0 ]
+	# The error mentions the label and instances.yaml so a user knows where
+	# to look — helpful, not just "not found".
+	[[ "$output" == *"no-such-label"* ]]
+	[[ "$output" == *"instances.yaml"* ]] || [[ "$output" == *"$HOME/.config/claude-multiacct"* ]]
+}
+
+@test "exec with no label fails loud" {
+	"$CMA" init
+	run "$CMA" exec
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"label required"* ]]
+}
+
+@test "exec runs env and CLAUDE_CONFIG_DIR is exported to the child" {
+	"$CMA" init
+	"$CMA" add-instance b --email test-b@example.com
+	run "$CMA" exec b -- env
+	[ "$status" -eq 0 ]
+	# The default configDir for label 'b' is ~/.claude-b — the child MUST see it.
+	[[ "$output" == *"CLAUDE_CONFIG_DIR=$HOME/.claude-b"* ]]
+	# And CHROMIUM_USER_DATA_DIR must point at the default userData.
+	[[ "$output" == *"CHROMIUM_USER_DATA_DIR=$HOME/Library/Application Support/Claude-B"* ]]
+}
+
+@test "exec printenv CLAUDE_CONFIG_DIR exits 0 with the right value" {
+	"$CMA" init
+	"$CMA" add-instance b --email test-b@example.com
+	run "$CMA" exec b -- printenv CLAUDE_CONFIG_DIR
+	[ "$status" -eq 0 ]
+	# printenv writes ONLY the value, terminated with a newline — an exact
+	# match here proves the env var reached the child unmangled.
+	[ "$output" = "$HOME/.claude-b" ]
+}
+
+@test "exec accepts the -- separator" {
+	"$CMA" init
+	"$CMA" add-instance b --email test-b@example.com
+	# The idiom is `exec <label> -- <cmd>` (like env/sudo); the `--` disambiguates
+	# a command whose first arg looks like a flag. Same behavior as omitting it.
+	run "$CMA" exec b -- printenv CLAUDE_CONFIG_DIR
+	[ "$status" -eq 0 ]
+	[ "$output" = "$HOME/.claude-b" ]
+}
+
+@test "exec without a command prints env-var assignments (dry-run)" {
+	"$CMA" init
+	"$CMA" add-instance b --email test-b@example.com
+	run "$CMA" exec b
+	[ "$status" -eq 0 ]
+	# The output is `eval`-consumable; each line is `export NAME=<quoted>`.
+	# Print BOTH env-var assignments so the user can copy/paste the pair.
+	[[ "$output" == *"export CLAUDE_CONFIG_DIR="* ]]
+	[[ "$output" == *"export CHROMIUM_USER_DATA_DIR="* ]]
+	[[ "$output" == *"$HOME/.claude-b"* ]]
+}
+
+@test "exec propagates the child's exit code" {
+	"$CMA" init
+	"$CMA" add-instance b --email test-b@example.com
+	# `false` exits 1 → exec's exit must be 1 (not our own error path).
+	run "$CMA" exec b -- false
+	[ "$status" -eq 1 ]
+}
+
+@test "exec refuses invalid label" {
+	"$CMA" init
+	run "$CMA" exec "B_uppercase" -- true
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"invalid label"* ]]
+}

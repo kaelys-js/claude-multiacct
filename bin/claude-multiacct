@@ -15,6 +15,10 @@
 #                                     via WatchPaths on Squirrel update)
 #   sync-now                          manually trigger primary → mirrors sync
 #   sync-log [--tail]                 print the sessions-sync log (--tail follows it)
+#   exec <label> [--] <cmd> [args…]   run <cmd> with CLAUDE_CONFIG_DIR +
+#                                     CHROMIUM_USER_DATA_DIR pointing at <label>'s
+#                                     data; with NO cmd, prints the env-var
+#                                     assignments the wrapper would export (dry-run)
 #   doctor                            deep diagnostic report
 #   qa {lint|test}                    dev helpers (shellcheck + bats)
 
@@ -50,6 +54,7 @@ usage:
   claude-multiacct refresh-clones
   claude-multiacct sync-now
   claude-multiacct sync-log [--tail]
+  claude-multiacct exec <label> [--] <cmd> [args…]
   claude-multiacct doctor
   claude-multiacct qa {lint|test}
 
@@ -334,6 +339,75 @@ cmd_sync_log() {
 	fi
 }
 
+# exec — run a command with a mirror instance's env vars pre-set. Mirrors the
+# env/sudo convention: `claude-multiacct exec <label> [--] <cmd> [args…]`.
+# The optional `--` separator lets you pass a command whose first arg looks
+# like a flag (`claude-multiacct exec b -- ls -la`).
+#
+# Env vars exported to the child process:
+#   CLAUDE_CONFIG_DIR       — mirror's configDir (~/.claude-<label> by default)
+#   CHROMIUM_USER_DATA_DIR  — mirror's userData (~/Library/Application Support/
+#                             Claude-<Title> by default), for any nested
+#                             Electron/Chromium tool that respects it
+#
+# stdin/stdout/stderr pass through and the child's exit code becomes ours.
+#
+# With NO command after <label> (and no `--`), prints the env-var assignments
+# that WOULD be exported and exits 0. Useful for `eval "$(claude-multiacct exec b)"`
+# or just inspecting the paths a mirror uses.
+#
+# When <cmd> is one of `claude` / `claude-code` / `code`, emits a warning on
+# stderr about also passing `--user-data-dir=<userData>` if the tool supports
+# it — the env vars alone don't reach every Chromium subprocess in every wrapper.
+cmd_exec() {
+	local label=""
+	# First positional arg is the label. Anything after (with or without `--`)
+	# is the command to run.
+	if [[ $# -eq 0 ]]; then
+		cma_die "exec: label required (usage: claude-multiacct exec <label> [--] <cmd> [args…])"
+	fi
+	label="$1"
+	shift
+
+	# Optional `--` separator. If present, drop it.
+	if [[ "${1:-}" == "--" ]]; then
+		shift
+	fi
+
+	cma_validate_label "$label"
+	cma_require_config
+
+	# Resolve the instance — dies loud if the label isn't in instances.yaml.
+	local row
+	row="$(cma_resolve_instance "$label")"
+	local _l _e cdir udata _cli _app _bid
+	IFS=$'\t' read -r _l _e cdir udata _cli _app _bid <<<"$row"
+
+	# No command → dry-run: print the env-var assignments and exit.
+	# Emitted in a form that `eval` can consume (shell-quoted values).
+	if [[ $# -eq 0 ]]; then
+		printf 'export CLAUDE_CONFIG_DIR=%q\n' "$cdir"
+		printf 'export CHROMIUM_USER_DATA_DIR=%q\n' "$udata"
+		return 0
+	fi
+
+	# Warn (non-fatal) when the child is a Claude CLI / VSCode-family tool. The
+	# env vars we export are respected by most CLIs, but some Electron wrappers
+	# only honor an explicit `--user-data-dir=` flag on the command line.
+	case "$1" in
+	claude | claude-code | code)
+		cma_warn "exec: exporting CHROMIUM_USER_DATA_DIR=$udata for '$1'; also pass --user-data-dir=$udata if the tool supports it"
+		;;
+	esac
+
+	# `exec` replaces this shell with the child so the child's exit code IS ours
+	# and stdin/stdout/stderr pass through unchanged. `env` sets the two vars for
+	# the child only, so callers of this function get an unmodified environment
+	# back (relevant for tests that inspect the caller's env post-invocation,
+	# though `exec` won't return here on success anyway).
+	exec env "CLAUDE_CONFIG_DIR=$cdir" "CHROMIUM_USER_DATA_DIR=$udata" "$@"
+}
+
 cmd_doctor() {
 	cma_say "claude-multiacct doctor"
 	cma_dim "  repo:   $CMA_REPO_ROOT"
@@ -574,6 +648,7 @@ main() {
 	refresh-clones) cmd_refresh_clones "$@" ;;
 	sync-now) cmd_sync_now "$@" ;;
 	sync-log) cmd_sync_log "$@" ;;
+	exec) cmd_exec "$@" ;;
 	doctor) cmd_doctor "$@" ;;
 	qa) cmd_qa "$@" ;;
 	*)
