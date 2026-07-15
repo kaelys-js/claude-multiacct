@@ -50,8 +50,8 @@
 #      created, and upstream commit signatures are preserved verbatim.
 #   4. On non-fast-forward: cut branch `sync/upstream-YYYY-MM-DD-<sha>`,
 #      merge with a fixed rule (upstream wins under `packages/shared` and
-#      `.schemas`; product code, product-specific workflows, and
-#      `TOLARIA.md` win locally), push (`--force-with-lease` so a same-day
+#      `.schemas`; product code and product-specific workflows win
+#      locally), push (`--force-with-lease` so a same-day
 #      rerun against the same upstream tip replaces the previous attempt's
 #      branch), then replace the local merge commit with a `gh api`-created
 #      equivalent so GitHub signs it with the `web-flow` bot key and it
@@ -164,11 +164,11 @@ jobs:
 
           # Fork-wins allowlist — narrowed to files that legitimately diverge
           # per fork today. Fork-only paths (`packages/products/cole-30-60-90`,
-          # `refresh.yml`, `reminders.yml`, `sync-upstream.yml`, `TOLARIA.md`)
-          # can't conflict because upstream doesn't carry them, so listing them
-          # is dead weight. `renovate.yml` is now byte-identical between fork
-          # and upstream (parametrised on `${{ github.repository }}`), so it
-          # also doesn't need protection here.
+          # `refresh.yml`, `reminders.yml`, `sync-upstream.yml`) can't conflict
+          # because upstream doesn't carry them, so listing them is dead weight.
+          # `renovate.yml` is now byte-identical between fork and upstream
+          # (parametrised on `${{ github.repository }}`), so it also doesn't
+          # need protection here.
           for p in \
             .github/workflows/catalog-notify.yml \
             .github/workflows/ci.yml \
