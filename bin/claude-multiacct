@@ -451,8 +451,13 @@ cmd_qa() {
 		# Resolve bats to its real binary — kcov re-exec's under bash and can
 		# miss mise's shim-directory search when running from another shell
 		# depth. Passing the absolute path sidesteps the shim entirely.
-		local bats_bin
+		local bats_bin yq_bin
 		bats_bin="$(command -v bats)"
+		yq_bin="$(command -v yq)"
+		# Preserve mise's shim directory on PATH inside kcov's subprocess
+		# so bats-spawned bash finds yq + shellcheck when the tests fork
+		# claude-multiacct + its lib/*.sh helpers.
+		PATH="$(dirname "$bats_bin"):$(dirname "$yq_bin"):$PATH" \
 		kcov \
 			--include-path="$CMA_BIN,$CMA_LIB" \
 			--exclude-path="$CMA_REPO_ROOT/node_modules,$CMA_REPO_ROOT/.mise,$CMA_REPO_ROOT/coverage,$CMA_REPO_ROOT/tests" \
