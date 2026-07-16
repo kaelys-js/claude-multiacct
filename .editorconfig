@@ -114,12 +114,6 @@ insert_final_newline = true
 end_of_line = crlf
 
 # ============================================
-# iCalendar (RFC 5545 mandates CRLF line endings)
-# ============================================
-[*.ics]
-end_of_line = crlf
-
-# ============================================
 # Kotlin (ktlint interop)
 # ============================================
 [*.{kt,kts}]
