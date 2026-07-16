@@ -98,7 +98,7 @@ const PARENT_RULES: Record<string, ParentRule> = {
 // (records/, schema/, templates/, owners.yaml) are co-located in the package and
 // move WITH this validator, so `import.meta.dirname` is the correct, stable anchor
 // — the records-root default and schema path resolve against the package, not the
-// process CWD, so `pnpm validate` works from any directory.
+// process CWD, so `pnpm --filter @foundation/registry validate` works from any directory.
 const PACKAGE_ROOT = join(import.meta.dirname, "..");
 const SCHEMA_PATH = join(PACKAGE_ROOT, "schema", "record.schema.json");
 
@@ -926,8 +926,9 @@ const isMain = ((): boolean => {
 })();
 
 if (isMain) {
-	// Resolve root relative to the process CWD so `pnpm validate` (run at repo
-	// root) finds `records/`.
+	// Resolve root relative to the package (via PACKAGE_ROOT above), so
+	// `pnpm --filter @foundation/registry validate` finds `records/`
+	// regardless of process CWD.
 	const code = await main();
 	exit(code);
 }

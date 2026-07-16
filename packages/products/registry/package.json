@@ -6,6 +6,9 @@
 	"type": "module",
 	"description": "Foundation record registry: the record validator, schemas, templates, records, and proposals.",
 	"license": "SEE LICENSE IN LICENSE",
+	"scripts": {
+		"validate": "node src/validate-records.ts"
+	},
 	"dependencies": {
 		"ajv": "8.20.0",
 		"ajv-formats": "3.0.1",

@@ -7,8 +7,9 @@
 # Typecheck (tsc), REUSE license compliance, AND schema instance validation all
 # run inside the `lint` job as members of the qa:lint pipeline, so there is no
 # separate `types` or `schema` job. The `validate` job runs the record validator
-# (`pnpm validate` — schema + cross-record invariants over the governance
-# records); the validator's own types are covered by the `lint` job's tsc, so
+# (`pnpm --filter @foundation/registry validate` — schema + cross-record
+# invariants over the governance records); the validator's own types are
+# covered by the `lint` job's tsc, so
 # they are not re-run. The `validate` job runs only when the registry product
 # package is present; a small `detect` job checks for it and exposes an output,
 # and `validate` gates on that output via `needs`. GHA does not accept
@@ -216,4 +217,4 @@ jobs:
       - name: Install dependencies
         run: ./bin/mise exec -- pnpm install --frozen-lockfile
       - name: Validate governance records (schema + cross-record invariants)
-        run: ./bin/mise exec -- pnpm run validate
+        run: ./bin/mise exec -- pnpm --filter @foundation/registry validate

@@ -80,8 +80,7 @@
 		"sync:versions": "node packages/shared/utils/sync/src/versions.ts",
 		"test": "vitest run",
 		"test:coverage": "vitest run --coverage",
-		"test:coverage:run": "vitest run --coverage",
-		"validate": "node packages/products/registry/src/validate-records.ts"
+		"test:coverage:run": "vitest run --coverage"
 	},
 	"devDependencies": {
 		"@commitlint/cli": "21.2.1",
