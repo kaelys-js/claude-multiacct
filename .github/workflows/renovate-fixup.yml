@@ -1,0 +1,136 @@
+# yaml-language-server: $schema=../../.schemas/github-workflow.json
+# renovate-fixup — regenerate CI-checked derived files on Renovate PRs and
+# push the fix back to the PR branch so CI regreens. Runs BEFORE the CI's
+# `sync` and `format` jobs would fail on drift Renovate's own container
+# cannot regenerate.
+#
+# What this repo actually needs regenerated after a Renovate bump:
+#   - pnpm-lock.yaml (Renovate sometimes only rewrites package.json / mise.toml
+#     without a workspace install; a follow-up `pnpm install --lockfile-only`
+#     recomputes the lockfile). Uses `./bin/mise` to invoke pnpm through the
+#     vendored mise wrapper — same shape every other job uses.
+#   - `pnpm sync` outputs (versions.ts + turbo.ts + schemas.ts). These
+#     regenerate `versions.json` / `turbo.json` / product JSON schemas from
+#     typed sources — CI runs `pnpm sync:check` and fails on drift.
+#   - Repo formatters (`pnpm format` — oxfmt + taplo + syncpack). Formatter
+#     version bumps or a package.json edit can shift canonical output.
+#
+# Not regenerated here:
+#   - Test snapshots / governance records — hand-authored artefacts a Renovate
+#     bump shouldn't touch. A break signals a real change to review.
+#
+# Loop protection: only commits when the working tree has drift after the
+# regeneration steps. A clean tree exits silently — this workflow cannot
+# infinite-loop against itself.
+#
+# Auth: mints a short-lived GitHub App installation token via
+# actions/create-github-app-token (same App as Renovate uses for its own
+# commits — kaelys-js-renovate[bot]) so the fixup commit's author matches
+# every other Renovate commit on the PR and DCO stays happy.
+name: renovate-fixup
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+
+# Same concurrency group per PR so a rapid-fire synchronize doesn't stack
+# fixups on top of each other. Only fires on pull_request events, so the
+# per-PR key never collides with main-branch pushes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+# Workflow-level least privilege: read-only. The fixup job pushes via the
+# App token (minted below), not GITHUB_TOKEN, so contents: read is enough.
+permissions:
+  contents: read
+  pull-requests: read
+
+env:
+  CI: "true" # pnpm 11: allow non-interactive node_modules rebuild
+
+jobs:
+  fixup:
+    name: regenerate derived files (Renovate PRs only)
+    # Only run for PRs opened by our Renovate GitHub App bot, on same-repo
+    # branches (fork PRs don't get secrets anyway).
+    if: >
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login == 'kaelys-js-renovate[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Mint GitHub App installation token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.RENOVATE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RENOVATE_APP_PRIVATE_KEY }}
+
+      - name: Check out PR head (using App token so the eventual push retriggers CI)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          ref: ${{ github.event.pull_request.head.ref }}
+          # Full history so `git commit` doesn't complain about a shallow clone.
+          fetch-depth: 0
+
+      # Same toolchain shape every CI job in this repo uses: vendored bin/mise
+      # wrapper + restored .mise cache. Keeps fixup's environment byte-identical
+      # to what the CI jobs it's fixing up will run under next.
+      - name: Restore mise toolchain
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .mise
+          key: mise-${{ runner.os }}-${{ hashFiles('mise.toml', 'mise.lock') }}
+
+      - name: Expose vendored mise on PATH
+        run: |
+          ./bin/mise --version >/dev/null 2>&1 || true
+          mkdir -p "$HOME/.local/bin"
+          ln -sf "$(ls "$PWD"/.mise/mise-* | head -n1)" "$HOME/.local/bin/mise"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Install toolchain
+        run: ./bin/mise install
+
+      - name: Regenerate pnpm lockfile (in case package.json changed)
+        run: ./bin/mise exec -- pnpm install --lockfile-only
+
+      - name: Install deps for sync/format scripts
+        run: ./bin/mise exec -- pnpm install --frozen-lockfile
+
+      - name: Regenerate versions.json / turbo.json / product schemas
+        run: ./bin/mise exec -- pnpm run sync
+
+      - name: Reformat repo files (oxfmt + taplo + syncpack)
+        run: ./bin/mise exec -- pnpm run format
+
+      - name: Commit + push if there's drift
+        env:
+          # This bot's identity — matches Renovate's own commits so DCO stays happy.
+          BOT_NAME: "kaelys-js-renovate[bot]"
+          BOT_EMAIL: "304942767+kaelys-js-renovate[bot]@users.noreply.github.com"
+        run: |
+          if [[ -z "$(git status --porcelain)" ]]; then
+            echo "renovate-fixup: no drift — all derived files already in sync."
+            exit 0
+          fi
+          echo "renovate-fixup: drift detected in these files:"
+          git status --porcelain
+          git config user.name "$BOT_NAME"
+          git config user.email "$BOT_EMAIL"
+          git add -A
+          git commit \
+            --signoff \
+            --message "chore(deps): regenerate derived files for this bump" \
+            --message "Follow-on to the Renovate bump on this PR. pnpm-lock.yaml,
+          sync outputs (versions.json / turbo.json / product schemas), and
+          repo-file formatters (oxfmt + taplo + syncpack) are deterministic
+          outputs of the pinned toolchain — Renovate can't run the
+          regeneration inside its own container, so renovate-fixup.yml runs
+          it here and pushes the result back.
+
+          Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
