@@ -103,6 +103,7 @@ jobs:
 
       - name: Add upstream remote and fetch
         run: |
+          git remote remove upstream 2>/dev/null || true
           git remote add upstream ${UPSTREAM_REPO_SSH}
           git fetch upstream ${UPSTREAM_BRANCH}
 

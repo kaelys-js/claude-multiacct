@@ -115,6 +115,7 @@ jobs:
 
       - name: Add upstream remote and fetch
         run: |
+          git remote remove upstream 2>/dev/null || true
           git remote add upstream "https://x-access-token:${{ secrets.GH_TOKEN }}@github.com/${UPSTREAM_REPO_PATH}.git"
           git fetch upstream ${UPSTREAM_BRANCH}
 
