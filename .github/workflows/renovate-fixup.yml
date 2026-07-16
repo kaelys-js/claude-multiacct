@@ -1,0 +1,108 @@
+---
+# renovate-fixup — regenerate CI-checked derived files on Renovate PRs and
+# push the fix back to the PR branch so CI regreens. Runs BEFORE the CI's
+# `qa format:check` step (`shfmt -d ...`) would fail on drift Renovate's
+# own container cannot regenerate.
+#
+# What this repo actually needs regenerated after a Renovate bump:
+#   - shell formatting (`bin/claude-multiacct qa format` — `shfmt -w`). When
+#     Renovate bumps shfmt in mise.toml, the new version can change the
+#     canonical output of one of `bin/*`, `lib/*.sh`, or `tests/*.bats`.
+#     CI's `shfmt -d bin/* lib/*.sh tests/*.bats` catches the drift; this
+#     workflow runs `shfmt -w` and pushes the reformatted files back.
+#
+# No pnpm / no lockfile / no schema regen — this is a plain bash + bats
+# repo. The only regeneration step is the shell formatter.
+#
+# Loop protection: only commits when the working tree has drift after
+# `shfmt -w`. A clean tree exits silently — this workflow cannot
+# infinite-loop against itself.
+#
+# Auth: mints a short-lived GitHub App installation token via
+# actions/create-github-app-token (same App as Renovate uses for its own
+# commits — kaelys-js-renovate[bot]) so the fixup commit's author matches
+# every other Renovate commit on the PR and DCO stays happy.
+name: renovate-fixup
+
+# `on:` is quoted to avoid yamllint's truthy warning — it's the YAML 1.1
+# boolean alias for `true` (matches ci.yml's convention).
+"on":
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+
+# Same concurrency group per PR so a rapid-fire synchronize doesn't stack
+# fixups on top of each other. Only fires on pull_request events, so the
+# per-PR key never collides with main-branch pushes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+# Workflow-level least privilege: read-only. The fixup job pushes via the
+# App token (minted below), not GITHUB_TOKEN, so contents: read is enough.
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  fixup:
+    name: regenerate shell formatting (Renovate PRs only)
+    # Only run for PRs opened by our Renovate GitHub App bot, on same-repo
+    # branches (fork PRs don't get secrets anyway).
+    if: >
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login == 'kaelys-js-renovate[bot]'
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - name: Mint GitHub App installation token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ secrets.RENOVATE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RENOVATE_APP_PRIVATE_KEY }}
+
+      - name: Check out PR head (using App token so the eventual push retriggers CI)
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          ref: ${{ github.event.pull_request.head.ref }}
+          # Full history so `git commit` doesn't complain about a shallow clone.
+          fetch-depth: 0
+
+      # Same toolchain as CI (mise.toml pins shfmt / shellcheck / bats / …).
+      - name: Install mise + pinned toolchain
+        uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d  # v4.2.0
+
+      # `bin/claude-multiacct qa format` runs `shfmt -w bin/* lib/*.sh
+      # tests/*.bats` — the write-mode counterpart to CI's `shfmt -d …` check.
+      - name: Reformat shell (shfmt -w bin/ lib/ tests/)
+        run: bin/claude-multiacct qa format
+
+      - name: Commit + push if there's drift
+        env:
+          # This bot's identity — matches Renovate's own commits so DCO stays happy.
+          BOT_NAME: "kaelys-js-renovate[bot]"
+          BOT_EMAIL: "304942767+kaelys-js-renovate[bot]@users.noreply.github.com"
+        run: |
+          if [[ -z "$(git status --porcelain)" ]]; then
+            echo "renovate-fixup: no drift — shfmt output already matches."
+            exit 0
+          fi
+          echo "renovate-fixup: drift detected in these files:"
+          git status --porcelain
+          git config user.name "$BOT_NAME"
+          git config user.email "$BOT_EMAIL"
+          git add -A
+          git commit \
+            --signoff \
+            --message "chore(deps): reformat shell for this shfmt bump" \
+            --message "Follow-on to the Renovate bump on this PR. shfmt's
+          canonical output shifted with the new pinned version and
+          bin/*, lib/*.sh, tests/*.bats need reformatting. Renovate
+          can't run shfmt inside its own container, so
+          renovate-fixup.yml runs bin/claude-multiacct qa format here
+          and pushes the reformatted files back.
+
+          Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
