@@ -4,7 +4,7 @@
 	"version": "0.0.0",
 	"private": true,
 	"type": "module",
-	"description": "Foundation shared helpers used by more than one of the qa, sync, and registry packages.",
+	"description": "Foundation shared helpers used by more than one of the qa and sync packages.",
 	"license": "SEE LICENSE IN LICENSE",
 	"devDependencies": {
 		"@foundation/config": "workspace:*"
