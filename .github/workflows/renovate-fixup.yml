@@ -5,6 +5,15 @@
 # cannot regenerate.
 #
 # What this repo actually needs regenerated after a Renovate bump:
+#   - mise.toml pnpm pin + mise.lock (Renovate's "npm dev dependencies"
+#     grouping bumps `engines.pnpm` + `packageManager` in package.json without
+#     touching mise.toml, so this workflow mirrors package.json's
+#     `engines.pnpm` into `mise.toml` and re-locks. Without this, mise-provided
+#     pnpm 11.x runs against a package.json pinning pnpm 11.y, and .npmrc's
+#     `manage-package-manager-versions=true` triggers a broken auto-download of
+#     the mismatched version into `~/Library/pnpm/store` — first line reads
+#     "This file intentionally left blank" and exec fails with
+#     `pnpm: line 1: This: command not found`, exit 127).
 #   - pnpm-lock.yaml (Renovate sometimes only rewrites package.json / mise.toml
 #     without a workspace install; a follow-up `pnpm install --lockfile-only`
 #     recomputes the lockfile). Uses `./bin/mise` to invoke pnpm through the
@@ -97,6 +106,43 @@ jobs:
 
       - name: Install toolchain
         run: ./bin/mise install
+
+      # If Renovate bumped package.json's `engines.pnpm` / `packageManager`
+      # without also bumping `mise.toml [tools] pnpm`, mise-provided pnpm is
+      # older than the version package.json advertises. .npmrc has
+      # `manage-package-manager-versions=true`, so the older pnpm sees the
+      # newer packageManager field and auto-downloads the requested version
+      # into `~/Library/pnpm/store` — that download is a placeholder file
+      # (`This file intentionally left blank`) and the next invocation dies
+      # with `pnpm: line 1: This: command not found`. Fix: mirror
+      # `engines.pnpm` into mise.toml, refresh mise.lock, install the new
+      # pnpm through mise (fetches from GitHub releases via aqua, not the
+      # broken npm auto-download path). No-op when versions already match.
+      - name: Sync mise.toml pnpm pin from package.json engines.pnpm
+        run: |
+          set -euo pipefail
+          PKG_PNPM=$(node -e "const p=require('./package.json'); process.stdout.write(p.engines && p.engines.pnpm ? p.engines.pnpm : '')")
+          if [ -z "$PKG_PNPM" ]; then
+            echo "renovate-fixup: package.json has no engines.pnpm — nothing to mirror."
+            exit 0
+          fi
+          MISE_PNPM=$(awk -F'"' '/^pnpm = "/ { print $2; exit }' mise.toml)
+          if [ "$PKG_PNPM" = "$MISE_PNPM" ]; then
+            echo "renovate-fixup: mise.toml pnpm ($MISE_PNPM) already matches package.json engines.pnpm ($PKG_PNPM) — no drift."
+            exit 0
+          fi
+          echo "renovate-fixup: mirroring package.json engines.pnpm ($PKG_PNPM) into mise.toml (was $MISE_PNPM)."
+          awk -v v="$PKG_PNPM" '
+            /^pnpm = "/ && !done { print "pnpm = \"" v "\""; done=1; next }
+            { print }
+          ' mise.toml > mise.toml.new
+          mv mise.toml.new mise.toml
+          # mise.lock has `lockfile = true` in mise.toml settings, so
+          # `mise install` refuses a version whose SHA isn't recorded. Force
+          # the install for pnpm (fetches from aqua, computes fresh hash),
+          # then run `mise lock` to persist the new checksums into mise.lock.
+          ./bin/mise install --force pnpm
+          ./bin/mise lock
 
       - name: Regenerate pnpm lockfile (in case package.json changed)
         run: ./bin/mise exec -- pnpm install --lockfile-only
