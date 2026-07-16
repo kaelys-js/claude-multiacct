@@ -1,63 +1,79 @@
----
+# yaml-language-server: $schema=https://json.schemastore.org/github-issue-forms.json
+# Managed by kaelys-js-infra (terraform/repository_files.tf).
 name: Bug report
-description: Something's broken. Include output from `claude-multiacct doctor`.
+description: File a bug against claude-multiacct
+title: "[Bug] "
 labels: ["bug"]
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for filing! Please include the `doctor` output + macOS/Claude
-        Desktop versions so we can reproduce.
-
+        Thanks for reporting. Please fill in every required field — sparse
+        reports are hard to act on for a personal Mac-side tool where
+        state on your machine matters more than the code.
   - type: input
-    id: macos_version
+    id: macos-version
     attributes:
       label: macOS version
-      description: Output of `sw_vers -productVersion`
-      placeholder: "e.g. 15.2"
+      description: "Output of `sw_vers -productVersion`"
+      placeholder: "15.2"
     validations:
       required: true
-
   - type: input
-    id: claude_version
+    id: claude-desktop-version
     attributes:
       label: Claude Desktop version
-      description: >
-        Output of
-        `plutil -extract CFBundleShortVersionString raw
-        /Applications/Claude.app/Contents/Info.plist`
-      placeholder: "e.g. 1.20186.1"
+      description: "Output of `defaults read /Applications/Claude.app/Contents/Info CFBundleShortVersionString`"
+      placeholder: "1.2.3"
     validations:
       required: true
-
+  - type: input
+    id: mirror-label
+    attributes:
+      label: Mirror instance label (if applicable)
+      description: "The label passed to `claude-multiacct add-instance <label>`; leave blank if the bug is on the primary."
+    validations:
+      required: false
   - type: textarea
     id: repro
     attributes:
-      label: Reproduction steps
-      description: What did you run? What did you expect vs what happened?
+      label: Steps to reproduce
       placeholder: |
-        1. `claude-multiacct add-instance b --email you@example.com`
-        2. Expected: mirror clone at ~/Applications/Claude Account B.app
-        3. Actually got: <the error>
+        1. Run `claude-multiacct ...`
+        2. Observe ...
     validations:
       required: true
-
   - type: textarea
-    id: doctor
+    id: expected
     attributes:
-      label: '`claude-multiacct doctor` output'
-      description: Paste the full output. Redact any account UUIDs if desired.
-      render: shell
+      label: Expected behaviour
     validations:
       required: true
-
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: doctor-output
+    attributes:
+      label: doctor --json output (if a mirror is involved)
+      description: "`claude-multiacct doctor --json | jq`"
+      render: json
+    validations:
+      required: false
   - type: textarea
     id: logs
     attributes:
       label: Relevant logs
-      description: >
-        Anything from ~/Library/Logs/claude-multiacct/ — sessions-sync.log,
-        clone-refresh.log, metadata-watcher.log.
+      description: launchd logs, terminal output, etc.
       render: shell
+    validations:
+      required: false
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
     validations:
       required: false
