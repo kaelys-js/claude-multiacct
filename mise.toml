@@ -20,7 +20,7 @@ MISE_INSTALLS_DIR = "{{config_root}}/.mise/installs"
 
 [tools]
 node = "26.5.0"
-pnpm = "11.12.0"
+pnpm = "11.13.0"
 
 # ─── QA toolchain — every linter/formatter this registry uses, pinned here so
 # the repo is self-contained: `mise install` gets all of them into
