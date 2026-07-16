@@ -41,7 +41,12 @@ permissions:
 jobs:
   renovate:
     name: renovate
-    runs-on: ubuntu-latest
+    # Route to the kaelys-mac-mini self-hosted runner when SELF_HOSTED_ENABLED
+    # is set on the repo; fall back to ubuntu-latest if the mini is down or
+    # the escape hatch is flipped off. renovatebot/github-action is a JS
+    # action that shells out to `docker run ghcr.io/renovatebot/renovate` —
+    # the mac-mini has Docker available and the renovate image is multi-arch.
+    runs-on: ${{ vars.SELF_HOSTED_ENABLED == 'true' && fromJSON('["self-hosted","kaelys-mac-mini"]') || 'ubuntu-latest' }}
     timeout-minutes: 30
     steps:
       # Pre-flight FIRST (before checkout): fail loud with a pointer to the
