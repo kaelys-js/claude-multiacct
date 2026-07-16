@@ -1,0 +1,15 @@
+// Template-local markdownlint-cli2 config. markdownlint-cli2 walks up from
+// each linted file's directory and merges the closest `.markdownlint-cli2.*`
+// it finds; `ignores` in a per-directory config filter files whose
+// `dirInfo.dir` matches this directory, so placing the config INSIDE the
+// templates directory is what actually skips these files (a config one level
+// higher merges its options but wouldn't match the file's relative path).
+//
+// The record templates carry deliberate fill-in placeholders (<title>,
+// <Option A>, <pro>…) that markdownlint misreads as inline HTML (MD033); real
+// records have no placeholders, so records/ stays linted. oxfmt still formats
+// the templates.
+{
+	"$schema": "../../../../.schemas/markdownlint-cli2.json",
+	"ignores": ["*"],
+}

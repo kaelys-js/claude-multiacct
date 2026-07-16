@@ -10,18 +10,5 @@
 		"extends": "markdownlint.jsonc",
 	},
 	"globs": ["**/*.md", "**/*.mdx"],
-	// The record templates carry deliberate fill-in placeholders (<title>, <Option A>,
-	// <pro>…) that markdownlint misreads as inline HTML (MD033); real records have no
-	// placeholders, so records/ stays linted. oxfmt still formats the templates. The
-	// path is the explicit package location (a bare `templates` ignore matches only a
-	// root-level dir, not the nested @foundation/registry one).
-	"ignores": [
-		"node_modules",
-		".mise",
-		"dist",
-		"build",
-		"coverage",
-		"CHANGELOG.md",
-		"packages/products/registry/templates",
-	],
+	"ignores": ["node_modules", ".mise", "dist", "build", "coverage", "CHANGELOG.md"],
 }
