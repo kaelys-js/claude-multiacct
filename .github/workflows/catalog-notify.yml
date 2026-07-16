@@ -22,7 +22,10 @@ permissions:
 jobs:
   notify:
     name: dispatch catalog-updated
-    runs-on: ubuntu-latest
+    # Route to the kaelys-mac-mini self-hosted runner when SELF_HOSTED_ENABLED
+    # is set on the repo; fall back to ubuntu-latest if the mini is down or
+    # the escape hatch is flipped off.
+    runs-on: ${{ vars.SELF_HOSTED_ENABLED == 'true' && fromJSON('["self-hosted","kaelys-mac-mini"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - name: Verify GitHub App secrets are configured

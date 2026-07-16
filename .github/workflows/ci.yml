@@ -29,10 +29,41 @@
 name: CI
 
 on:
+  # Docs-only changes skip real CI here and match ci-noop.yml (mirror path
+  # list) which posts required-check successes so branch protection lets
+  # docs-only PRs merge without a full CI run. Keep the two lists in sync.
   push:
     branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
+      - "LICENSE"
+      - ".editorconfig"
+      - ".gitattributes"
+      - ".github/CODEOWNERS"
+      - ".github/copilot-instructions.md"
+      - ".github/ISSUE_TEMPLATE/**"
+      - ".github/PULL_REQUEST_TEMPLATE.md"
+      - "SUPPORT.md"
+      - "CODE_OF_CONDUCT.md"
+      - "CONTRIBUTING.md"
+      - "SECURITY.md"
   pull_request:
     branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
+      - "LICENSE"
+      - ".editorconfig"
+      - ".gitattributes"
+      - ".github/CODEOWNERS"
+      - ".github/copilot-instructions.md"
+      - ".github/ISSUE_TEMPLATE/**"
+      - ".github/PULL_REQUEST_TEMPLATE.md"
+      - "SUPPORT.md"
+      - "CODE_OF_CONDUCT.md"
+      - "CONTRIBUTING.md"
+      - "SECURITY.md"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -49,7 +80,11 @@ env:
 jobs:
   detect:
     name: detect
-    runs-on: ubuntu-latest
+    # Route to the kaelys-mac-mini self-hosted runner when SELF_HOSTED_ENABLED
+    # is set on the repo; fall back to ubuntu-latest if the mini is down or
+    # the escape hatch is flipped off. See docs/self-hosted-runner.md in
+    # kaelys-js-infra for the fleet-wide rationale.
+    runs-on: ${{ vars.SELF_HOSTED_ENABLED == 'true' && fromJSON('["self-hosted","kaelys-mac-mini"]') || 'ubuntu-latest' }}
     timeout-minutes: 2
     outputs:
       has-registry: ${{ steps.check.outputs.has-registry }}
@@ -68,7 +103,7 @@ jobs:
 
   format:
     name: format
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.SELF_HOSTED_ENABLED == 'true' && fromJSON('["self-hosted","kaelys-mac-mini"]') || 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -97,7 +132,7 @@ jobs:
 
   lint:
     name: lint
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.SELF_HOSTED_ENABLED == 'true' && fromJSON('["self-hosted","kaelys-mac-mini"]') || 'ubuntu-latest' }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -126,7 +161,7 @@ jobs:
 
   sync:
     name: sync
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.SELF_HOSTED_ENABLED == 'true' && fromJSON('["self-hosted","kaelys-mac-mini"]') || 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -155,7 +190,7 @@ jobs:
 
   test:
     name: test
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.SELF_HOSTED_ENABLED == 'true' && fromJSON('["self-hosted","kaelys-mac-mini"]') || 'ubuntu-latest' }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -192,7 +227,7 @@ jobs:
     needs: detect
     if: needs.detect.outputs.has-registry == 'true'
     name: validate
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.SELF_HOSTED_ENABLED == 'true' && fromJSON('["self-hosted","kaelys-mac-mini"]') || 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0

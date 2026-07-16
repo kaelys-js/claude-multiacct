@@ -58,7 +58,10 @@ jobs:
     if: >
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.user.login == 'kaelys-js-renovate[bot]'
-    runs-on: ubuntu-latest
+    # Route to the kaelys-mac-mini self-hosted runner when SELF_HOSTED_ENABLED
+    # is set on the repo; fall back to ubuntu-latest if the mini is down or
+    # the escape hatch is flipped off.
+    runs-on: ${{ vars.SELF_HOSTED_ENABLED == 'true' && fromJSON('["self-hosted","kaelys-mac-mini"]') || 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
       - name: Mint GitHub App installation token

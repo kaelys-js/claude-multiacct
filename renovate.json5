@@ -55,8 +55,12 @@
 	commitBody: "Signed-off-by: kaelys-js-renovate[bot] <304942767+kaelys-js-renovate[bot]@users.noreply.github.com>",
 
 	// --- Concurrency / noise control -----------------------------------------
-	prConcurrentLimit: 4,
-	prHourlyLimit: 2,
+	// Throttle to one open Renovate PR at a time / one new PR per hour so the
+	// self-hosted runner (kaelys-mac-mini) is not swamped by parallel Renovate
+	// churn and the CI-minutes-per-day floor stays predictable. Renovate
+	// closes over-limit PRs on its next scheduled run.
+	prConcurrentLimit: 1,
+	prHourlyLimit: 1,
 	// Rebase stale branches so the digest/tag stays fresh until merge.
 	rebaseWhen: "behind-base-branch",
 
