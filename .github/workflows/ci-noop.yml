@@ -1,0 +1,62 @@
+---
+# CI noop for docs-only changes. ci.yml carries `paths-ignore` for the same
+# list; when a push or PR touches ONLY files in that list, ci.yml skips and
+# GitHub leaves the required check (`qa lint + qa test`) in Pending — branch
+# protection then blocks the docs-only PR from merging. This workflow
+# mirrors the path list under `paths:` (not `paths-ignore:`), matches the
+# required-check name via `jobs.<id>.name`, and reports success so docs-only
+# PRs merge without a real CI run.
+#
+# Keep the path list here in sync with ci.yml.
+name: CI
+
+"on":
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "*.md"
+      - "LICENSE"
+      - ".editorconfig"
+      - ".gitattributes"
+      - ".github/CODEOWNERS"
+      - ".github/copilot-instructions.md"
+      - ".github/ISSUE_TEMPLATE/**"
+      - ".github/PULL_REQUEST_TEMPLATE.md"
+      - "SUPPORT.md"
+      - "CODE_OF_CONDUCT.md"
+      - "CONTRIBUTING.md"
+      - "SECURITY.md"
+  pull_request:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "*.md"
+      - "LICENSE"
+      - ".editorconfig"
+      - ".gitattributes"
+      - ".github/CODEOWNERS"
+      - ".github/copilot-instructions.md"
+      - ".github/ISSUE_TEMPLATE/**"
+      - ".github/PULL_REQUEST_TEMPLATE.md"
+      - "SUPPORT.md"
+      - "CODE_OF_CONDUCT.md"
+      - "CONTRIBUTING.md"
+      - "SECURITY.md"
+
+concurrency:
+  group: ci-noop-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  qa:
+    name: qa lint + qa test
+    # ubuntu-latest (not macos-14 like real ci.yml) — the noop is a 5-second
+    # echo and does not need the darwin toolchain the real qa job needs.
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - run: echo "docs-only change - real CI skipped (see ci.yml paths-ignore)"

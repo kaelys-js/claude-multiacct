@@ -54,8 +54,12 @@
 	commitBody: "Signed-off-by: kaelys-js-renovate[bot] <304942767+kaelys-js-renovate[bot]@users.noreply.github.com>",
 
 	// --- Concurrency / noise control -----------------------------------------
-	prConcurrentLimit: 4,
-	prHourlyLimit: 2,
+	// Throttle to one open Renovate PR at a time / one new PR per hour so
+	// the CI-minutes-per-day floor stays predictable (public repo — Actions
+	// minutes are free, but Renovate PR churn still creates review load).
+	// Renovate closes over-limit PRs on its next scheduled run.
+	prConcurrentLimit: 1,
+	prHourlyLimit: 1,
 	rebaseWhen: "behind-base-branch",
 
 	// Cool-down: never auto-merge a release younger than this. Guards against

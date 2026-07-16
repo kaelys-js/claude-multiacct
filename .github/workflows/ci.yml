@@ -4,10 +4,41 @@ name: CI
 # `on:` is quoted to avoid yamllint's truthy warning — it's the YAML 1.1
 # boolean alias for `true`.
 "on":
+  # Docs-only changes skip real CI here and match ci-noop.yml (mirror path
+  # list) which posts required-check successes so branch protection lets
+  # docs-only PRs merge without a full CI run. Keep the two lists in sync.
   push:
     branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
+      - "LICENSE"
+      - ".editorconfig"
+      - ".gitattributes"
+      - ".github/CODEOWNERS"
+      - ".github/copilot-instructions.md"
+      - ".github/ISSUE_TEMPLATE/**"
+      - ".github/PULL_REQUEST_TEMPLATE.md"
+      - "SUPPORT.md"
+      - "CODE_OF_CONDUCT.md"
+      - "CONTRIBUTING.md"
+      - "SECURITY.md"
   pull_request:
     branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
+      - "LICENSE"
+      - ".editorconfig"
+      - ".gitattributes"
+      - ".github/CODEOWNERS"
+      - ".github/copilot-instructions.md"
+      - ".github/ISSUE_TEMPLATE/**"
+      - ".github/PULL_REQUEST_TEMPLATE.md"
+      - "SUPPORT.md"
+      - "CODE_OF_CONDUCT.md"
+      - "CONTRIBUTING.md"
+      - "SECURITY.md"
 
 # Per-PR concurrency: cancel obsolete PR runs, never cancel main-branch runs.
 concurrency:
