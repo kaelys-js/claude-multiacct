@@ -92,6 +92,10 @@ Steps, same-owner:
 
 Re-running `pnpm sync-upstream:opt-in` is a no-op when the workflow file already matches. If the fork owner hand-edits the generated workflow (for instance to widen the fork-wins path list) and the config later changes, the tool exits with a conflict message and preserves the local edit; pass `--force` to overwrite.
 
+## Recording parity with upstream
+
+During opt-in setup, copy `PARITY.md.template` to `PARITY.md` at the fork root and fill in your fork's provenance data. `PARITY.md` records every file that intentionally differs between the fork and upstream — the product-only paths, the fork-only workflows, the per-repo root-level files — so a reviewer walking a `diff -rq` between the trees can tell drift-by-design from drift-by-accident. The template carries `{{fork-owner}}`, `{{fork-repo}}`, `{{fork-product}}`, and `{{fork-product-description}}` markers; substitute those, then add or remove entries as your fork's actual drift diverges from the baseline the template describes.
+
 ## Cross-linking a runtime product to its records
 
 Every runtime product ships its own PRD (linked from the package README), its own ADR log at `packages/products/<name>/docs/adr/`, and its own SPEC. The governing PRD and the top-level ADRs live in the registry spine at `packages/products/registry/records/<domain>/`. Cross-link with two fields: the record's frontmatter carries `runtime_package: "@foundation/trp"`, and the product's `package.json` carries `foundationRegistry.governingPrd: "PRD-0042"`. The schema validator checks both sides resolve.
