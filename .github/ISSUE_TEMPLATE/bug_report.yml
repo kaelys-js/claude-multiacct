@@ -23,7 +23,9 @@ body:
     id: claude-desktop-version
     attributes:
       label: Claude Desktop version
-      description: "Output of `defaults read /Applications/Claude.app/Contents/Info CFBundleShortVersionString`"
+      description: >
+        Output of `defaults read
+        /Applications/Claude.app/Contents/Info CFBundleShortVersionString`
       placeholder: "1.2.3"
     validations:
       required: true
@@ -31,7 +33,9 @@ body:
     id: mirror-label
     attributes:
       label: Mirror instance label (if applicable)
-      description: "The label passed to `claude-multiacct add-instance <label>`; leave blank if the bug is on the primary."
+      description: >
+        The label passed to `claude-multiacct add-instance <label>`;
+        leave blank if the bug is on the primary.
     validations:
       required: false
   - type: textarea
