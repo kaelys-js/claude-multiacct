@@ -180,6 +180,11 @@ AUTHORS text eol=lf
 *.psd1 text eol=crlf
 
 # ============================================
+# iCalendar (RFC 5545 mandates CRLF)
+# ============================================
+*.ics text eol=crlf
+
+# ============================================
 # Docker & Containers
 # ============================================
 Dockerfile text eol=lf
