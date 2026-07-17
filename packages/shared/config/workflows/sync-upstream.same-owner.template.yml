@@ -78,7 +78,13 @@ permissions:
 
 jobs:
   sync:
-    runs-on: ubuntu-latest
+    # Route to the kaelys-mac-mini self-hosted runner when SELF_HOSTED_ENABLED
+    # is set on the repo; fall back to ubuntu-latest if the mini is down or
+    # the escape hatch is flipped off. Forks that don't set this variable
+    # keep the original ubuntu-latest behaviour. Private-repo forks under
+    # a spending-limited account should set the variable to avoid billing
+    # blocks on the daily schedule.
+    runs-on: ${{ vars.SELF_HOSTED_ENABLED == 'true' && fromJSON('["self-hosted","kaelys-mac-mini"]') || 'ubuntu-latest' }}
     steps:
       # GitHub enforces global-per-account uniqueness on deploy-key material.
       # Both `kaelys-js/ttt-studio-cole-30-60-90-plan` (this fork) and
