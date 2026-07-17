@@ -187,17 +187,34 @@ jobs:
             fi
           done
 
-          # Regenerate pnpm-lock.yaml against the merged package manifests.
-          # `pnpm-lock.yaml` is fork-wins (fork carries products the upstream
-          # doesn't, so upstream's lock would miss entries), but the merged
-          # tree can pick up upstream's package.json bumps. Without regen,
-          # fork CI's `pnpm install --frozen-lockfile` fails on the mismatch.
-          # `--lockfile-only` skips actual package downloads; the whole step
-          # is a no-op when nothing changed.
-          if command -v ./bin/mise >/dev/null; then
-            ./bin/mise install
-            ./bin/mise exec -- pnpm install --lockfile-only --no-frozen-lockfile
-            git add pnpm-lock.yaml
+          # Gate `./bin/mise install` behind an unresolved-paths check. If the
+          # rule-based checkouts above left ANY path unmerged, `./bin/mise
+          # install` crashes at src/lockfile.rs:460 with `key with no value,
+          # expected \`=\`` the moment mise parses a TOML file carrying
+          # `<<<<<<< HEAD` markers (mise.toml, mise.local.toml, mise.lock,
+          # and any TOML mise reads). Under the ambient `set -e`, that
+          # dropped the workflow before the push + PR-open steps ran, and
+          # left the operator with no PR to review. `git ls-files -u` is
+          # the definitive unmerged-paths signal: empty means every conflict
+          # was resolved by our rule loops, so `./bin/mise install` sees a
+          # clean tree. Non-empty means we skip mise entirely and fall
+          # through to the marker-commit path below; the human resolves on
+          # the opened PR.
+          if git ls-files -u | grep -q .; then
+            echo "::warning::Unresolved conflict paths outside both allowlists; skipping mise install and pnpm-lock regen, committing marker version for hand review."
+          else
+            # Regenerate pnpm-lock.yaml against the merged package manifests.
+            # `pnpm-lock.yaml` is fork-wins (fork carries products the upstream
+            # doesn't, so upstream's lock would miss entries), but the merged
+            # tree can pick up upstream's package.json bumps. Without regen,
+            # fork CI's `pnpm install --frozen-lockfile` fails on the mismatch.
+            # `--lockfile-only` skips actual package downloads; the whole step
+            # is a no-op when nothing changed.
+            if command -v ./bin/mise >/dev/null; then
+              ./bin/mise install
+              ./bin/mise exec -- pnpm install --lockfile-only --no-frozen-lockfile
+              git add pnpm-lock.yaml
+            fi
           fi
 
           # Commit whatever was resolved. If the rule-based checkouts left
