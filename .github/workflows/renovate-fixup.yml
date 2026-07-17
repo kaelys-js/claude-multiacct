@@ -105,4 +105,4 @@ jobs:
           and pushes the reformatted files back.
 
           Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
-          git push origin HEAD:${{ github.event.pull_request.head.ref }}
+          git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
