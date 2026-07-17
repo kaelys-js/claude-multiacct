@@ -58,8 +58,22 @@
 #      shows as Verified on the PR. The PR opens, squash auto-merge with
 #      branch delete is enabled.
 #   5. If a merged path outside the two allowlists conflicts, the commit
-#      lands with conflict markers, the PR stays open, GitHub CI reports
-#      the failure, and the reviewer resolves by hand.
+#      lands with conflict markers (prefixed `[CONFLICT] ` in git log). A
+#      post-push `git grep` scan on HEAD detects those markers and gates
+#      the auto-merge step: on a hit the PR opens with a
+#      `[NEEDS HUMAN REVIEW - DO NOT AUTO-MERGE]` title prefix, a
+#      `sync-upstream-conflict` label, and a comment listing the affected
+#      files; auto-merge is NOT enabled and the workflow exits nonzero.
+#      The reviewer resolves the PR by hand.
+#
+# The guard step (`Scan sync branch for conflict markers`) is what stops
+# PR #33 (kaelys-js/ttt-studio-cole-30-60-90-plan, 2026-07-17) from
+# happening again: the earlier design ran the marker check only inside
+# an `if !` branch that fires when `gh pr merge --auto` fails, but on a
+# fork without required checks `--auto` returns 0 (auto-merge enabled)
+# and the check never ran, so a dirty tree got squash-merged into main.
+# The current design runs the check unconditionally before any `gh pr
+# merge` call, and downstream merge steps are gated on its output.
 
 name: sync-upstream
 
@@ -224,7 +238,7 @@ jobs:
           git -c "user.name=Cole Beuker" -c "user.email=cole.beuker@ttt.studio" \
             commit --no-edit || {
               git -c "user.name=Cole Beuker" -c "user.email=cole.beuker@ttt.studio" \
-                commit -am "sync: upstream merge with unresolved conflicts (needs review)"
+                commit -am "[CONFLICT] sync: upstream merge with unresolved conflicts (needs review)"
             }
           # No `exit ${MERGE_STATUS}` — the docstring's contract is that a
           # conflict PR still opens ("the commit lands with conflict markers,
@@ -278,7 +292,40 @@ jobs:
             /repos/${{ github.repository }}/git/refs/heads/${{ steps.branch.outputs.branch }} \
             -f sha="$SIGNED" -F force=true
 
-      - name: Open PR and enable auto-merge
+      # Hard gate against auto-merge when the sync branch carries conflict
+      # markers. Runs post-commit, post-push, BEFORE any `gh pr merge`
+      # call. PR #33 on the ttt-studio fork (2026-07-17) squash-merged
+      # conflict markers into `main` because the previous guard was gated
+      # on `gh pr merge --auto` FAILING — `--auto` succeeded (no required
+      # checks on the fork), so the `if !` branch was never entered and
+      # the guard never ran. GitHub then auto-merged when CI (which does
+      # not itself fail on marker text alone) passed. This step decouples
+      # the marker check from any merge call, and the downstream merge
+      # step is gated on this step's `conflict_markers` output.
+      #
+      # Regex: line-start-anchored ERE for the three standard git
+      # conflict markers with exactly seven marker characters —
+      #   `<<<<<<< <label>`  (ours side)
+      #   `=======`          (separator, whole line)
+      #   `>>>>>>> <label>`  (theirs side)
+      # Line-start anchoring plus the exact repeat count rules out prose
+      # and code that mentions angle brackets or equals signs.
+      - name: Scan sync branch for conflict markers
+        if: steps.ff.outputs.result == 'conflict'
+        id: guard
+        run: |
+          if git grep -q -E '^(<{7} |={7}$|>{7} )' HEAD; then
+            FILES=$(git grep -l -E '^(<{7} |={7}$|>{7} )' HEAD | paste -sd ',' -)
+            {
+              echo "conflict_markers=true"
+              echo "marked_files=${FILES}"
+            } >>"$GITHUB_OUTPUT"
+            echo "::warning::Conflict markers found in: ${FILES}. Auto-merge disabled."
+          else
+            echo "conflict_markers=false" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Open PR
         if: steps.ff.outputs.result == 'conflict'
         env:
           # `github.token` (the ambient GITHUB_TOKEN) cannot create pull
@@ -295,30 +342,57 @@ jobs:
           # explicitly so gh stops guessing.
           GH_REPO: ${{ github.repository }}
         run: |
+          TITLE="sync: upstream $(date -u +%Y-%m-%d)"
+          if [ "${{ steps.guard.outputs.conflict_markers }}" = "true" ]; then
+            TITLE="[NEEDS HUMAN REVIEW - DO NOT AUTO-MERGE] ${TITLE}"
+          fi
           gh pr create \
             --base main \
             --head "${{ steps.branch.outputs.branch }}" \
-            --title "sync: upstream $(date -u +%Y-%m-%d)" \
+            --title "${TITLE}" \
             --body "Automated sync of upstream/${UPSTREAM_BRANCH} into this fork. Conflict rule: upstream wins under \`packages/shared\` and \`.schemas\`; product and product-workflow paths win locally. If CI passes, this PR auto-merges (squash) and the branch is deleted."
-          # `--auto` refuses when the PR is in `clean` status — GitHub only
-          # enables auto-merge on PRs with pending required checks. A fork
-          # without branch protection has none, so a clean sync PR hits
-          # "Pull request is in clean status (enablePullRequestAutoMerge)".
-          # Fall through to a direct squash-merge in that case, so the flow
-          # works on both branch-protected and unprotected forks. If the
-          # sync branch carries conflict markers (a rule-based checkout
-          # left unmerged paths outside both allowlists), the direct merge
-          # is refused so a human resolves the PR by hand — the whole
-          # point of the "fall through to a conflict PR" contract is that
-          # dirty content never lands on main.
+
+      # Clean-tree path: `--auto` refuses when the PR is in `clean` status
+      # — GitHub only enables auto-merge on PRs with pending required
+      # checks. A fork without branch protection has none, so a clean
+      # sync PR hits "Pull request is in clean status
+      # (enablePullRequestAutoMerge)". Fall through to a direct
+      # squash-merge in that case, so the flow works on both
+      # branch-protected and unprotected forks. This step is skipped
+      # entirely when the guard flagged conflict markers, so neither
+      # `--auto` nor the direct squash can land dirty content.
+      - name: Enable auto-merge on clean sync
+        if: steps.ff.outputs.result == 'conflict' && steps.guard.outputs.conflict_markers == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
           if ! gh pr merge \
               "${{ steps.branch.outputs.branch }}" \
               --auto --squash --delete-branch; then
-            if git grep -q -E '^(<<<<<<< |>>>>>>> )' HEAD; then
-              echo "::error::Sync branch has conflict markers; leaving PR ${{ steps.branch.outputs.branch }} open for hand review." >&2
-              exit 1
-            fi
             gh pr merge \
               "${{ steps.branch.outputs.branch }}" \
               --squash --delete-branch
           fi
+
+      # Marker path: leave the PR open for a human, tag it, comment the
+      # affected files, then fail the workflow so the incident is visible
+      # on the Actions tab. `gh label create --force` is idempotent
+      # (repeat runs on the same repo don't fail once the label exists).
+      - name: Flag PR for human review on conflict markers
+        if: steps.ff.outputs.result == 'conflict' && steps.guard.outputs.conflict_markers == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh label create sync-upstream-conflict \
+            --description "sync-upstream produced conflict markers; needs human review" \
+            --color d73a4a --force || true
+          gh pr edit \
+            "${{ steps.branch.outputs.branch }}" \
+            --add-label sync-upstream-conflict
+          gh pr comment \
+            "${{ steps.branch.outputs.branch }}" \
+            --body "Conflict markers detected in the merged tree: \`${{ steps.guard.outputs.marked_files }}\`. Auto-merge intentionally disabled — resolve conflicts manually before merging."
+          echo "::error::Sync branch has conflict markers; leaving PR ${{ steps.branch.outputs.branch }} open for hand review."
+          exit 1
