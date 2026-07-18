@@ -178,6 +178,46 @@ check_one() {
     if xattr -lr "$app" 2> /dev/null | grep -q '^[^:]*: com\.apple\.provenance'; then
       cma_dim "  com.apple.provenance xattr present (informational — modern macOS protects it; launch still works)"
     fi
+
+    # 4c. Asar patch state — lib/asar-patch-clone.sh appends the mirror's
+    # managed-prefs plist path to the bXt() list inside the bundled JS. Without
+    # this, Squirrel's auto-updater fires against Anthropic's Developer ID
+    # designated requirement, rejects the DR-mismatch on our ad-hoc signature,
+    # and the mirror menu-click shows "Failed to check for updates". Three
+    # signals must all be present for the patch to be effective:
+    #   - Per-mirror plist file on disk
+    #   - `disableAutoUpdates=true` inside it (the flatKey Claude Desktop's
+    #     managed-config schema reads for autoUpdate.disabled)
+    #   - `claude-multiacct-mirror-prefs.plist` byte-visible inside the asar
+    #     (the string search doesn't need extraction — asar files store the
+    #     raw JS bodies concatenated after a JSON header, and our append is
+    #     an ASCII-only string).
+    #
+    # Header hash integrity IS separately enforced at boot by Electron's
+    # ElectronAsarIntegrity check (electron/asar/asar_util.cc:143) — if the
+    # rewrite left the plist hash stale we'd see the mirror fatal-exit before
+    # its window opens. Boot-time enforcement is stronger than any doctor
+    # check, so we surface only the "was the patch applied?" signal here.
+    local mirror_plist="$app/Contents/Resources/claude-multiacct-mirror-prefs.plist"
+    local asar_file="$app/Contents/Resources/app.asar"
+    local patch_ok=1
+    if [[ ! -f "$mirror_plist" ]]; then
+      cma_warn "asar-patch: mirror-prefs plist MISSING at $mirror_plist — auto-updates NOT disabled"
+      issues+=("asar-patch-plist-missing")
+      patch_ok=0
+    elif ! /usr/libexec/PlistBuddy -c 'Print :disableAutoUpdates' "$mirror_plist" 2> /dev/null | grep -qx true; then
+      cma_warn "asar-patch: mirror-prefs plist present but disableAutoUpdates != true"
+      issues+=("asar-patch-plist-value")
+      patch_ok=0
+    fi
+    if [[ -f "$asar_file" ]] && ! grep -qF 'claude-multiacct-mirror-prefs.plist' "$asar_file" 2> /dev/null; then
+      cma_warn "asar-patch: bXt() marker NOT present inside app.asar — Squirrel auto-poll not suppressed"
+      issues+=("asar-patch-marker-missing")
+      patch_ok=0
+    fi
+    if [[ $patch_ok -eq 1 ]]; then
+      cma_ok "asar-patch: auto-updates disabled via per-mirror plist"
+    fi
     # Check LaunchServices registration.
     if "$LSREGISTER" -dump 2> /dev/null | grep -F "$app" > /dev/null; then
       cma_ok "registered with LaunchServices"

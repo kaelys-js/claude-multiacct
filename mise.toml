@@ -29,6 +29,13 @@ shfmt = "3.13.1"
 # ── Markdown lint for the README + docs.
 "npm:markdownlint-cli2" = "0.23.0"
 
+# ── Electron asar CLI + library, needed by lib/asar-patch-clone.sh to extract,
+# rewrite, and repack /Applications/Claude.app's app.asar for each mirror
+# clone. The patch prepends a per-mirror plist path to the managed-prefs list
+# so Squirrel's auto-updater short-circuits on our disableAutoUpdates=YES
+# instead of firing against a bundle Anthropic didn't sign (would fail DR).
+"npm:@electron/asar" = "4.2.0"
+
 # ── Node + commitlint (@commitlint/cli via npm-managed pnpm store isn't a
 # pattern we want in a bash repo, so use pipx-style npm install via mise).
 node = "26.5.0"

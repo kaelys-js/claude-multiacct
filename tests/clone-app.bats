@@ -282,3 +282,242 @@ SH
 	grep -q "refresh-clones begin" "$CMA_LOG_DIR/clone-refresh.log"
 	grep -q "refresh-clones end" "$CMA_LOG_DIR/clone-refresh.log"
 }
+
+# ── asar-patch-clone.sh tests ───────────────────────────────────────────────
+# These exercise the asar patch mechanism (docs/architecture.md "The asar
+# patch layer"). The patch is what makes each mirror's Claude Desktop
+# short-circuit its Squirrel auto-updater on `disableAutoUpdates=YES` from a
+# per-mirror plist we bake into the clone. Without this, every mirror would
+# fire an update check against Anthropic's Squirrel feed against our ad-hoc
+# signature, Squirrel would reject on DR-mismatch, and the "Check for
+# Updates" menu-click would surface "Failed to check for updates".
+#
+# Each assertion targets a specific piece of the fix per Rule 9:
+#
+#   - bXt() anchor gets the mirror-prefs path appended    → Claude reads
+#     our plist (in addition to the two MDM-owned locations).
+#   - The mirror-prefs plist has disableAutoUpdates=YES   → Oe().autoUpdate.disabled=true
+#     → i_t() short-circuits (no network poll) AND NRn() menu builder
+#       disables "Check for Updates…" with sublabel "Updates disabled by admin".
+#   - Info.plist ElectronAsarIntegrity hash matches the   → Electron's boot-
+#     computed asar header SHA-256                          time integrity
+#                                                           check passes.
+#   - Idempotency                                         → refresh-clones
+#     firing on every Squirrel update doesn't produce spurious drift.
+#
+# Fixture: setup_asar_fixture() below overlays a synthetic app.asar (with the
+# real anchor strings and a real ElectronAsarIntegrity Info.plist key) on
+# top of the fake Claude.app the base setup() built. That way build-clone-app
+# tests without asar remain untouched — asar tests get the full fixture.
+
+setup_asar_fixture() {
+	# Only rebuild if not already present (tests may share fixture state).
+	# shellcheck disable=SC2031 # CMA_SOURCE_CLAUDE_APP is set in setup()'s subshell + read here in this test's subshell — see the parallel disable near build-clone-app's use-in-test.
+	local resources="$CMA_SOURCE_CLAUDE_APP/Contents/Resources"
+	local staging="$BATS_TEST_TMPDIR/asar-staging"
+	mkdir -p "$resources"
+	mkdir -p "$staging/.vite/build"
+	# Locate the developer's mise-installed @electron/asar and export it as
+	# CMA_ASAR_MODULE_DIR so lib/asar-patch-clone.sh (running under bats'
+	# scratch $HOME) can find it. Falls back to `mise where` if the primary
+	# real-HOME glob turns up nothing (e.g. a machine that installs mise
+	# under a non-standard XDG root).
+	local real_home_glob="/Users/*/.local/share/mise/installs/npm-electron-asar/*/lib/node_modules/@electron/asar"
+	local d
+	# shellcheck disable=SC2086 # deliberate glob expansion — the pattern is a real filesystem probe, not a param
+	for d in $real_home_glob; do
+		[ -d "$d" ] && export CMA_ASAR_MODULE_DIR="$d" && break
+	done
+	if [ -z "${CMA_ASAR_MODULE_DIR:-}" ] && command -v mise >/dev/null 2>&1; then
+		local base
+		base="$(mise where npm:@electron/asar 2>/dev/null || true)"
+		[ -n "$base" ] && [ -d "$base/lib/node_modules/@electron/asar" ] &&
+			export CMA_ASAR_MODULE_DIR="$base/lib/node_modules/@electron/asar"
+	fi
+	if [ -z "${CMA_ASAR_MODULE_DIR:-}" ]; then
+		skip "@electron/asar module not found under any known prefix — run \`mise install\`"
+	fi
+	local mod_dir="$CMA_ASAR_MODULE_DIR"
+	# The two anchor files. Only the presence + literal anchor string matter
+	# for the patch script — we don't need Claude's real minified JS body.
+	# Wrap the anchor in surrounding text so the .replace() sees a unique
+	# occurrence (matches production shape where the anchor lives inside the
+	# bXt() function definition).
+	cat >"$staging/.vite/build/index.chunk-DD6nxfJK.js" <<'JS'
+// Fake index.chunk file — the anchor below is what lib/asar-patch-clone.sh rewrites.
+function bXt(){return[Kt.join("/Library/Managed Preferences","com.anthropic.claudefordesktop.plist"),Kt.join("/Library/Managed Preferences",Lle.userInfo().username,"com.anthropic.claudefordesktop.plist")]}
+JS
+	cat >"$staging/.vite/build/index.pre.js" <<'JS'
+// Fake index.pre.js — same anchor as the chunk, distinct file.
+function bXt(){return[Kt.join("/Library/Managed Preferences","com.anthropic.claudefordesktop.plist"),Kt.join("/Library/Managed Preferences",Lle.userInfo().username,"com.anthropic.claudefordesktop.plist")]}
+JS
+	local orig_asar="$resources/app.asar"
+	rm -f "$orig_asar"
+	# Rebuild the asar and stamp its header SHA-256 into a fresh Info.plist
+	# ElectronAsarIntegrity entry so the patch script sees a realistic
+	# pristine state (that it must then re-hash after rewriting the anchors).
+	node --input-type=module -e "
+import { createPackageWithOptions, getRawHeader } from 'file://$mod_dir/lib/asar.js';
+import { createHash } from 'crypto';
+import { writeFileSync } from 'fs';
+await createPackageWithOptions('$staging', '$orig_asar', { unpack: '{*.node,*.dylib,spawn-helper}' });
+const raw = getRawHeader('$orig_asar');
+const h = createHash('sha256').update(raw.headerString).digest('hex');
+writeFileSync('$BATS_TEST_TMPDIR/fixture-hash', h);
+"
+	# Rewrite Info.plist to include ElectronAsarIntegrity with the fixture hash.
+	local h
+	h="$(cat "$BATS_TEST_TMPDIR/fixture-hash")"
+	# shellcheck disable=SC2031 # CMA_SOURCE_CLAUDE_APP is set in setup()'s subshell + read here in this test's subshell
+	cat >"$CMA_SOURCE_CLAUDE_APP/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>        <string>com.fake.claude</string>
+	<key>CFBundleExecutable</key>        <string>Claude</string>
+	<key>CFBundleName</key>              <string>Claude</string>
+	<key>CFBundleDisplayName</key>       <string>Claude</string>
+	<key>CFBundleShortVersionString</key><string>0.0.1-fake</string>
+	<key>CFBundleVersion</key>           <string>1</string>
+	<key>CFBundlePackageType</key>       <string>APPL</string>
+	<key>ElectronAsarIntegrity</key>
+	<dict>
+		<key>Resources/app.asar</key>
+		<dict>
+			<key>algorithm</key><string>SHA256</string>
+			<key>hash</key><string>${h}</string>
+		</dict>
+	</dict>
+</dict>
+</plist>
+PLIST
+}
+
+@test "asar-patch: appends mirror-prefs path to bXt() anchor in both files (auto-poll suppression)" {
+	setup_asar_fixture
+	"$CMA" init
+	"$CMA" add-instance "$LABEL" --email test-b@example.com
+	# The patch script runs inline with build-clone-app.sh (via add-instance).
+	# Extract the CLONE's asar and check the anchor files carry the mirror-prefs marker.
+	local extract="$BATS_TEST_TMPDIR/clone-extract"
+	rm -rf "$extract"
+	node --input-type=module -e "
+import { extractAll } from 'file://$CMA_ASAR_MODULE_DIR/lib/asar.js';
+extractAll('$TARGET_APP/Contents/Resources/app.asar', '$extract');
+"
+	# Both anchor files must contain the injected mirror-prefs path.
+	grep -q 'claude-multiacct-mirror-prefs.plist' "$extract/.vite/build/index.chunk-DD6nxfJK.js"
+	grep -q 'claude-multiacct-mirror-prefs.plist' "$extract/.vite/build/index.pre.js"
+	# And the ORIGINAL anchor should still be present (append, not replace).
+	grep -q 'com\.anthropic\.claudefordesktop\.plist' "$extract/.vite/build/index.chunk-DD6nxfJK.js"
+}
+
+@test "asar-patch: writes per-mirror plist with disableAutoUpdates=YES" {
+	setup_asar_fixture
+	"$CMA" init
+	"$CMA" add-instance "$LABEL" --email test-b@example.com
+	local mirror_plist="$TARGET_APP/Contents/Resources/claude-multiacct-mirror-prefs.plist"
+	# The per-mirror plist read by bXt()'s process.resourcesPath+"/..." append.
+	# Its ONLY key must be disableAutoUpdates=true — that's the flatKey the
+	# managed-config schema (index.chunk-DD6nxfJK.js: dZt.disabled) resolves.
+	[ -f "$mirror_plist" ]
+	local v
+	v="$(/usr/libexec/PlistBuddy -c 'Print :disableAutoUpdates' "$mirror_plist")"
+	[ "$v" = "true" ]
+}
+
+@test "asar-patch: Info.plist ElectronAsarIntegrity hash matches computed asar header hash" {
+	setup_asar_fixture
+	"$CMA" init
+	"$CMA" add-instance "$LABEL" --email test-b@example.com
+	# Compute what Electron will compute at boot: SHA-256 of getRawHeader().headerString.
+	local computed
+	computed="$(node --input-type=module -e "
+import { getRawHeader } from 'file://$CMA_ASAR_MODULE_DIR/lib/asar.js';
+import { createHash } from 'crypto';
+const raw = getRawHeader('$TARGET_APP/Contents/Resources/app.asar');
+process.stdout.write(createHash('sha256').update(raw.headerString).digest('hex'));
+")"
+	# What we wrote into Info.plist.
+	local stored
+	stored="$(/usr/libexec/PlistBuddy -c 'Print :ElectronAsarIntegrity:Resources/app.asar:hash' "$TARGET_APP/Contents/Info.plist")"
+	# Mismatch here → Electron boot: FATAL:asar_util.cc:143 Integrity check failed.
+	# The hash must not have DRIFTED from the original pristine (that would mean we forgot to rewrite it).
+	[ "$computed" = "$stored" ]
+	local pristine
+	pristine="$(cat "$BATS_TEST_TMPDIR/fixture-hash")"
+	[ "$stored" != "$pristine" ]
+}
+
+@test "asar-patch: idempotent — second refresh-clones produces the same asar hash + plist state" {
+	setup_asar_fixture
+	"$CMA" init
+	"$CMA" add-instance "$LABEL" --email test-b@example.com
+	local hash1 plist1_hash mirror_plist1_hash
+	hash1="$(shasum -a 256 "$TARGET_APP/Contents/Resources/app.asar" | awk '{print $1}')"
+	plist1_hash="$(shasum -a 256 "$TARGET_APP/Contents/Info.plist" | awk '{print $1}')"
+	mirror_plist1_hash="$(shasum -a 256 "$TARGET_APP/Contents/Resources/claude-multiacct-mirror-prefs.plist" | awk '{print $1}')"
+
+	# Re-run the patch (as WatchPaths would fire after a Squirrel-triggered refresh).
+	run "$CMA" refresh-clones
+	[ "$status" -eq 0 ]
+
+	local hash2 plist2_hash mirror_plist2_hash
+	hash2="$(shasum -a 256 "$TARGET_APP/Contents/Resources/app.asar" | awk '{print $1}')"
+	plist2_hash="$(shasum -a 256 "$TARGET_APP/Contents/Info.plist" | awk '{print $1}')"
+	mirror_plist2_hash="$(shasum -a 256 "$TARGET_APP/Contents/Resources/claude-multiacct-mirror-prefs.plist" | awk '{print $1}')"
+
+	# Every file must be bit-identical after the re-run — spurious drift here
+	# would show up as bundle-id drift or codesign churn on every Squirrel update.
+	[ "$hash1" = "$hash2" ]
+	[ "$plist1_hash" = "$plist2_hash" ]
+	[ "$mirror_plist1_hash" = "$mirror_plist2_hash" ]
+}
+
+@test "asar-patch: codesign --verify --deep passes on the patched clone" {
+	setup_asar_fixture
+	"$CMA" init
+	"$CMA" add-instance "$LABEL" --email test-b@example.com
+	# Ad-hoc signature after the asar+plist rewrite must be internally consistent.
+	# Any mismatch here means codesign ran BEFORE the asar patch (wrong order in
+	# build-clone-app.sh) or PlistBuddy left the plist malformed.
+	run codesign --verify --deep "$TARGET_APP"
+	[ "$status" -eq 0 ]
+}
+
+@test "asar-patch: fails loud when the bXt() anchor appears zero times (Claude Desktop internals moved)" {
+	setup_asar_fixture
+	# Corrupt the source asar so the anchor is missing. Rebuild it from a staging
+	# tree that has NO anchor — the patch script must refuse rather than silently
+	# ship an un-patched mirror.
+	local staging="$BATS_TEST_TMPDIR/no-anchor-staging"
+	mkdir -p "$staging/.vite/build"
+	echo "// no bXt() here" >"$staging/.vite/build/index.chunk-DD6nxfJK.js"
+	echo "// no bXt() here" >"$staging/.vite/build/index.pre.js"
+	# shellcheck disable=SC2031 # CMA_SOURCE_CLAUDE_APP is set in setup()'s subshell + read here in this test's subshell
+	rm -f "$CMA_SOURCE_CLAUDE_APP/Contents/Resources/app.asar"
+	# shellcheck disable=SC2031 # same subshell inheritance as above
+	node --input-type=module -e "
+import { createPackageWithOptions, getRawHeader } from 'file://$CMA_ASAR_MODULE_DIR/lib/asar.js';
+import { createHash } from 'crypto';
+await createPackageWithOptions('$staging', '$CMA_SOURCE_CLAUDE_APP/Contents/Resources/app.asar', { unpack: '{*.node,*.dylib,spawn-helper}' });
+"
+	# Rewrite Info.plist ElectronAsarIntegrity for the new hash so the fixture is otherwise valid.
+	local new_hash
+	# shellcheck disable=SC2031 # same subshell inheritance as above
+	new_hash="$(node --input-type=module -e "
+import { getRawHeader } from 'file://$CMA_ASAR_MODULE_DIR/lib/asar.js';
+import { createHash } from 'crypto';
+const raw = getRawHeader('$CMA_SOURCE_CLAUDE_APP/Contents/Resources/app.asar');
+process.stdout.write(createHash('sha256').update(raw.headerString).digest('hex'));
+")"
+	# shellcheck disable=SC2031 # same subshell inheritance as above
+	/usr/libexec/PlistBuddy -c "Set :ElectronAsarIntegrity:Resources/app.asar:hash $new_hash" "$CMA_SOURCE_CLAUDE_APP/Contents/Info.plist"
+
+	"$CMA" init
+	run "$CMA" add-instance "$LABEL" --email test-b@example.com
+	# add-instance must have failed loud because the patch script errored out.
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"expected 1 occurrence of anchor"* ]]
+}

@@ -120,6 +120,19 @@ WRAPPER
   # rc since it's now expected to be a no-op.
   xattr -rd com.apple.provenance "$app" 2> /dev/null || true
 
+  # Patch app.asar so Squirrel's auto-updater sees disableAutoUpdates=YES
+  # via a per-mirror plist we bake into Contents/Resources. Without this,
+  # every mirror launch fires an update check against Anthropic's Squirrel
+  # feed with the mirror's ad-hoc signature — Squirrel rejects the DR-mismatch
+  # and Claude Desktop surfaces "Failed to check for updates" on the menu
+  # click AND spams "[updater] Update check failed" in the diagnostic log
+  # every 15 min while the app is open. See lib/asar-patch-clone.sh header
+  # comment for the JS anchors we replace + how ElectronAsarIntegrity is
+  # kept in sync. The patch step MUST run BEFORE codesign — the asar/plist
+  # mutations invalidate any existing signature; codesign below re-signs the
+  # whole clone in one pass.
+  "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/asar-patch-clone.sh" "$label" "$app"
+
   # Ad-hoc re-sign the entire clone. Required because we mutated Info.plist
   # (breaks the original signature's plist hash) and injected a wrapper
   # (breaks the executable's code hash). `--force` overwrites the existing
