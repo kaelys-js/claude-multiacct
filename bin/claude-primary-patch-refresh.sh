@@ -75,7 +75,8 @@ fi
 # Primary-running guard. Deferred to the patch script itself but we mirror
 # the check here so the log clearly records WHY we no-op'd rather than
 # leaving a bare "cma_die: primary running" trace.
-if pgrep -f '/Applications/Claude\.app/Contents/MacOS/Claude' > /dev/null 2>&1; then
+# shellcheck disable=SC2310  # deliberate: predicate consumed as if-condition (set -e off inside is intentional)
+if cma_primary_claude_running; then
   log "primary Claude Desktop is running; skipping re-patch (quit primary + retry manually via \`claude-multiacct primary-patch\`)"
   log "=== launchd-triggered primary-patch-refresh end (rc=0, skipped) ==="
   exit 0

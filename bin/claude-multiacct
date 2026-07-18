@@ -121,7 +121,8 @@ cmd_install() {
 		cma_warn "install: primary Claude.app missing at $CMA_SOURCE_CLAUDE_APP — skipping primary-patch (install Claude Desktop, then run \`claude-multiacct primary-patch\`)"
 		return 0
 	fi
-	if pgrep -f '/Applications/Claude\.app/Contents/MacOS/Claude' >/dev/null 2>&1; then
+	# shellcheck disable=SC2310  # deliberate: predicate consumed as if-condition (set -e off inside is intentional)
+	if cma_primary_claude_running; then
 		cma_warn "install: primary Claude Desktop is running; quit it and run \`claude-multiacct primary-patch\` to activate the rc-enforcer on the primary"
 		return 0
 	fi
@@ -152,7 +153,8 @@ cmd_uninstall() {
 	# symlink stays so the operator can retry after fixing the blocker.
 	if [[ -d "$CMA_SOURCE_CLAUDE_APP" ]] &&
 		[[ -f "$CMA_SOURCE_CLAUDE_APP/Contents/Resources/app.asar.multiacct-backup" ]]; then
-		if pgrep -f '/Applications/Claude\.app/Contents/MacOS/Claude' >/dev/null 2>&1; then
+		# shellcheck disable=SC2310  # deliberate: predicate consumed as if-condition (set -e off inside is intentional)
+		if cma_primary_claude_running; then
 			cma_die "uninstall: primary Claude Desktop is running; quit it and retry"
 		fi
 		cmd_primary_unpatch
@@ -310,10 +312,18 @@ cmd_repair() {
 	# are cma_dim'd rather than fatal so repair still succeeds).
 	if [[ ! -d "$CMA_SOURCE_CLAUDE_APP" ]]; then
 		cma_dim "  = repair: primary Claude.app missing at $CMA_SOURCE_CLAUDE_APP — skipping primary-patch"
-	elif pgrep -f '/Applications/Claude\.app/Contents/MacOS/Claude' >/dev/null 2>&1; then
-		cma_dim "  = repair: primary Claude Desktop is running — skipping primary-patch (quit and re-run to include)"
 	else
-		cmd_primary_patch
+		# SC1123 forbids a directive on an elif — nest an if here so the
+		# directive lands on a compound-command. shellcheck disable=SC2310
+		# applies to the predicate-in-if usage below (set -e turns off inside
+		# the function, which is what we want — a failed enumeration should
+		# fall through to "not running", not abort the repair pipeline).
+		# shellcheck disable=SC2310
+		if cma_primary_claude_running; then
+			cma_dim "  = repair: primary Claude Desktop is running — skipping primary-patch (quit and re-run to include)"
+		else
+			cmd_primary_patch
+		fi
 	fi
 
 	# Always re-render the launchd plist.
@@ -414,11 +424,14 @@ cmd_primary_patch() {
 	local src="$CMA_SOURCE_CLAUDE_APP"
 	[[ -d "$src" ]] || cma_die "primary-patch: primary Claude.app missing at $src (override with CMA_SOURCE_CLAUDE_APP)"
 
-	# Guard: primary running → refuse. `pgrep -f` regex matches the primary's
-	# MacOS/Claude executable path. This matches the primary but explicitly
-	# does NOT match a Claude Account mirror (which spawns from
-	# ~/Applications/Claude Account …/Contents/MacOS/Claude — a distinct path).
-	if pgrep -f '/Applications/Claude\.app/Contents/MacOS/Claude' >/dev/null 2>&1; then
+	# Guard: primary running → refuse. `cma_primary_claude_running`
+	# (lib/common.sh) matches the primary's MacOS/Claude executable path via
+	# `ps -A -o command | grep`, which — unlike `pgrep -f` — reliably matches
+	# the LaunchServices-spawned main process. The pattern EXCLUDES the
+	# mirrors (`~/Applications/Claude Account …/Contents/MacOS/Claude`) so
+	# refuseal fires only on the primary being up.
+	# shellcheck disable=SC2310  # deliberate: predicate consumed as if-condition (set -e off inside is intentional)
+	if cma_primary_claude_running; then
 		cma_die "primary-patch: primary Claude Desktop is running; quit it and retry (Cmd+Q, or \`pkill -TERM -f '/Applications/Claude.app/Contents/MacOS/Claude'\`)"
 	fi
 
@@ -444,7 +457,8 @@ cmd_primary_unpatch() {
 	[[ -d "$src" ]] || cma_die "primary-unpatch: primary Claude.app missing at $src"
 
 	# Same running-guard as primary-patch — codesign vs. live mmap race.
-	if pgrep -f '/Applications/Claude\.app/Contents/MacOS/Claude' >/dev/null 2>&1; then
+	# shellcheck disable=SC2310  # deliberate: predicate consumed as if-condition (set -e off inside is intentional)
+	if cma_primary_claude_running; then
 		cma_die "primary-unpatch: primary Claude Desktop is running; quit it and retry"
 	fi
 

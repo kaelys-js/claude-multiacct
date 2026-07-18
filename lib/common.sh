@@ -325,3 +325,52 @@ with open(tmp, "w") as f:
 os.replace(tmp, path)
 PY
 }
+
+# cma_primary_claude_running — returns 0 (running) / 1 (not running).
+#
+# macOS pgrep -f has an observed bug (2026-07-18) where certain
+# LaunchServices-spawned processes get argv-truncated to zero-length in the
+# proc argv table, so `pgrep -f '/Applications/Claude\.app/Contents/MacOS/Claude'`
+# silently fails to match the LIVE primary Claude Desktop main process even
+# though `ps aux` lists it. The bug is reproducible: 84651 was the primary
+# main process, ps showed its command as
+# `/Applications/Claude.app/Contents/MacOS/Claude`, and no pgrep -f pattern
+# matched it. Falling back to `ps -A | grep` uses the /proc-equivalent
+# rendering path that ps uses (KERN_PROCARGS2 via getproc*) and matches
+# reliably. This helper is the SOLE running-primary predicate used by the
+# CLI + primary-patch-refresh script.
+#
+# The pattern intentionally matches the primary's `/Applications/Claude.app/`
+# main executable AND its Helper processes — either is enough to prove the
+# primary is up. It does NOT match Claude Account mirror processes (they
+# live under `/Users/*/Applications/Claude Account *.app/`, which the leading
+# `/Applications/Claude.app/` filter excludes).
+cma_primary_claude_running() {
+  # -A lists ALL processes system-wide; -o command emits command lines only.
+  # `LC_ALL=C` keeps grep binary-safe under weird locales. `command grep`
+  # sidesteps any user shell aliases that might treat binary/text differently.
+  # -F disables regex so literal `.` chars don't need escaping.
+  #
+  # `grep -q` closes stdout on first match and would SIGPIPE the upstream
+  # `ps` under `set -e + pipefail`. We do a positive-count check with `-c`
+  # instead — no early close, no SIGPIPE — and translate zero/non-zero to
+  # rc explicitly.
+  #
+  # The pattern is anchored on `<CMA_SOURCE_CLAUDE_APP>/Contents/MacOS/Claude`
+  # so hermetic bats tests that override CMA_SOURCE_CLAUDE_APP to a scratch
+  # fake-Claude.app fixture skip past the REAL /Applications/Claude.app that
+  # may be running on the host machine — the guard is scoped to "the bundle
+  # THIS CLI is configured to patch".
+  #
+  # The grep pipeline that RUNS this predicate itself shows up in the ps
+  # output with the exact same pattern as its argv (grep -F <pattern>) and
+  # would self-match. Filter out grep processes via a second grep -v so the
+  # predicate counts only Claude Desktop processes, not the diagnostic itself.
+  local root="${CMA_SOURCE_CLAUDE_APP:-/Applications/Claude.app}"
+  local hits
+  hits="$(ps -A -o command 2> /dev/null \
+    | LC_ALL=C command grep -F "$root/Contents/MacOS/Claude" \
+    | LC_ALL=C command grep -Fvc 'grep -F' \
+    || true)"
+  [[ "${hits:-0}" -gt 0 ]]
+}

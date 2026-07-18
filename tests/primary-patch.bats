@@ -288,16 +288,20 @@ process.stdout.write(createHash('sha256').update(raw.headerString).digest('hex')
 }
 
 @test "primary-patch: refuses to run while primary Claude Desktop is running" {
-	# Stub pgrep so it reports a running primary (any query → exit 0). The
-	# CLI's primary-patch guard uses `pgrep -f '/Applications/Claude\.app/…'`.
+	# `cma_primary_claude_running` uses `ps -A -o command` + grep. Stub `ps` so
+	# it emits a line matching `<CMA_SOURCE_CLAUDE_APP>/Contents/MacOS/Claude`
+	# — the guard then reports "running" and primary-patch refuses.
 	local stub_dir
-	stub_dir="$BATS_TEST_TMPDIR/pgrep-stub-running"
+	stub_dir="$BATS_TEST_TMPDIR/ps-stub-running"
 	mkdir -p "$stub_dir"
-	cat >"$stub_dir/pgrep" <<'SH'
+	cat >"$stub_dir/ps" <<SH
 #!/usr/bin/env bash
-exit 0
+# Emit a header + one line matching the pattern cma_primary_claude_running
+# looks for. Any additional arg forms passed to ps get ignored here — the
+# predicate only calls \`ps -A -o command\`.
+printf 'COMMAND\n%s\n' "$CMA_SOURCE_CLAUDE_APP/Contents/MacOS/Claude"
 SH
-	chmod +x "$stub_dir/pgrep"
+	chmod +x "$stub_dir/ps"
 	PATH="$stub_dir:$PATH" run "$CMA" primary-patch
 	[ "$status" -ne 0 ]
 	[[ "$output" == *"primary Claude Desktop is running"* ]]
