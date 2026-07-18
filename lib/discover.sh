@@ -262,8 +262,23 @@ except Exception:
       issues+=("asar-patch-marker-missing")
       patch_ok=0
     fi
+    # Chunk X-B — session-propagation IIFE marker. Injected into
+    # index.chunk-BpZff9Dw.js (the LocalSessionManager singleton chunk) by
+    # asar-patch-clone.sh's _asar_inject_session_propagation. The marker
+    # string is a comment header so it's byte-visible inside the asar (asar
+    # stores raw JS bodies concatenated after a JSON header — same reason
+    # the mirror-prefs marker check above uses `grep -F` on the archive).
+    # Absence = the mirror's LocalSessionManager isn't watching its sessions
+    # dir, so cross-process mutations from primary/peer mirrors won't be
+    # reflected in this mirror's sidebar until quit+relaunch. See
+    # docs/architecture.md § "Real-time session-state propagation".
+    if [[ -f "$asar_file" ]] && ! grep -qF 'claude-multiacct-session-propagation' "$asar_file" 2> /dev/null; then
+      cma_warn "asar-patch: session-propagation marker NOT present inside app.asar — cross-process session mutations won't reflect until quit+relaunch"
+      issues+=("asar-patch-propagation-missing")
+      patch_ok=0
+    fi
     if [[ $patch_ok -eq 1 ]]; then
-      cma_ok "asar-patch: auto-updates disabled + Remote Control auto-enable via per-mirror plist"
+      cma_ok "asar-patch: auto-updates disabled + Remote Control auto-enable + session-propagation via per-mirror plist"
     fi
     # Check LaunchServices registration.
     if "$LSREGISTER" -dump 2> /dev/null | grep -F "$app" > /dev/null; then

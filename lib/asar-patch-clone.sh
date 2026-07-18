@@ -58,6 +58,35 @@ CMA_ASAR_ANCHOR_FILES=(
 # by the bXt() append via `process.resourcesPath+"/..."`.
 CMA_MIRROR_PLIST_BASENAME="claude-multiacct-mirror-prefs.plist"
 
+# ── Session-propagation anchor (Chunk X-B) ────────────────────────────────
+#
+# In addition to the two bXt() anchors above we ALSO inject a self-contained
+# IIFE into `.vite/build/index.chunk-BpZff9Dw.js` — the chunk that instantiates
+# the LocalSessionManager singleton (`hs = new vt(o.CCD_SESSIONS_BASE_DIR)`)
+# and re-exports it as `exports.claudeCodeSessionManager`. The injection sets
+# up an fs.watch on the mirror's claude-code-sessions storage dir; on any
+# cross-process file mutation (primary or peer mirrors writing through the
+# Layer-2 symlink) it rescans the changed files, updates the in-memory Map,
+# and calls `hs.emitSessionUpdated(sessionId)` — the SAME emit path the manager
+# uses for its own mutations, so every renderer subscription (sidebar included)
+# updates without a process restart. See docs/architecture.md § "Real-time
+# session-state propagation" for the full trace.
+#
+# Anchor markers:
+#   - CMA_ASAR_PROPAGATE_FILE: which chunk to inject into (content-anchored
+#     via _asar_locate_propagate_file at extract-time so a chunk-name churn
+#     in a future Claude Desktop release fails loud rather than injecting
+#     into the wrong file).
+#   - CMA_ASAR_PROPAGATE_MARKER: the exact string that MUST be present in the
+#     chunk pre-injection AND becomes the "already patched" idempotency check
+#     post-injection.
+#   - CMA_ASAR_PROPAGATE_ANCHOR_BEFORE: the sourceMappingURL comment we insert
+#     the IIFE ABOVE (keeps the sourcemap link at the very end of file).
+CMA_ASAR_PROPAGATE_FILE=".vite/build/index.chunk-BpZff9Dw.js"
+CMA_ASAR_PROPAGATE_SINGLETON_MARKER='exports.claudeCodeSessionManager=hs;'
+CMA_ASAR_PROPAGATE_ANCHOR_BEFORE='//# sourceMappingURL=index.chunk-BpZff9Dw.js.map'
+CMA_ASAR_PROPAGATE_INJECTED_MARKER='/* claude-multiacct-session-propagation v1 */'
+
 # @electron/asar module path. Layered lookup so hermetic bats tests (which
 # run under a scratch $HOME with no mise install) can still find the module
 # from the developer's real HOME:
@@ -225,6 +254,92 @@ _asar_update_integrity() {
     || cma_die "asar-patch: PlistBuddy Set failed on $plist"
 }
 
+# Inject the session-propagation IIFE into the singleton chunk. Idempotent:
+# a rerun over an already-patched extraction detects the injected marker and
+# no-ops. The payload comes from the sibling file
+# lib/asar-session-propagation.inject.js so the JS is editable/lintable on its
+# own instead of buried in a bash heredoc. See the header of that file for
+# runtime-context + failure-mode docs.
+#
+# Anchor invariants (all fail loud on drift):
+#   1. The propagate file must exist inside the extraction.
+#   2. The singleton marker (`exports.claudeCodeSessionManager=hs;`) must
+#      occur exactly ONCE — same fail-loud shape as the bXt() anchor. Zero
+#      hits means Claude Desktop restructured the session manager module;
+#      the injection would fire against the wrong file. Multiple hits means
+#      the module got split and we'd need to pick a specific site — refuse
+#      until re-anchored.
+#   3. The sourcemap comment must exist exactly ONCE (as the last line of the
+#      file, per esbuild's output). We insert the IIFE immediately BEFORE it
+#      so the sourcemap link stays terminal.
+#   4. The injected marker `/* claude-multiacct-session-propagation v1 */`
+#      MUST NOT already be present on a pristine extraction (i.e. the anchor
+#      count check runs only when we're not already patched).
+_asar_inject_session_propagation() {
+  local extract_dir="$1"
+  local target="$extract_dir/$CMA_ASAR_PROPAGATE_FILE"
+
+  if [[ ! -f "$target" ]]; then
+    cma_die "asar-patch: propagation anchor file missing at $target (Claude Desktop restructured the session-manager chunk?)"
+  fi
+
+  # Already patched? First-token match on the injected version marker.
+  if grep -qF "$CMA_ASAR_PROPAGATE_INJECTED_MARKER" "$target"; then
+    cma_dim "  = $CMA_ASAR_PROPAGATE_FILE session-propagation already injected"
+    return 0
+  fi
+
+  # Singleton marker must exist exactly once (structural sanity check).
+  local singleton_count anchor_count
+  singleton_count="$(grep -cF "$CMA_ASAR_PROPAGATE_SINGLETON_MARKER" "$target" || true)"
+  if [[ "$singleton_count" != "1" ]]; then
+    cma_die "asar-patch: expected 1 occurrence of session-manager singleton marker in $CMA_ASAR_PROPAGATE_FILE, found $singleton_count (Claude Desktop internals changed — re-anchor)"
+  fi
+  anchor_count="$(grep -cF "$CMA_ASAR_PROPAGATE_ANCHOR_BEFORE" "$target" || true)"
+  if [[ "$anchor_count" != "1" ]]; then
+    cma_die "asar-patch: expected 1 occurrence of sourceMappingURL anchor in $CMA_ASAR_PROPAGATE_FILE, found $anchor_count"
+  fi
+
+  # Resolve the payload file (sibling of this script). Fail loud if missing.
+  local payload
+  payload="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/asar-session-propagation.inject.js"
+  [[ -f "$payload" ]] || cma_die "asar-patch: session-propagation payload missing at $payload"
+
+  # Rewrite via node so the payload (~5 KB) is passed via env/file, not shell
+  # argv. See _asar_apply_patches for the same rationale (bash string-subst
+  # on multi-MB inputs is pathologically slow; sed's BSD/GNU quirks make the
+  # cross-platform escapes brittle; node's String.replace with a literal
+  # first arg does one deterministic replacement in tens of ms).
+  CMA_PROP_TARGET="$target" \
+    CMA_PROP_PAYLOAD_FILE="$payload" \
+    CMA_PROP_ANCHOR="$CMA_ASAR_PROPAGATE_ANCHOR_BEFORE" \
+    node -e '
+const fs = require("fs");
+const t = process.env.CMA_PROP_TARGET;
+const p = process.env.CMA_PROP_PAYLOAD_FILE;
+const anchor = process.env.CMA_PROP_ANCHOR;
+const chunk = fs.readFileSync(t, "utf8");
+const payload = fs.readFileSync(p, "utf8");
+// Insert payload ABOVE the sourceMappingURL comment so the sourcemap link
+// stays at the very end of the file (some Electron dev-tooling parses only
+// the LAST such line, so keeping it terminal is the safe convention).
+const idx = chunk.indexOf(anchor);
+if (idx === -1) {
+	console.error("asar-patch: sourceMappingURL anchor not found in target (pre-node grep should have caught this)");
+	process.exit(2);
+}
+// Ensure a trailing newline before the anchor so the injected IIFE and the
+// sourcemap comment are on their own lines.
+const before = chunk.slice(0, idx);
+const after = chunk.slice(idx);
+const sep = before.endsWith("\n") ? "" : "\n";
+const merged = before + sep + payload + (payload.endsWith("\n") ? "" : "\n") + after;
+fs.writeFileSync(t, merged);
+' || cma_die "asar-patch: node rewrite failed on $target"
+
+  cma_dim "  + injected session-propagation into $CMA_ASAR_PROPAGATE_FILE"
+}
+
 # Write the per-mirror managed-prefs plist. Uses `plutil` from Apple's
 # CommandLineTools so we get a validated binary/XML plist rather than a
 # hand-rolled string — Electron's native readPlistValue would reject a
@@ -303,6 +418,9 @@ main() {
   cma_dim "  apply patches"
   _asar_apply_patches "$extract_dir"
 
+  cma_dim "  inject session-propagation"
+  _asar_inject_session_propagation "$extract_dir"
+
   cma_dim "  repack → $patched_asar"
   _asar_repack "$extract_dir" "$patched_asar" "$mod_dir"
 
@@ -337,4 +455,9 @@ main() {
   cma_ok "asar patched: label=$label (auto-updates disabled via per-mirror plist)"
 }
 
-main "$@"
+# Only run main() when executed directly. Sourcing the file (e.g. from bats
+# tests that need to reach into `_asar_inject_session_propagation` in isolation
+# without extracting a full asar first) leaves main() available but not fired.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi

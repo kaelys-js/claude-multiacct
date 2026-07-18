@@ -521,12 +521,19 @@ cmd_qa() {
 		# preamble shellcheck tolerates fine.
 		cma_require shellcheck
 		cma_say "shellcheck bin/ lib/ tests/"
-		shellcheck -x -P "$CMA_BIN" -P "$CMA_LIB" "$CMA_BIN"/* "$CMA_LIB"/* "$CMA_REPO_ROOT/tests"/*.bats 2>&1 || return $?
+		# $CMA_LIB/*.sh (not $CMA_LIB/*) — non-shell payloads under lib/ (e.g.
+		# the session-propagation JS injected into app.asar at build-clone-app
+		# time) are read by node, not sourced, and would trip SC1127 on their
+		# JS-comment lines. Shellcheck is scoped to the .sh files it actually
+		# understands; the JS is separately parse-checked by the bats runtime
+		# harness test in tests/clone-app.bats.
+		shellcheck -x -P "$CMA_BIN" -P "$CMA_LIB" "$CMA_BIN"/* "$CMA_LIB"/*.sh "$CMA_REPO_ROOT/tests"/*.bats 2>&1 || return $?
 		cma_ok "shellcheck clean"
 
 		# shfmt in check-only mode. Reads .editorconfig for its indent settings
 		# (matches the shell block: indent_size=2, binary_next_line=true,
-		# switch_case_indent=true, space_redirects=true).
+		# switch_case_indent=true, space_redirects=true). Same *.sh-only glob
+		# rationale as shellcheck above.
 		cma_require shfmt
 		cma_say "shfmt bin/ lib/ tests/"
 		shfmt -d "$CMA_BIN"/* "$CMA_LIB"/*.sh "$CMA_REPO_ROOT/tests"/*.bats 2>&1 || return $?

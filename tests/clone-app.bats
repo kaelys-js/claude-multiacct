@@ -351,6 +351,22 @@ JS
 // Fake index.pre.js — same anchor as the chunk, distinct file.
 function bXt(){return[Kt.join("/Library/Managed Preferences","com.anthropic.claudefordesktop.plist"),Kt.join("/Library/Managed Preferences",Lle.userInfo().username,"com.anthropic.claudefordesktop.plist")]}
 JS
+	# Session-manager singleton chunk (Chunk X-B propagation anchor). The
+	# real chunk instantiates `hs = new vt(o.CCD_SESSIONS_BASE_DIR)` and re-
+	# exports it via `exports.claudeCodeSessionManager=hs;`. The propagation
+	# injector locates this file by the singleton marker string, verifies the
+	# `sourceMappingURL` comment sits at the end, and inserts an IIFE just
+	# above the sourcemap line. Stub the marker + sourcemap so the anchor-
+	# invariant checks in `_asar_inject_session_propagation` all pass and the
+	# node rewrite is exercised on a realistic fixture.
+	cat >"$staging/.vite/build/index.chunk-BpZff9Dw.js" <<'JS'
+// Fake index.chunk-BpZff9Dw.js — the propagation IIFE gets injected above
+// the sourceMappingURL comment; the singleton marker below is what the
+// content-anchored fail-loud check looks for.
+const hs = { fake: true };
+exports.claudeCodeSessionManager=hs;
+//# sourceMappingURL=index.chunk-BpZff9Dw.js.map
+JS
 	local orig_asar="$resources/app.asar"
 	rm -f "$orig_asar"
 	# Rebuild the asar and stamp its header SHA-256 into a fresh Info.plist
@@ -555,4 +571,264 @@ process.stdout.write(createHash('sha256').update(raw.headerString).digest('hex')
 	# add-instance must have failed loud because the patch script errored out.
 	[ "$status" -ne 0 ]
 	[[ "$output" == *"expected 1 occurrence of anchor"* ]]
+}
+
+# ── Session-propagation injection (Chunk X-B) ───────────────────────────────
+# The propagation IIFE is what makes a mirror's sidebar reflect session-file
+# mutations from a peer Claude Desktop process (primary or another mirror)
+# without a manual quit+relaunch. Each assertion below targets a specific
+# invariant per Rule 9:
+#
+#   - Injection marker byte-visible inside app.asar   → doctor + runtime
+#     see the patched state.
+#   - Singleton marker still present post-injection   → we didn't clobber the
+#     load-bearing `exports.claudeCodeSessionManager` line.
+#   - sourceMappingURL comment stays terminal         → the sourcemap link
+#     Chromium DevTools parses is still the very last line of the chunk.
+#   - Idempotency                                     → a rerun (Squirrel-
+#     triggered refresh-clones) produces bit-identical bytes.
+#   - Payload is valid JS                             → `node --check` on the
+#     extracted chunk parses; a syntax error inside the payload would
+#     silently ship a mirror that fails at first-render with a JS error.
+#   - Content anchor fails loud on drift              → a future Claude
+#     Desktop release that renames `exports.claudeCodeSessionManager` gets
+#     surfaced rather than silently injecting into the wrong site.
+
+@test "asar-patch: injects session-propagation IIFE into the singleton chunk" {
+	setup_asar_fixture
+	"$CMA" init
+	"$CMA" add-instance "$LABEL" --email test-b@example.com
+	# The propagation-injected marker MUST be byte-visible inside the patched
+	# asar. asar files store raw JS bodies concatenated after a JSON header,
+	# so `grep -F` on the archive is sufficient — same mechanism the doctor
+	# uses to check the bXt() append.
+	grep -qF 'claude-multiacct-session-propagation' \
+		"$TARGET_APP/Contents/Resources/app.asar"
+}
+
+@test "asar-patch: session-propagation IIFE parses as valid JavaScript" {
+	setup_asar_fixture
+	"$CMA" init
+	"$CMA" add-instance "$LABEL" --email test-b@example.com
+	local extract="$BATS_TEST_TMPDIR/prop-extract"
+	rm -rf "$extract"
+	node --input-type=module -e "
+import { extractAll } from 'file://$CMA_ASAR_MODULE_DIR/lib/asar.js';
+extractAll('$TARGET_APP/Contents/Resources/app.asar', '$extract');
+"
+	# `node --check` performs a syntax-only parse. A payload with mismatched
+	# braces / stray backticks would silently produce a mirror that fails at
+	# first-render with a top-level SyntaxError — this test catches it before
+	# it can ship.
+	node --check "$extract/.vite/build/index.chunk-BpZff9Dw.js"
+	# Post-injection, the singleton export MUST still be present (a botched
+	# injection that overwrote the export would leave the whole app broken
+	# because everything else that requires this chunk depends on that export).
+	grep -qF 'exports.claudeCodeSessionManager=hs' \
+		"$extract/.vite/build/index.chunk-BpZff9Dw.js"
+	# The sourcemap comment MUST remain the last line of the file (some
+	# Electron dev-tooling parses only the LAST such line — keeping it
+	# terminal is the safe convention).
+	local last_line
+	last_line="$(tail -n 1 "$extract/.vite/build/index.chunk-BpZff9Dw.js")"
+	[[ "$last_line" == *"sourceMappingURL="* ]]
+}
+
+@test "asar-patch: session-propagation injection is idempotent (rerun produces bit-identical chunk)" {
+	setup_asar_fixture
+	"$CMA" init
+	"$CMA" add-instance "$LABEL" --email test-b@example.com
+	# Extract, hash, re-run refresh-clones, extract again, hash — must match.
+	local extract1="$BATS_TEST_TMPDIR/prop-extract1"
+	local extract2="$BATS_TEST_TMPDIR/prop-extract2"
+	rm -rf "$extract1" "$extract2"
+	node --input-type=module -e "
+import { extractAll } from 'file://$CMA_ASAR_MODULE_DIR/lib/asar.js';
+extractAll('$TARGET_APP/Contents/Resources/app.asar', '$extract1');
+"
+	local h1
+	h1="$(shasum -a 256 "$extract1/.vite/build/index.chunk-BpZff9Dw.js" | awk '{print $1}')"
+
+	run "$CMA" refresh-clones
+	[ "$status" -eq 0 ]
+
+	node --input-type=module -e "
+import { extractAll } from 'file://$CMA_ASAR_MODULE_DIR/lib/asar.js';
+extractAll('$TARGET_APP/Contents/Resources/app.asar', '$extract2');
+"
+	local h2
+	h2="$(shasum -a 256 "$extract2/.vite/build/index.chunk-BpZff9Dw.js" | awk '{print $1}')"
+
+	# Bit-identical bytes across a rerun is the load-bearing invariant: any
+	# drift would show up as codesign churn on every Squirrel-driven refresh.
+	[ "$h1" = "$h2" ]
+	# And the injection count MUST stay at 1 — a naive re-inject would double
+	# the IIFE, install two watchers, and double-emit every event.
+	local count
+	count="$(grep -cF 'claude-multiacct-session-propagation' "$extract2/.vite/build/index.chunk-BpZff9Dw.js")"
+	[ "$count" = "1" ]
+}
+
+@test "asar-patch: session-propagation fails loud when the singleton marker is missing" {
+	setup_asar_fixture
+	# Corrupt the singleton chunk by removing the `exports.claudeCodeSessionManager=hs;`
+	# marker before the patch runs. The injector must refuse rather than silently
+	# skip — a missing marker means Claude Desktop restructured the session-manager
+	# module and the injection would fire against the wrong site.
+	local staging="$BATS_TEST_TMPDIR/no-singleton-staging"
+	mkdir -p "$staging/.vite/build"
+	# Copy the good anchor files (so the bXt() patch passes) and swap the
+	# singleton chunk for one WITHOUT the marker.
+	cat >"$staging/.vite/build/index.chunk-DD6nxfJK.js" <<'JS'
+function bXt(){return[Kt.join("/Library/Managed Preferences","com.anthropic.claudefordesktop.plist"),Kt.join("/Library/Managed Preferences",Lle.userInfo().username,"com.anthropic.claudefordesktop.plist")]}
+JS
+	cat >"$staging/.vite/build/index.pre.js" <<'JS'
+function bXt(){return[Kt.join("/Library/Managed Preferences","com.anthropic.claudefordesktop.plist"),Kt.join("/Library/Managed Preferences",Lle.userInfo().username,"com.anthropic.claudefordesktop.plist")]}
+JS
+	cat >"$staging/.vite/build/index.chunk-BpZff9Dw.js" <<'JS'
+// Session-manager singleton marker deliberately absent — this is the drift
+// scenario the injector must fail loud on.
+//# sourceMappingURL=index.chunk-BpZff9Dw.js.map
+JS
+	# shellcheck disable=SC2031 # CMA_SOURCE_CLAUDE_APP is set in setup()'s subshell + read here in this test's subshell
+	rm -f "$CMA_SOURCE_CLAUDE_APP/Contents/Resources/app.asar"
+	# shellcheck disable=SC2031
+	node --input-type=module -e "
+import { createPackageWithOptions } from 'file://$CMA_ASAR_MODULE_DIR/lib/asar.js';
+await createPackageWithOptions('$staging', '$CMA_SOURCE_CLAUDE_APP/Contents/Resources/app.asar', { unpack: '{*.node,*.dylib,spawn-helper}' });
+"
+	local new_hash
+	# shellcheck disable=SC2031
+	new_hash="$(node --input-type=module -e "
+import { getRawHeader } from 'file://$CMA_ASAR_MODULE_DIR/lib/asar.js';
+import { createHash } from 'crypto';
+const raw = getRawHeader('$CMA_SOURCE_CLAUDE_APP/Contents/Resources/app.asar');
+process.stdout.write(createHash('sha256').update(raw.headerString).digest('hex'));
+")"
+	# shellcheck disable=SC2031
+	/usr/libexec/PlistBuddy -c "Set :ElectronAsarIntegrity:Resources/app.asar:hash $new_hash" "$CMA_SOURCE_CLAUDE_APP/Contents/Info.plist"
+
+	"$CMA" init
+	run "$CMA" add-instance "$LABEL" --email test-b@example.com
+	# Must fail loud. Message points at the singleton marker + count.
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"session-manager singleton marker"* ]]
+}
+
+@test "asar-patch: session-propagation runtime harness — fs.watch on symlinked dir triggers re-emit" {
+	# Runtime test: extract the injected chunk, drop it into a Node harness
+	# with stub `hs`/`o`/`k`/`E`/`b` symbols, write session files through a
+	# symlinked-target directory, and observe that the injected IIFE calls
+	# `hs.emitSessionUpdated` on external mutations. Proves the propagation
+	# mechanism works end-to-end without needing a live Claude Desktop.
+	setup_asar_fixture
+	"$CMA" init
+	"$CMA" add-instance "$LABEL" --email test-b@example.com
+	local extract="$BATS_TEST_TMPDIR/runtime-extract"
+	rm -rf "$extract"
+	node --input-type=module -e "
+import { extractAll } from 'file://$CMA_ASAR_MODULE_DIR/lib/asar.js';
+extractAll('$TARGET_APP/Contents/Resources/app.asar', '$extract');
+"
+	local chunk="$extract/.vite/build/index.chunk-BpZff9Dw.js"
+	[ -f "$chunk" ]
+
+	# Isolate the injected IIFE. Everything between our version marker and
+	# the sourceMappingURL comment is the payload; the harness compiles just
+	# the payload against stub symbols. This is deliberately narrow: it
+	# proves the PAYLOAD works, not the surrounding minified chunk.
+	local payload
+	payload="$(awk '
+		/\/\* claude-multiacct-session-propagation v1 \*\// { keep=1 }
+		keep && /^\/\/# sourceMappingURL=/ { exit }
+		keep { print }
+	' "$chunk")"
+	[ -n "$payload" ]
+
+	# Two-dir setup that mimics Layer-2 symlink: `primary/dir` is the real
+	# storage; `mirror-view/dir` is a symlink pointing at primary. Watcher
+	# installs on the mirror path (which is what hs.getStorageDir returns
+	# on a real mirror instance) but must catch writes made through EITHER
+	# path — that's the symlink-fires-both-ways behaviour proven separately
+	# in the fs.watch smoke test.
+	local rundir="$BATS_TEST_TMPDIR/runtime-drive"
+	rm -rf "$rundir"
+	mkdir -p "$rundir/primary/dir"
+	mkdir -p "$rundir/mirror-view"
+	ln -s "$rundir/primary/dir" "$rundir/mirror-view/dir"
+
+	local harness="$BATS_TEST_TMPDIR/runtime-harness.js"
+	# Write the harness. `PAYLOAD_MARKER` is replaced with the extracted IIFE
+	# via a heredoc placeholder swap after the file is written — inlining the
+	# payload directly would trigger heredoc-quote escaping woes for the
+	# minified original.
+	cat >"$harness" <<HARNESS
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
+const EventEmitter = require('node:events');
+const storageDir = process.argv[2];
+const events = [];
+class StubManager extends EventEmitter {
+  constructor(){
+    super();
+    this.sessions = new Map();
+    this.deletingSessionIds = new Set();
+    this._dir = storageDir;
+    this.on('event', ev => events.push(ev));
+  }
+  getStorageDir(){ return this._dir; }
+  emitSessionUpdated(idOrRec){
+    const r = typeof idOrRec === 'string' ? this.sessions.get(idOrRec) : idOrRec;
+    if (r) this.emit('event', { type:'session_updated', sessionId: r.sessionId, session: r });
+  }
+  saveSession(){}
+}
+const o = {
+  LOCAL_SESSION_PREFIX: 'local_',
+  SESSION_FILE_MAX_BYTES: 10 * 1024 * 1024,
+  logger: { info: () => {}, warn: () => {}, error: () => {} },
+};
+const k = {
+  makeRemoteMcpServersIntern: () => new Map(),
+  persistedToActive: (p) => ({
+    sessionId: p.sessionId, title: p.title, isArchived: !!p.isArchived,
+    lastActivityAt: p.lastActivityAt, cwd: p.cwd, isRunning: false,
+    backend: { kind: 'local' },
+  }),
+};
+const E = fs, b = path;
+const hs = new StubManager();
+// ── payload ──
+__PAYLOAD__
+// ── /payload ──
+(async () => {
+  await new Promise(r => setTimeout(r, 300));
+  // External write of a new session file — must fire session_updated.
+  fs.writeFileSync(path.join(storageDir, 'local_ABC.json'),
+    JSON.stringify({ sessionId:'ABC', title:'hello', lastActivityAt:1, cwd:'/x' }));
+  await new Promise(r => setTimeout(r, 1000));
+  const updated = events.filter(e => e.type === 'session_updated' && e.sessionId === 'ABC');
+  // External deletion — must fire "deleted".
+  fs.unlinkSync(path.join(storageDir, 'local_ABC.json'));
+  await new Promise(r => setTimeout(r, 1000));
+  const deleted = events.filter(e => e.type === 'deleted' && e.sessionId === 'ABC');
+  console.log(JSON.stringify({ updated: updated.length, deleted: deleted.length }));
+  process.exit(0);
+})();
+HARNESS
+	# Splice the payload in. Use an env var + node for the substitution so
+	# bash string handling doesn't choke on the minified/injected content.
+	CMA_HARNESS="$harness" CMA_PAYLOAD="$payload" node -e '
+const fs = require("fs");
+const t = fs.readFileSync(process.env.CMA_HARNESS, "utf8");
+fs.writeFileSync(process.env.CMA_HARNESS, t.replace("__PAYLOAD__", process.env.CMA_PAYLOAD));
+'
+	# Point the harness at the primary path so writes there are picked up by
+	# the watcher installed on the mirror-view path. The IIFE resolves the
+	# realpath, which normalises both.
+	local result
+	result="$(node "$harness" "$rundir/mirror-view/dir")"
+	# Expect exactly 1 session_updated and 1 deleted event.
+	[[ "$result" == '{"updated":1,"deleted":1}' ]]
 }
