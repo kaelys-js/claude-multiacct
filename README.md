@@ -188,10 +188,18 @@ claude-multiacct qa test    # bats tests/
 
 Both must pass on `main`. `.gitleaks.toml` covers OAuth-adjacent paths that the tooling touches.
 
+### How updates work
+
+Claude Desktop ships its own Squirrel auto-updater. Squirrel verifies each update against the primary bundle's Developer ID Designated Requirement (DR) — a check that fails against a mirror's ad-hoc signature. Two things flow from that:
+
+- **Mirrors never call the Anthropic Squirrel feed.** `lib/asar-patch-clone.sh` rewrites each clone's bundled JS so Claude Desktop treats the mirror as if `disableAutoUpdates=YES` was set via MDM: the auto-poll loop short-circuits (log line `[updater] Auto-updates disabled by enterprise policy`), and the Claude menu shows a disabled "Check for Updates…" item with the sublabel "Updates disabled by admin". No "Failed to check for updates" dialog is reachable. See [docs/architecture.md § The asar patch layer](docs/architecture.md#the-asar-patch-layer) for the anchor strings the patch rewrites and how the Info.plist `ElectronAsarIntegrity` hash is kept in sync so Electron's boot-time check still passes.
+- **Squirrel still updates the primary** at `/Applications/Claude.app`. When that happens, the `com.user.claude-clone-refresh` WatchPaths agent picks up the mtime change on `Info.plist` and re-ditto's every mirror clone against the fresh primary, re-applying the asar patch, re-writing the per-mirror plist, and re-signing. Mirrors track the primary within seconds of a Squirrel update.
+
 ### Known issues + fixes
 
 - **Claude Desktop updated but mirror shows old version** — the `com.user.claude-clone-refresh` WatchPaths agent auto-refreshes on Squirrel updates. If it hasn't fired (e.g. a mirror was running at update-time and the refresh skipped it), run `claude-multiacct refresh-clones` manually after quitting the mirror(s).
 - **launchd agent missing after macOS update** — macOS occasionally resets per-user launchd state after a major OS update. `claude-multiacct repair` re-installs and re-loads all three agents.
+- **Mid-run mutations from the primary don't show in a running mirror's sidebar** — Claude Desktop loads the session list from disk into an in-memory + IndexedDB cache at process start (`Loaded N persisted sessions from …` in the log). It does not watch the sessions dir for outside writes. When the primary archives / creates / deletes a session, the mirror's disk view IS up to date (the sessions dir is symlink-shared), but the mirror's UI only re-reads that view on relaunch. See [docs/architecture.md § Real-time session-state propagation](docs/architecture.md#real-time-session-state-propagation-and-why-its-not-real-time) for why file-layer watching isn't safe (LevelDB exclusive locks) and why a Claude Desktop-side hook is out of scope for asar-patching alone.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the local gates every push must pass.
 
