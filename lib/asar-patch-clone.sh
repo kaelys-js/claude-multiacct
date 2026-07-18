@@ -1,33 +1,63 @@
 #!/usr/bin/env bash
-# lib/asar-patch-clone.sh — patch a mirror clone's app.asar so Squirrel's
-# auto-updater treats the mirror as "auto-updates disabled by admin" instead
-# of firing an update check that fails Designated-Requirement verification
-# against a bundle Anthropic didn't sign (produces "Failed to check for
-# updates" dialog + repeated auto-poll error logs).
+# lib/asar-patch-clone.sh — patch a Claude Desktop bundle's app.asar so the
+# managed-config reader picks up a per-bundle plist AND so runtime IIFEs
+# inject session-propagation (Chunk X-B) + Remote-Control enforcement
+# (Chunk Y) — plus, in mirror mode, so Squirrel treats the bundle as
+# "auto-updates disabled by admin" instead of firing an update check that
+# fails Designated-Requirement verification against a bundle Anthropic didn't
+# sign.
 #
 # The mechanism (design docs/architecture.md):
 #   1. Claude Desktop's managed-config reader iterates a list of plist paths
-#      (bXt() in the bundled JS) looking for `disableAutoUpdates=YES`. The
-#      pristine list is:
+#      (bXt() in the bundled JS) looking for `disableAutoUpdates=YES` etc.
+#      The pristine list is:
 #        /Library/Managed Preferences/com.anthropic.claudefordesktop.plist
 #        /Library/Managed Preferences/<user>/com.anthropic.claudefordesktop.plist
 #      Both are MDM-owned and empty on a personal Mac.
 #   2. We APPEND process.resourcesPath+"/claude-multiacct-mirror-prefs.plist"
-#      to that list AND write a per-mirror plist at
-#      <clone>/Contents/Resources/claude-multiacct-mirror-prefs.plist with
-#      <key>disableAutoUpdates</key><true/>. Claude then reads the flag from
-#      the mirror-owned plist and:
+#      to that list AND write a per-bundle plist at
+#      <bundle>/Contents/Resources/claude-multiacct-mirror-prefs.plist with
+#      `remoteControlAtStartup=YES` (always) and `disableAutoUpdates=YES`
+#      (mirror-only — the primary MUST stay Squirrel-updated to keep pace
+#      with upstream). Claude then reads the flags via its Managed-tier
+#      reader; on mirrors:
 #        - i_t() short-circuits: "[updater] Auto-updates disabled by
 #          enterprise policy" log line, no network call.
 #        - NRn() menu builder sees `Oe().autoUpdate.disabled=true` and
 #          disables the "Check for Updates…" item with sublabel "Updates
 #          disabled by admin". The old "Failed to check for updates" dialog
 #          is never reachable.
-#   3. Repack asar, recompute the SHA-256 of `getRawHeader().headerString`,
-#      write it into <clone>/Contents/Info.plist under
+#   3. Inject the Chunk X-B session-propagation IIFE into
+#      `.vite/build/index.chunk-BpZff9Dw.js` so cross-process mutations of
+#      the shared session store fire `hs.emitSessionUpdated` on this
+#      instance's LocalSessionManager singleton — sidebar reflects mirror /
+#      primary edits without a quit + relaunch. See
+#      lib/asar-session-propagation.inject.js for the full contract.
+#   4. Inject the Chunk Y Remote-Control enforcer IIFE into the SAME chunk
+#      so any non-archived session that drifts to `remoteControlEnabled:
+#      false` gets re-flipped via `hs.handleRemoteControlCommand(session,
+#      {auto:true})` on a 15-second poll. See
+#      lib/asar-remote-control-enforcer.inject.js for the full contract.
+#   5. Repack asar, recompute the SHA-256 of `getRawHeader().headerString`,
+#      write it into <bundle>/Contents/Info.plist under
 #      ElectronAsarIntegrity.Resources/app.asar.hash. Electron verifies this
 #      hash at boot (electron/asar_util.cc:143) and refuses to boot with
 #      "FATAL:asar_util.cc:143 Integrity check failed" on any mismatch.
+#
+# Modes (--mode):
+#   - mirror (default) — mirror clone; writes `disableAutoUpdates=YES` into
+#                        the per-bundle plist so Squirrel is silenced.
+#   - primary          — primary /Applications/Claude.app; OMITS
+#                        `disableAutoUpdates` from the plist so Squirrel
+#                        continues to run and receive upstream updates. The
+#                        propagation + enforcer IIFEs still ship so
+#                        cross-process propagation + RC enforcement work
+#                        symmetrically on primary + mirrors. Rule 12
+#                        disclosure: primary-mode INVALIDATES Apple's
+#                        original code signature — subsequent Squirrel
+#                        updates restore it. The primary-patch-refresh
+#                        launchd agent re-applies the patch after each
+#                        Squirrel-driven Info.plist mtime bump.
 #
 # Idempotent: if the extracted files already contain the patched-in string,
 # we re-derive the patched anchor (locates the neighbouring pristine text and
@@ -37,7 +67,10 @@
 # `set -e` failure inside main() the caller (build-clone-app.sh) rolls back
 # by rm -rf'ing the half-written clone.
 #
-# Usage: asar-patch-clone.sh <label> <appBundle>
+# Usage:
+#   asar-patch-clone.sh <label> <appBundle>              # mirror (default)
+#   asar-patch-clone.sh --mode=mirror  <label> <appBundle>
+#   asar-patch-clone.sh --mode=primary primary <appBundle>
 
 set -euo pipefail
 
@@ -86,6 +119,25 @@ CMA_ASAR_PROPAGATE_FILE=".vite/build/index.chunk-BpZff9Dw.js"
 CMA_ASAR_PROPAGATE_SINGLETON_MARKER='exports.claudeCodeSessionManager=hs;'
 CMA_ASAR_PROPAGATE_ANCHOR_BEFORE='//# sourceMappingURL=index.chunk-BpZff9Dw.js.map'
 CMA_ASAR_PROPAGATE_INJECTED_MARKER='/* claude-multiacct-session-propagation v1 */'
+
+# ── Remote-Control enforcer anchor (Chunk Y) ──────────────────────────────
+#
+# The enforcer IIFE goes into the SAME chunk as the propagation IIFE (both
+# close over the LocalSessionManager singleton `hs`). It calls
+# `hs.handleRemoteControlCommand(session, {auto:true})` on every non-archived
+# session whose `remoteControlEnabled` drifts to false — see
+# lib/asar-remote-control-enforcer.inject.js for the runtime contract.
+#
+# Anchor invariants (all fail loud on drift):
+#   - CMA_ASAR_ENFORCER_METHOD_MARKER: the runtime method the enforcer calls
+#     into. Must occur AT LEAST ONCE in the chunk (the method definition +
+#     any call sites). Absence would mean the enforcer can't fire at runtime
+#     — so we refuse to inject a payload that would ship dead code.
+#   - CMA_ASAR_ENFORCER_INJECTED_MARKER: the on-disk sentinel that both
+#     `grep -F` (doctor) and the injector itself (idempotency check) look
+#     for. MUST NOT be present on a pristine chunk.
+CMA_ASAR_ENFORCER_METHOD_MARKER='handleRemoteControlCommand'
+CMA_ASAR_ENFORCER_INJECTED_MARKER='/* claude-multiacct-rc-enforcer v1 */'
 
 # @electron/asar module path. Layered lookup so hermetic bats tests (which
 # run under a scratch $HOME with no mise install) can still find the module
@@ -340,15 +392,105 @@ fs.writeFileSync(t, merged);
   cma_dim "  + injected session-propagation into $CMA_ASAR_PROPAGATE_FILE"
 }
 
-# Write the per-mirror managed-prefs plist. Uses `plutil` from Apple's
+# Inject the Remote-Control enforcer IIFE (Chunk Y) into the SAME chunk as
+# the propagation IIFE. Both close over the LocalSessionManager singleton
+# `hs`; the enforcer additionally calls into `hs.handleRemoteControlCommand`
+# which must exist at runtime. Idempotent: a rerun over an already-patched
+# extraction detects the injected marker and no-ops. The payload comes from
+# the sibling file lib/asar-remote-control-enforcer.inject.js.
+#
+# Anchor invariants (all fail loud on drift):
+#   1. The target chunk must exist (same file as propagation).
+#   2. `handleRemoteControlCommand` must occur AT LEAST ONCE (method def +
+#      call sites). Zero hits means Claude Desktop restructured the class —
+#      the enforcer would inject dead code and never actually flip anything.
+#   3. The sourceMappingURL anchor (from propagation) must exist exactly
+#      once — we insert this IIFE ABOVE that anchor too, so the sourcemap
+#      link stays terminal even with two IIFEs stacked before it.
+#   4. The enforcer's injected marker MUST NOT already be present.
+#
+# The enforcer injection runs AFTER the propagation injection in main(), so
+# the anchor count for sourceMappingURL is still 1 at the time we inject
+# here — both IIFEs land above it in insertion order.
+_asar_inject_rc_enforcer() {
+  local extract_dir="$1"
+  local target="$extract_dir/$CMA_ASAR_PROPAGATE_FILE"
+
+  if [[ ! -f "$target" ]]; then
+    cma_die "asar-patch: enforcer target chunk missing at $target (Claude Desktop restructured?)"
+  fi
+
+  # Already patched? First-token match on the injected version marker.
+  if grep -qF "$CMA_ASAR_ENFORCER_INJECTED_MARKER" "$target"; then
+    cma_dim "  = $CMA_ASAR_PROPAGATE_FILE rc-enforcer already injected"
+    return 0
+  fi
+
+  # Method marker must exist at least once. Zero → the runtime call would
+  # throw TypeError; refuse to ship a payload that would never work.
+  local method_count anchor_count
+  method_count="$(grep -cF "$CMA_ASAR_ENFORCER_METHOD_MARKER" "$target" || true)"
+  if [[ "$method_count" -lt 1 ]]; then
+    cma_die "asar-patch: expected >=1 occurrence of RC method marker ('$CMA_ASAR_ENFORCER_METHOD_MARKER') in $CMA_ASAR_PROPAGATE_FILE, found $method_count (Claude Desktop internals changed — re-anchor)"
+  fi
+  anchor_count="$(grep -cF "$CMA_ASAR_PROPAGATE_ANCHOR_BEFORE" "$target" || true)"
+  if [[ "$anchor_count" != "1" ]]; then
+    cma_die "asar-patch: expected 1 occurrence of sourceMappingURL anchor for rc-enforcer inject in $CMA_ASAR_PROPAGATE_FILE, found $anchor_count"
+  fi
+
+  # Resolve the payload file (sibling of this script). Fail loud if missing.
+  local payload
+  payload="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/asar-remote-control-enforcer.inject.js"
+  [[ -f "$payload" ]] || cma_die "asar-patch: rc-enforcer payload missing at $payload"
+
+  # Same node-rewrite shape as _asar_inject_session_propagation — see the
+  # rationale in that function's comment. Payload lives on disk to keep it
+  # editable/lintable outside a bash heredoc.
+  CMA_ENF_TARGET="$target" \
+    CMA_ENF_PAYLOAD_FILE="$payload" \
+    CMA_ENF_ANCHOR="$CMA_ASAR_PROPAGATE_ANCHOR_BEFORE" \
+    node -e '
+const fs = require("fs");
+const t = process.env.CMA_ENF_TARGET;
+const p = process.env.CMA_ENF_PAYLOAD_FILE;
+const anchor = process.env.CMA_ENF_ANCHOR;
+const chunk = fs.readFileSync(t, "utf8");
+const payload = fs.readFileSync(p, "utf8");
+const idx = chunk.indexOf(anchor);
+if (idx === -1) {
+	console.error("asar-patch: sourceMappingURL anchor not found in target (pre-node grep should have caught this)");
+	process.exit(2);
+}
+const before = chunk.slice(0, idx);
+const after = chunk.slice(idx);
+const sep = before.endsWith("\n") ? "" : "\n";
+const merged = before + sep + payload + (payload.endsWith("\n") ? "" : "\n") + after;
+fs.writeFileSync(t, merged);
+' || cma_die "asar-patch: node rewrite failed on $target"
+
+  cma_dim "  + injected rc-enforcer into $CMA_ASAR_PROPAGATE_FILE"
+}
+
+# Write the per-bundle managed-prefs plist. Uses `plutil` from Apple's
 # CommandLineTools so we get a validated binary/XML plist rather than a
 # hand-rolled string — Electron's native readPlistValue would reject a
 # malformed plist and silently skip the whole managed tier.
 #
 # Keys written:
-#   - disableAutoUpdates=YES         → suppresses Squirrel auto-poll (Chunk W)
+#   - disableAutoUpdates=YES         → suppresses Squirrel auto-poll (Chunk W).
+#                                      MIRROR MODE ONLY — writing this into
+#                                      the primary's plist would silence
+#                                      Squirrel on /Applications/Claude.app
+#                                      itself and freeze the primary at the
+#                                      currently-installed version forever.
 #   - remoteControlAtStartup=YES     → auto-enables Remote Control bridge on
-#                                      each new session (Chunk X-A)
+#                                      each new session (Chunk X-A). Written
+#                                      in BOTH modes — the Chunk Y enforcer
+#                                      catches subsequent drift but relies on
+#                                      this initial-startup flip to arm the
+#                                      first flip cheaply through Claude
+#                                      Desktop's own maybeAutoEnableRemoteControl
+#                                      code path.
 #
 # Both flow through the SAME managed-tier machinery: the bundled JS's $Xt()
 # reader iterates the schema keys (from SXt() = [...IW.keys()], where IW is
@@ -359,21 +501,70 @@ fs.writeFileSync(t, merged);
 # with no additional JS anchor patching — SXt() returns it and $Xt() reads it
 # straight from the plist. See docs/architecture.md for the full trace.
 _asar_write_mirror_plist() {
-  local plist="$1"
+  local plist="$1" mode="$2"
   # `<true/>` is the plist boolean literal. plutil -create produces an
   # empty root dict; -insert adds the key.
   plutil -create xml1 "$plist" || cma_die "asar-patch: plutil -create failed for $plist"
-  plutil -insert disableAutoUpdates -bool true "$plist" \
-    || cma_die "asar-patch: plutil -insert disableAutoUpdates failed for $plist"
+  if [[ "$mode" == "mirror" ]]; then
+    plutil -insert disableAutoUpdates -bool true "$plist" \
+      || cma_die "asar-patch: plutil -insert disableAutoUpdates failed for $plist"
+  fi
   plutil -insert remoteControlAtStartup -bool true "$plist" \
     || cma_die "asar-patch: plutil -insert remoteControlAtStartup failed for $plist"
 }
 
 main() {
+  local mode="mirror"
+  local action="patch"
+  # Support --mode=<mirror|primary> AND --unpatch flag. The positional args
+  # always follow. A default-mirror path keeps existing callers
+  # (build-clone-app.sh) unchanged.
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --mode=*)
+        mode="${1#--mode=}"
+        shift
+        ;;
+      --mode)
+        mode="$2"
+        shift 2
+        ;;
+      --unpatch)
+        action="unpatch"
+        shift
+        ;;
+      *) break ;;
+    esac
+  done
+  case "$mode" in
+    mirror | primary) ;;
+    *) cma_die "asar-patch: --mode must be 'mirror' or 'primary' (got '$mode')" ;;
+  esac
+
+  # --unpatch is primary-only: mirror unpatch is `remove-instance` (drops
+  # the whole clone). A mirror + --unpatch combination is a user error.
+  if [[ "$action" == "unpatch" && "$mode" != "primary" ]]; then
+    cma_die "asar-patch: --unpatch is only meaningful with --mode=primary (mirror unpatch = remove-instance)"
+  fi
+
   local label="$1" app="$2"
-  cma_validate_label "$label"
+  # Primary mode uses the reserved label "primary" (cma_validate_label refuses
+  # it — that reservation exists to keep 'primary' out of the mirror namespace,
+  # so the check here is a special-case bypass with a fixed label).
+  if [[ "$mode" == "primary" ]]; then
+    [[ "$label" == "primary" ]] || cma_die "asar-patch: --mode=primary requires label 'primary' (got '$label')"
+  else
+    cma_validate_label "$label"
+  fi
   [[ -n "$app" ]] || cma_die "asar-patch: missing appBundle arg"
   [[ -d "$app" ]] || cma_die "asar-patch: appBundle not found at $app"
+
+  # Dispatch --unpatch before the patch pipeline. Unpatch is small enough that
+  # a full function delegation is cleaner than another set of guards below.
+  if [[ "$action" == "unpatch" ]]; then
+    _asar_unpatch_primary "$app"
+    return 0
+  fi
 
   local asar="$app/Contents/Resources/app.asar"
   local plist="$app/Contents/Info.plist"
@@ -388,6 +579,15 @@ main() {
   if [[ ! -f "$asar" ]]; then
     cma_dim "asar-patch: no $asar (fixture bundle) — nothing to patch, skipping"
     return 0
+  fi
+
+  # Primary-mode snapshot: preserve the pristine app.asar the first time we
+  # patch so `primary-unpatch` can restore it. Subsequent Squirrel updates
+  # write a new pristine asar over ours — the launchd primary-patch-refresh
+  # agent handles that case by overwriting the backup with the new pristine
+  # BEFORE re-applying the patch. See _asar_snapshot_primary_backup() below.
+  if [[ "$mode" == "primary" ]]; then
+    _asar_snapshot_primary_backup "$app"
   fi
 
   local mod_dir
@@ -421,6 +621,9 @@ main() {
   cma_dim "  inject session-propagation"
   _asar_inject_session_propagation "$extract_dir"
 
+  cma_dim "  inject rc-enforcer"
+  _asar_inject_rc_enforcer "$extract_dir"
+
   cma_dim "  repack → $patched_asar"
   _asar_repack "$extract_dir" "$patched_asar" "$mod_dir"
 
@@ -449,10 +652,102 @@ main() {
   _asar_update_integrity "$plist" "$new_hash"
   cma_dim "  Info.plist ElectronAsarIntegrity hash updated"
 
-  _asar_write_mirror_plist "$mirror_plist"
-  cma_dim "  wrote $mirror_plist"
+  _asar_write_mirror_plist "$mirror_plist" "$mode"
+  cma_dim "  wrote $mirror_plist (mode=$mode)"
 
-  cma_ok "asar patched: label=$label (auto-updates disabled via per-mirror plist)"
+  # Primary mode: ad-hoc re-sign IN PLACE. Mirror mode: build-clone-app.sh
+  # re-signs the whole clone bundle at the end, so we don't re-sign here.
+  # Ad-hoc re-sign on primary invalidates Anthropic's original Developer ID
+  # signature — Rule 12 disclosure. Squirrel reinstall (whole-bundle drop-
+  # replace) restores it; the launchd primary-patch-refresh agent re-applies
+  # this patch after each Squirrel-triggered Info.plist mtime bump.
+  if [[ "$mode" == "primary" ]]; then
+    cma_say "codesign --force --deep --sign - $app (primary re-sign; invalidates Apple signature until next Squirrel drop)"
+    codesign --force --deep --sign - "$app" > /dev/null \
+      || cma_die "asar-patch: codesign --force --deep --sign - failed on $app"
+  fi
+
+  case "$mode" in
+    mirror) cma_ok "asar patched: label=$label mode=mirror (auto-updates disabled + propagation + rc-enforcer)" ;;
+    primary) cma_ok "asar patched: label=$label mode=primary (propagation + rc-enforcer; auto-updates left ENABLED)" ;;
+  esac
+}
+
+# Snapshot the pristine app.asar to app.asar.multiacct-backup ONCE per
+# Squirrel-installed version. On a re-run against an already-patched primary
+# (idempotent case), the backup already exists AND holds the pristine bytes
+# from the last time we detected a pristine primary — leave it alone.
+#
+# When Squirrel drops a new Claude.app in place, the primary's asar goes back
+# to pristine (Anthropic-signed) and this function's absent-backup detection
+# is what captures the new pristine before we re-patch. The launchd
+# primary-patch-refresh agent DELIBERATELY deletes the backup before
+# invoking asar-patch-clone.sh so the fresh Squirrel-installed pristine gets
+# captured — see bin/claude-primary-patch-refresh.sh header for the ordering.
+_asar_snapshot_primary_backup() {
+  local app="$1"
+  local asar="$app/Contents/Resources/app.asar"
+  local backup="$app/Contents/Resources/app.asar.multiacct-backup"
+  [[ -f "$asar" ]] || cma_die "asar-patch: primary app.asar missing at $asar (Claude.app corrupt?)"
+  if [[ -f "$backup" ]]; then
+    cma_dim "  primary backup already exists at $backup — keeping"
+    return 0
+  fi
+  cp -p "$asar" "$backup" \
+    || cma_die "asar-patch: failed to snapshot primary app.asar to $backup"
+  cma_dim "  snapshotted primary app.asar → $backup ($(du -h "$backup" | awk '{print $1}'))"
+}
+
+# Restore the pristine primary from the backup, remove the multiacct-owned
+# plist, recompute the Info.plist integrity hash to match the pristine asar,
+# and ad-hoc re-sign. Called by `claude-multiacct primary-unpatch`.
+#
+# Cannot restore Anthropic's original Developer ID signature — that lives
+# in the pristine _CodeSignature/ tree, which our ad-hoc re-sign overwrote.
+# A subsequent Squirrel drop or a manual reinstall of Claude Desktop puts
+# the original signature back in place.
+_asar_unpatch_primary() {
+  local app="$1"
+  local asar="$app/Contents/Resources/app.asar"
+  local backup="$app/Contents/Resources/app.asar.multiacct-backup"
+  local plist="$app/Contents/Info.plist"
+  local mirror_plist="$app/Contents/Resources/$CMA_MIRROR_PLIST_BASENAME"
+
+  [[ -d "$app" ]] || cma_die "asar-unpatch: appBundle not found at $app"
+  [[ -f "$backup" ]] || cma_die "asar-unpatch: no backup at $backup — primary was never patched by this tool"
+
+  local mod_dir
+  # shellcheck disable=SC2310
+  if ! mod_dir="$(_asar_module_dir)"; then
+    cma_die "asar-unpatch: @electron/asar module not installed (run \`mise install\` from the repo root)"
+  fi
+
+  cma_say "asar unpatch label=primary"
+  cma_dim "  restoring pristine app.asar from backup"
+  rm -f "$asar"
+  rm -rf "${asar}.unpacked"
+  # Move the backup back — preserves timestamp + xattrs the ditto captured.
+  mv "$backup" "$asar" \
+    || cma_die "asar-unpatch: failed to restore backup to $asar"
+
+  if [[ -f "$mirror_plist" ]]; then
+    rm -f "$mirror_plist"
+    cma_dim "  removed $mirror_plist"
+  fi
+
+  local pristine_hash
+  # shellcheck disable=SC2310
+  if ! pristine_hash="$(_asar_header_hash "$asar" "$mod_dir")"; then
+    cma_die "asar-unpatch: could not compute pristine header hash"
+  fi
+  _asar_update_integrity "$plist" "$pristine_hash"
+  cma_dim "  restored Info.plist ElectronAsarIntegrity hash: $pristine_hash"
+
+  cma_say "codesign --force --deep --sign - $app (ad-hoc; Apple signature stays gone until next Squirrel drop or manual reinstall)"
+  codesign --force --deep --sign - "$app" > /dev/null \
+    || cma_die "asar-unpatch: codesign --force --deep --sign - failed on $app"
+
+  cma_ok "asar unpatched: primary restored to pristine asar bytes (Apple signature not restored — reinstall Claude Desktop to regain it)"
 }
 
 # Only run main() when executed directly. Sourcing the file (e.g. from bats

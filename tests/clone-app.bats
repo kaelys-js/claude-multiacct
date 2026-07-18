@@ -362,7 +362,12 @@ JS
 	cat >"$staging/.vite/build/index.chunk-BpZff9Dw.js" <<'JS'
 // Fake index.chunk-BpZff9Dw.js — the propagation IIFE gets injected above
 // the sourceMappingURL comment; the singleton marker below is what the
-// content-anchored fail-loud check looks for.
+// content-anchored fail-loud check looks for. The `handleRemoteControlCommand`
+// method stub is the anchor Chunk Y's `_asar_inject_rc_enforcer` requires —
+// absence of that marker fails loud (see the dedicated rc-enforcer bats).
+class G {
+	async handleRemoteControlCommand(e, r) { /* fake — real body lives elsewhere */ }
+}
 const hs = { fake: true };
 exports.claudeCodeSessionManager=hs;
 //# sourceMappingURL=index.chunk-BpZff9Dw.js.map
@@ -831,4 +836,277 @@ fs.writeFileSync(process.env.CMA_HARNESS, t.replace("__PAYLOAD__", process.env.C
 	result="$(node "$harness" "$rundir/mirror-view/dir")"
 	# Expect exactly 1 session_updated and 1 deleted event.
 	[[ "$result" == '{"updated":1,"deleted":1}' ]]
+}
+
+# ── Remote-Control enforcer injection (Chunk Y) ─────────────────────────────
+# The enforcer IIFE keeps `remoteControlEnabled` true across every non-
+# archived session on both mirrors and primary. Each assertion below maps to
+# a load-bearing piece of that guarantee per Rule 9:
+#
+#   - Enforcer marker byte-visible inside app.asar      → doctor + runtime
+#     see the patched state.
+#   - Enforcer JS parses                                → a syntax error inside
+#     the payload would silently ship a mirror that fails at first-render
+#     with a top-level SyntaxError.
+#   - Idempotency                                       → a rerun (Squirrel-
+#     triggered refresh-clones) produces bit-identical bytes.
+#   - Content anchor fails loud on drift                → a future Claude
+#     Desktop release that removes `handleRemoteControlCommand` gets
+#     surfaced rather than silently shipping a payload that never fires.
+#   - Runtime harness                                   → the payload calls
+#     `hs.handleRemoteControlCommand(session, {auto:true})` on non-archived
+#     sessions whose `remoteControlEnabled === false`; skips archived +
+#     already-enabled sessions.
+
+@test "asar-patch: injects rc-enforcer IIFE into the singleton chunk" {
+	setup_asar_fixture
+	"$CMA" init
+	"$CMA" add-instance "$LABEL" --email test-b@example.com
+	# Marker byte-visible in the packed asar. Same rationale as propagation:
+	# asar files store raw JS bodies concatenated after a JSON header, so
+	# `grep -F` on the archive is sufficient.
+	grep -qF 'claude-multiacct-rc-enforcer' \
+		"$TARGET_APP/Contents/Resources/app.asar"
+}
+
+@test "asar-patch: rc-enforcer IIFE parses as valid JavaScript" {
+	setup_asar_fixture
+	"$CMA" init
+	"$CMA" add-instance "$LABEL" --email test-b@example.com
+	local extract="$BATS_TEST_TMPDIR/rc-extract"
+	rm -rf "$extract"
+	node --input-type=module -e "
+import { extractAll } from 'file://$CMA_ASAR_MODULE_DIR/lib/asar.js';
+extractAll('$TARGET_APP/Contents/Resources/app.asar', '$extract');
+"
+	# node --check syntax-only parse. Also verifies both IIFEs coexist (the
+	# rc-enforcer sits ABOVE the propagation IIFE which sits ABOVE the
+	# sourceMappingURL comment — a botched injection order would leave the
+	# sourceMappingURL not at the end).
+	node --check "$extract/.vite/build/index.chunk-BpZff9Dw.js"
+	# Both markers present (they cohabit the same chunk).
+	grep -qF 'claude-multiacct-session-propagation' \
+		"$extract/.vite/build/index.chunk-BpZff9Dw.js"
+	grep -qF 'claude-multiacct-rc-enforcer' \
+		"$extract/.vite/build/index.chunk-BpZff9Dw.js"
+	# sourceMappingURL comment MUST remain terminal (last line of the file).
+	local last_line
+	last_line="$(tail -n 1 "$extract/.vite/build/index.chunk-BpZff9Dw.js")"
+	[[ "$last_line" == *"sourceMappingURL="* ]]
+}
+
+@test "asar-patch: rc-enforcer injection is idempotent (rerun produces bit-identical chunk)" {
+	setup_asar_fixture
+	"$CMA" init
+	"$CMA" add-instance "$LABEL" --email test-b@example.com
+	local extract1="$BATS_TEST_TMPDIR/rc-extract1"
+	local extract2="$BATS_TEST_TMPDIR/rc-extract2"
+	rm -rf "$extract1" "$extract2"
+	node --input-type=module -e "
+import { extractAll } from 'file://$CMA_ASAR_MODULE_DIR/lib/asar.js';
+extractAll('$TARGET_APP/Contents/Resources/app.asar', '$extract1');
+"
+	local h1
+	h1="$(shasum -a 256 "$extract1/.vite/build/index.chunk-BpZff9Dw.js" | awk '{print $1}')"
+
+	run "$CMA" refresh-clones
+	[ "$status" -eq 0 ]
+
+	node --input-type=module -e "
+import { extractAll } from 'file://$CMA_ASAR_MODULE_DIR/lib/asar.js';
+extractAll('$TARGET_APP/Contents/Resources/app.asar', '$extract2');
+"
+	local h2
+	h2="$(shasum -a 256 "$extract2/.vite/build/index.chunk-BpZff9Dw.js" | awk '{print $1}')"
+
+	# Bit-identical is the load-bearing invariant. Any drift would show up
+	# as codesign churn on every Squirrel-driven refresh.
+	[ "$h1" = "$h2" ]
+	# Version marker count MUST stay at 1 — a naive re-inject would double
+	# the IIFE and stack two enforcer polls, doubling the RPC load per
+	# interval. The bare string `claude-multiacct-rc-enforcer` appears many
+	# times inside the payload (log tag, comments, function name); the
+	# version-marker string is the ONE injected-once sentinel.
+	local count
+	count="$(grep -cF '/* claude-multiacct-rc-enforcer v1 */' "$extract2/.vite/build/index.chunk-BpZff9Dw.js")"
+	[ "$count" = "1" ]
+}
+
+@test "asar-patch: rc-enforcer fails loud when the RC method marker is missing" {
+	setup_asar_fixture
+	# Corrupt the singleton chunk by removing every `handleRemoteControlCommand`
+	# reference before the patch runs. The injector must refuse rather than
+	# silently ship — a missing method means the runtime call would throw
+	# TypeError and the enforcer would never actually flip anything.
+	local staging="$BATS_TEST_TMPDIR/no-rc-method-staging"
+	mkdir -p "$staging/.vite/build"
+	# Keep the bXt() anchor + singleton marker so those steps pass; only
+	# strip `handleRemoteControlCommand` so the rc-enforcer anchor fails.
+	cat >"$staging/.vite/build/index.chunk-DD6nxfJK.js" <<'JS'
+function bXt(){return[Kt.join("/Library/Managed Preferences","com.anthropic.claudefordesktop.plist"),Kt.join("/Library/Managed Preferences",Lle.userInfo().username,"com.anthropic.claudefordesktop.plist")]}
+JS
+	cat >"$staging/.vite/build/index.pre.js" <<'JS'
+function bXt(){return[Kt.join("/Library/Managed Preferences","com.anthropic.claudefordesktop.plist"),Kt.join("/Library/Managed Preferences",Lle.userInfo().username,"com.anthropic.claudefordesktop.plist")]}
+JS
+	# Singleton marker present, method marker absent.
+	cat >"$staging/.vite/build/index.chunk-BpZff9Dw.js" <<'JS'
+const hs = { fake: true };
+exports.claudeCodeSessionManager=hs;
+//# sourceMappingURL=index.chunk-BpZff9Dw.js.map
+JS
+	# shellcheck disable=SC2031 # CMA_SOURCE_CLAUDE_APP is set in setup()'s subshell + read here in this test's subshell
+	rm -f "$CMA_SOURCE_CLAUDE_APP/Contents/Resources/app.asar"
+	# shellcheck disable=SC2031
+	node --input-type=module -e "
+import { createPackageWithOptions } from 'file://$CMA_ASAR_MODULE_DIR/lib/asar.js';
+await createPackageWithOptions('$staging', '$CMA_SOURCE_CLAUDE_APP/Contents/Resources/app.asar', { unpack: '{*.node,*.dylib,spawn-helper}' });
+"
+	local new_hash
+	# shellcheck disable=SC2031
+	new_hash="$(node --input-type=module -e "
+import { getRawHeader } from 'file://$CMA_ASAR_MODULE_DIR/lib/asar.js';
+import { createHash } from 'crypto';
+const raw = getRawHeader('$CMA_SOURCE_CLAUDE_APP/Contents/Resources/app.asar');
+process.stdout.write(createHash('sha256').update(raw.headerString).digest('hex'));
+")"
+	# shellcheck disable=SC2031
+	/usr/libexec/PlistBuddy -c "Set :ElectronAsarIntegrity:Resources/app.asar:hash $new_hash" "$CMA_SOURCE_CLAUDE_APP/Contents/Info.plist"
+
+	"$CMA" init
+	run "$CMA" add-instance "$LABEL" --email test-b@example.com
+	# Must fail loud with a message that points at the missing anchor.
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"RC method marker"* ]]
+}
+
+@test "asar-patch: rc-enforcer runtime harness — polls flip off sessions back on" {
+	# Runtime test: extract the injected chunk, drop it into a Node harness
+	# with stub `hs`/`o` symbols simulating LocalSessionManager sessions,
+	# advance time via fake timers, and observe that the enforcer calls
+	# `handleRemoteControlCommand` on non-archived + off sessions only.
+	# Proves the enforcer works end-to-end without needing a live Claude Desktop.
+	setup_asar_fixture
+	"$CMA" init
+	"$CMA" add-instance "$LABEL" --email test-b@example.com
+	local extract="$BATS_TEST_TMPDIR/rc-runtime-extract"
+	rm -rf "$extract"
+	node --input-type=module -e "
+import { extractAll } from 'file://$CMA_ASAR_MODULE_DIR/lib/asar.js';
+extractAll('$TARGET_APP/Contents/Resources/app.asar', '$extract');
+"
+	local chunk="$extract/.vite/build/index.chunk-BpZff9Dw.js"
+	[ -f "$chunk" ]
+
+	# Isolate the rc-enforcer IIFE. Everything between the version marker
+	# and the propagation IIFE's own version marker is the enforcer payload.
+	# The harness compiles just this payload against stub symbols.
+	local payload
+	payload="$(awk '
+		/\/\* claude-multiacct-rc-enforcer v1 \*\// { keep=1 }
+		keep && /\/\* claude-multiacct-session-propagation v1 \*\// { exit }
+		keep { print }
+	' "$chunk")"
+	[ -n "$payload" ]
+
+	# The harness reduces the poll intervals so the test finishes in ~2 s.
+	# Stubbed `hs` carries a mix of session states: (a) non-archived + off +
+	# with-query → enforcer MUST flip; (b) archived + off → enforcer MUST
+	# skip; (c) non-archived + already-on → enforcer MUST skip; (d) no-query
+	# → enforcer MUST log-once + skip.
+	local harness="$BATS_TEST_TMPDIR/rc-runtime-harness.js"
+	cat >"$harness" <<'HARNESS'
+const EventEmitter = require('node:events');
+// Compress timings for the harness. The real payload uses 5 s initial +
+// 15 s poll; we swap those via a text-preprocess before eval'ing (see below).
+const calls = [];
+class FakeQuery {
+  async enableRemoteControl(enabled, name){
+    calls.push({ subtype:'remote_control', enabled, name });
+    return { session_url: 'wss://bridge.claudeusercontent.com/x/y', ok: true };
+  }
+}
+class StubManager extends EventEmitter {
+  constructor(){
+    super();
+    this.sessions = new Map();
+    this.deletingSessionIds = new Set();
+  }
+  async handleRemoteControlCommand(session, opts){
+    // Emulate the shape of the real method: mutate session.remoteControlEnabled
+    // and delegate the RPC call. auto=true suppresses UI messages (no-op here).
+    if (session.isArchived) return;
+    if (!session.query) return;
+    if (session.remoteControlEnabled === true && opts && opts.auto) return;
+    try {
+      const r = await session.query.enableRemoteControl(!session.remoteControlEnabled, session.title);
+      session.remoteControlEnabled = !session.remoteControlEnabled;
+      session.bridgeSessionUrl = r.session_url;
+    } catch (e) {
+      // On failure, revert (matches real method behaviour).
+      session.remoteControlEnabled = false;
+    }
+  }
+  emitSessionUpdated(){}
+  emit(){}
+  saveSession(){}
+}
+const hs = new StubManager();
+const o = {
+  logger: { info: msg => console.log('[info]', msg), warn: msg => console.log('[warn]', msg), error: msg => console.log('[error]', msg) },
+};
+const q1 = new FakeQuery();
+hs.sessions.set('S-flip',   { sessionId:'S-flip',   title:'flip me',   isArchived:false, remoteControlEnabled:false, query:q1 });
+hs.sessions.set('S-arch',   { sessionId:'S-arch',   title:'archived',  isArchived:true,  remoteControlEnabled:false, query:q1 });
+hs.sessions.set('S-onon',   { sessionId:'S-onon',   title:'already on',isArchived:false, remoteControlEnabled:true,  query:q1 });
+hs.sessions.set('S-noq',    { sessionId:'S-noq',    title:'no query',  isArchived:false, remoteControlEnabled:false, query:null });
+
+// ── payload ──
+__PAYLOAD__
+// ── /payload ──
+
+(async () => {
+  // Wait long enough for the initial-delay setTimeout (compressed to 100 ms
+  // by the pre-processing below) to fire + the first poll's async chain.
+  await new Promise(r => setTimeout(r, 400));
+  const flipped = hs.sessions.get('S-flip').remoteControlEnabled === true;
+  const archUntouched = hs.sessions.get('S-arch').remoteControlEnabled === false;
+  const onUntouched = hs.sessions.get('S-onon').remoteControlEnabled === true;
+  const noqUntouched = hs.sessions.get('S-noq').remoteControlEnabled === false;
+  const called = calls.filter(c => c.enabled === true);
+  const out = {
+    flipped,
+    archUntouched,
+    onUntouched,
+    noqUntouched,
+    callCount: called.length,
+    called: called.map(c => c.name).sort(),
+  };
+  console.log(JSON.stringify(out));
+  process.exit(0);
+})();
+HARNESS
+	# Splice the payload in AND compress the timings so the test doesn't
+	# take 20+ seconds. `CMA_INITIAL_DELAY_MS = 5000` → 100, `CMA_POLL_MS =
+	# 15000` → 200. The invariants under test are structural (which sessions
+	# get flipped), not the polling cadence itself.
+	CMA_HARNESS="$harness" CMA_PAYLOAD="$payload" node -e '
+const fs = require("fs");
+const t = fs.readFileSync(process.env.CMA_HARNESS, "utf8");
+let p = process.env.CMA_PAYLOAD;
+p = p.replace("var CMA_INITIAL_DELAY_MS = 5000;", "var CMA_INITIAL_DELAY_MS = 100;");
+p = p.replace("var CMA_POLL_MS = 15000;", "var CMA_POLL_MS = 200;");
+fs.writeFileSync(process.env.CMA_HARNESS, t.replace("__PAYLOAD__", p));
+'
+	local result
+	result="$(node "$harness")"
+	# Extract the last line (the harness may emit info-level logs above).
+	local last
+	last="$(echo "$result" | tail -n 1)"
+	# Assertions:
+	#   - S-flip flipped to true (enforcer did its job).
+	#   - S-arch stayed false ("archUntouched" is the "stayed archived-off" flag = true).
+	#   - S-onon stayed true ("onUntouched" is the "stayed on" flag = true).
+	#   - S-noq stayed false ("noqUntouched" is the "stayed off, i.e. skipped" flag = true).
+	#   - Exactly ONE call to enableRemoteControl (the flip on S-flip).
+	[[ "$last" == '{"flipped":true,"archUntouched":true,"onUntouched":true,"noqUntouched":true,"callCount":1,"called":["flip me"]}' ]]
 }

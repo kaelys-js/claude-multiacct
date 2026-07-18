@@ -128,6 +128,72 @@ We wire BOTH tiers, belt-and-braces:
 
 `claude-multiacct doctor` reports both signals per mirror: the User-tier `remoteControlAtStartup` in `settings.json`, and the Managed-tier `remoteControlAtStartup` in the mirror-prefs plist. Both routes are independent; either alone is sufficient to auto-enable Remote Control at session startup.
 
+## Remote Control runtime enforcement (Chunk Y — 2026-07-18)
+
+Chunk X-A wires Remote Control ON at each session's CREATE event. That leaves a gap: if `remoteControlEnabled` on an already-live session drifts to false — the user hits `/remote-control` off, the deployment mode flaps and the bridge transiently declines, a session is loaded from disk in a pre-Chunk-X-A state — the flag stays drifted until the next quit + relaunch. The user constraint is stronger: Remote Control STAYS ENABLED ALWAYS FOR ALL NON-ARCHIVED SESSIONS ACROSS ALL CLAUDE APPS. Chunk Y closes that gap with a runtime enforcer that polls every 15 seconds and re-flips any non-archived session whose `remoteControlEnabled` is false.
+
+### The IIFE
+
+`lib/asar-patch-clone.sh` injects a second self-contained IIFE (`lib/asar-remote-control-enforcer.inject.js`) into `/.vite/build/index.chunk-BpZff9Dw.js` — the same chunk that hosts the propagation IIFE (§ "Real-time session-state propagation"). Both IIFEs land immediately above the `sourceMappingURL` comment; the injector's anchor invariants require `handleRemoteControlCommand` to occur at least once in the chunk (`_asar_inject_rc_enforcer` fails loud otherwise — a future Claude Desktop restructuring of the class gets surfaced rather than silently shipping a payload that never fires). The IIFE closes lexically over `hs` (the LocalSessionManager singleton) and `o.logger` (electron-log's shared logger writing to `~/Library/Logs/Claude/main.log`).
+
+### Runtime loop
+
+1. **Boot delay.** `CMA_INITIAL_DELAY_MS=5000` — the first pass fires 5 seconds after the IIFE runs. That lets the session-manager finish its `Loaded N persisted sessions from …` initial fill AND lets Chunk X-A's `maybeAutoEnableRemoteControl` fire on any auto-created session before the enforcer touches it, avoiding a redundant duplicate flip.
+2. **Log line on arm.** `o.logger.info("[claude-multiacct-rc-enforcer] armed (poll_ms=15000)")` — visible in `~/Library/Logs/Claude/main.log`.
+3. **Enumerate.** `Array.from(hs.sessions.values())` snapshots the map so a concurrent mutation during an await doesn't invalidate the iterator.
+4. **Per-session logic.** For each session:
+   - `isArchived === true` → skip (archived sessions are user-hidden; enforcing on them would spawn UI-invisible bridge sessions).
+   - `remoteControlEnabled === true` → skip (already correct; clear failure count).
+   - `!session.query` → info-log-once and skip. The session exists on disk but has no active Query — the enforcer cannot send a `subtype:"remote_control"` control-request without one. Chunk X-A's auto-enable path fires when the user sends the first message and creates the Query, so the enforcer waits.
+   - Otherwise → `await hs.handleRemoteControlCommand(session, {auto:true})`. The `auto:true` flag suppresses every synthetic user/assistant/result message, so background enforcement produces no UI chrome. Post-await, re-read `session.remoteControlEnabled`:
+     - `true` → success. Log `re-enabled <sessionId>`, clear failure count.
+     - Still `false` → the internal try/catch in `handleRemoteControlCommand` swallowed a failure (bridge outage, revoked token, deployment mode denial) and reverted state. Increment failure count.
+5. **Backoff.** After 3 consecutive failures for a given sessionId, the enforcer backs off polling that ID for 5 minutes. Logs `backoff <sessionId> for 5min (attempt 3)`. Protects `sessions.anthropic.com` from the enforcer hammering during a genuine service-side degradation.
+6. **Repeat.** `setInterval(..., 15000)` polls indefinitely. `unref()` on the interval handle lets the process exit cleanly if nothing else is holding it open — the enforcer never keeps the main window alive.
+
+### Log shape
+
+Visible in `~/Library/Logs/Claude/main.log` under the `[claude-multiacct-rc-enforcer]` tag:
+
+```
+[info] [claude-multiacct-rc-enforcer] armed (poll_ms=15000)
+[info] [claude-multiacct-rc-enforcer] re-enabled 019721a3-…
+[info] [claude-multiacct-rc-enforcer] skip 019721a3-…: no active query
+[warn] [claude-multiacct-rc-enforcer] no-op 019721a3-… (attempt 1)
+[warn] [claude-multiacct-rc-enforcer] failed 019721a3-…: <err message>
+[warn] [claude-multiacct-rc-enforcer] backoff 019721a3-… for 5min (attempt 3)
+```
+
+### Primary bundle patching
+
+The user constraint applies to ALL non-archived sessions on the PRIMARY account too, not just mirrors. Chunk Y extends `lib/asar-patch-clone.sh` with a `--mode=primary` path that patches `/Applications/Claude.app` in place:
+
+- **Same three JS anchors** as the mirror path: bXt() plist route + propagation IIFE + rc-enforcer IIFE.
+- **Different plist contents.** Mirror mode writes `disableAutoUpdates=YES + remoteControlAtStartup=YES`; primary mode writes ONLY `remoteControlAtStartup=YES`. Silencing Squirrel on the PRIMARY bundle would freeze the primary at its currently-installed version forever — the primary MUST keep receiving Anthropic updates.
+- **Backup.** The first primary-patch run captures `/Applications/Claude.app/Contents/Resources/app.asar.multiacct-backup` — a byte-for-byte copy of Anthropic's pristine asar. `primary-unpatch` restores from that backup, and the launchd Squirrel-refresh agent deletes the backup at each Squirrel-update fire so the FRESH Squirrel-installed pristine gets captured before the next re-patch.
+- **Ad-hoc re-sign.** Both the asar mutation and the Info.plist integrity-hash update invalidate Anthropic's Developer ID signature. Primary-mode runs `codesign --force --deep --sign -` on the whole bundle in place. Rule 12 disclosure: `codesign -dv /Applications/Claude.app` shows `adhoc` instead of `Authority=Developer ID Application: Anthropic, PBC` until the next Squirrel drop-replace restores the original signature.
+- **Squirrel-cycle re-patch.** Squirrel rewrites the primary bundle at the end of every update. `launchd/com.user.claude-primary-patch-refresh.plist.tmpl` installs a WatchPaths agent on `/Applications/Claude.app/Contents/Info.plist`; on the mtime bump Squirrel produces, `bin/claude-primary-patch-refresh.sh` deletes the stale backup (so the fresh Squirrel pristine gets captured), then invokes `claude-multiacct primary-patch`. This runs alongside the existing clone-refresh agent; both share `/tmp/claude-multiacct-refresh.lock` (flock or mkdir fallback) so `primary-patch-refresh` completes BEFORE `clone-refresh`'s ditto captures the primary bundle — the mirrors end up ditto'ing an already-patched primary and their inner asar-patch step no-ops on the idempotency check.
+
+### Rule 12 disclosures (loud)
+
+- **Apple signature invalidation on primary.** `primary-patch` invalidates Anthropic's original Developer ID signature. `codesign -dv /Applications/Claude.app` will show `adhoc`. Squirrel restores the signature on the next drop-replace update.
+- **Squirrel-cycle re-patch pattern.** After every Squirrel update, the primary is briefly UNPATCHED (pristine Anthropic bundle) until the launchd agent fires. Fire happens within seconds of Squirrel's Info.plist write; ThrottleInterval=60 caps the retry cadence.
+- **Backoff on server-side denial.** The enforcer backs off 5 minutes per session after 3 consecutive failures. During a `sessions.anthropic.com` outage, all active sessions get their 3-strike window then quiesce for 5 minutes before retrying — the outage is not amplified.
+- **Primary auto-update remains ENABLED.** The primary's mirror-prefs plist deliberately omits `disableAutoUpdates`. `Oe().autoUpdate.disabled` stays false on the primary; Squirrel polls and installs updates unimpeded.
+
+### Doctor coverage
+
+`claude-multiacct doctor` reports Chunk Y state in three places:
+
+- **launchd agent list.** `com.user.claude-primary-patch-refresh` joins the existing agents in the `launchd_agents` block of both human + JSON output.
+- **Per-mirror asar-patch block.** Each mirror's report gains an `rc-enforcer marker NOT present` warning + `rc-enforcer-missing` issue slug when the injected marker is absent from the packed asar.
+- **Primary bundle block.** A new `primary bundle:` block reports on `/Applications/Claude.app`: backup file, propagation IIFE marker, rc-enforcer IIFE marker, Info.plist ElectronAsarIntegrity hash consistency, and managed-config plist contents. Issue slugs: `primary-asar-patch-missing`, `primary-asar-propagation-missing`, `primary-rc-enforcer-missing`, `primary-asar-integrity-drift`, `primary-plist-missing`, `primary-plist-remote-control-missing`, `primary-plist-auto-updates-disabled`. The last one exists specifically to catch the case where the primary's plist accidentally carries `disableAutoUpdates=YES` — that would freeze the primary at its currently-installed version.
+
+### CLI touchpoints
+
+- `claude-multiacct primary-patch` — invoke the primary-mode patch pipeline manually. Runs during `install` and `repair` too (idempotent); refuses to run while the primary is up (codesign vs. mmap race).
+- `claude-multiacct primary-unpatch` — restore `/Applications/Claude.app`'s asar from the backup, remove the mirror-prefs plist, recompute the integrity hash, ad-hoc re-sign. Called from `uninstall`. Cannot restore Anthropic's original signature — Squirrel drop-replace or a manual reinstall does that.
+
 ## Layered sync (see docs/sync-model.md for detail)
 
 Four layers of state need to move between instances, each with different sharing semantics:
@@ -144,13 +210,15 @@ Layer 5 (Cookies / Preferences / Network Persistent State / Crashpad) is per-ins
 
 ## launchd agents
 
-Three `launchd` `LaunchAgents` back the runtime behaviour:
+Four `launchd` `LaunchAgents` back the runtime behaviour:
 
 1. **`com.user.claude-sessions-sync`** — `WatchPaths` on the primary's `<userData>/Local State`. Chromium rewrites this file on app-close, which fires the agent; it then rsyncs layer-4 stores (IndexedDB / Local Storage / Session Storage) primary → every mirror. Refuses to run if any Claude Desktop process is still up.
 
-2. **`com.user.claude-clone-refresh`** — `WatchPaths` on `/Applications/Claude.app/Contents/Info.plist`. Squirrel writes to this file at update-end; on mtime change the agent invokes `bin/claude-clone-refresh.sh` which rebuilds every mirror's clone.
+2. **`com.user.claude-clone-refresh`** — `WatchPaths` on `/Applications/Claude.app/Contents/Info.plist`. Squirrel writes to this file at update-end; on mtime change the agent invokes `bin/claude-clone-refresh.sh` which rebuilds every mirror's clone. Shares `/tmp/claude-multiacct-refresh.lock` with the primary-patch-refresh agent (below) so its ditto captures an already-patched primary — see § "Primary bundle patching" for the ordering rationale.
 
-3. **`com.user.claude-metadata-symlink`** — `WatchPaths` on every configured mirror's `<userData>/claude-code-sessions/`, `<userData>/local-agent-mode-sessions/`, AND `<userData>/config.json`. The two dirs are pre-created empty at `add-instance` time so the WatchPaths trigger is armed on paths that already exist; the file path only exists once the mirror has been launched at least once. The moment Claude Desktop writes to any of the three, the agent fires; `bin/claude-metadata-watcher.sh` then iterates every mirror and invokes `lib/metadata-symlinks.sh` on it, installing the layer-2 and layer-3 per-account-folder symlinks. UUID resolution is two-tier: `find -L` on the mirror's `<acct>/<org>` (works post-Code-first-use, when Desktop has created the per-account UUID subdir), and a parse of `<userData>/config.json` (works post-OAuth-signin, when Desktop has cached the token but no Code area has been opened yet). The config.json parser reads `lastKnownAccountUuid` and picks the org UUID whose `dxt:allowlistLastUpdated:<orgUuid>` timestamp is newest — that's the currently-active org for accounts belonging to more than one. Already-installed symlinks no-op; mirrors where neither resolution path yields all four UUIDs skip cleanly and get retried on the next fire. ThrottleInterval=15 coalesces Desktop's setup-time write bursts. Skipped entirely (agent uninstalled) when zero mirrors are configured.
+3. **`com.user.claude-primary-patch-refresh`** — `WatchPaths` on the SAME `/Applications/Claude.app/Contents/Info.plist` as clone-refresh. On mtime change (Squirrel drop-replace) invokes `bin/claude-primary-patch-refresh.sh` which deletes the stale multiacct backup, then runs `claude-multiacct primary-patch` to reinject the propagation + rc-enforcer IIFEs into the fresh Squirrel-installed pristine. Acquires the shared refresh lock FIRST so clone-refresh's ditto captures the re-patched primary. Refuses to run while the primary is up (codesign vs. live mmap race); ThrottleInterval=60 caps retry cadence.
+
+4. **`com.user.claude-metadata-symlink`** — `WatchPaths` on every configured mirror's `<userData>/claude-code-sessions/`, `<userData>/local-agent-mode-sessions/`, AND `<userData>/config.json`. The two dirs are pre-created empty at `add-instance` time so the WatchPaths trigger is armed on paths that already exist; the file path only exists once the mirror has been launched at least once. The moment Claude Desktop writes to any of the three, the agent fires; `bin/claude-metadata-watcher.sh` then iterates every mirror and invokes `lib/metadata-symlinks.sh` on it, installing the layer-2 and layer-3 per-account-folder symlinks. UUID resolution is two-tier: `find -L` on the mirror's `<acct>/<org>` (works post-Code-first-use, when Desktop has created the per-account UUID subdir), and a parse of `<userData>/config.json` (works post-OAuth-signin, when Desktop has cached the token but no Code area has been opened yet). The config.json parser reads `lastKnownAccountUuid` and picks the org UUID whose `dxt:allowlistLastUpdated:<orgUuid>` timestamp is newest — that's the currently-active org for accounts belonging to more than one. Already-installed symlinks no-op; mirrors where neither resolution path yields all four UUIDs skip cleanly and get retried on the next fire. ThrottleInterval=15 coalesces Desktop's setup-time write bursts. Skipped entirely (agent uninstalled) when zero mirrors are configured.
 
    On the first pass whose symlinks land on disk for a given mirror, the watcher also writes a sentinel at `<mirror_userData>/.claude-multiacct/symlinks-installed` and — if the mirror process is currently running — quits it via `pkill -TERM -f '--user-data-dir=<mirror_userData>'` (a pattern the primary's argv structurally can't match) and re-launches its `.app` bundle with `open`. Desktop's React sidebar loads the mirror's session dir on app-start and doesn't retroactively pick up symlinks that appear mid-run, so the auto-restart is what makes sessions appear within seconds of OAuth sign-in with no manual quit/relaunch step. Subsequent fires observe the sentinel and skip the restart branch. The graceful-shutdown wait caps at 5s and the watcher explicitly refuses to SIGKILL — Desktop is mid-writing SQLite / LevelDB and a KILL there risks corruption. `lib/uninstall-instance.sh` clears the sentinel dir even under `--keep-userdata` so a re-add + sign-in triggers a fresh auto-restart.
 
