@@ -229,6 +229,20 @@ _asar_update_integrity() {
 # CommandLineTools so we get a validated binary/XML plist rather than a
 # hand-rolled string — Electron's native readPlistValue would reject a
 # malformed plist and silently skip the whole managed tier.
+#
+# Keys written:
+#   - disableAutoUpdates=YES         → suppresses Squirrel auto-poll (Chunk W)
+#   - remoteControlAtStartup=YES     → auto-enables Remote Control bridge on
+#                                      each new session (Chunk X-A)
+#
+# Both flow through the SAME managed-tier machinery: the bundled JS's $Xt()
+# reader iterates the schema keys (from SXt() = [...IW.keys()], where IW is
+# built from every top-level key of the settings schema Nl) and calls
+# `nativeReader.readPlistValue(<plist_path>, <key>)` for each. Because
+# `remoteControlAtStartup` is a top-level `f.boolean().optional()` field in the
+# schema (index.chunk-DqiH2czz.js: SettingsResolver), it appears in IW.keys()
+# with no additional JS anchor patching — SXt() returns it and $Xt() reads it
+# straight from the plist. See docs/architecture.md for the full trace.
 _asar_write_mirror_plist() {
   local plist="$1"
   # `<true/>` is the plist boolean literal. plutil -create produces an
@@ -236,6 +250,8 @@ _asar_write_mirror_plist() {
   plutil -create xml1 "$plist" || cma_die "asar-patch: plutil -create failed for $plist"
   plutil -insert disableAutoUpdates -bool true "$plist" \
     || cma_die "asar-patch: plutil -insert disableAutoUpdates failed for $plist"
+  plutil -insert remoteControlAtStartup -bool true "$plist" \
+    || cma_die "asar-patch: plutil -insert remoteControlAtStartup failed for $plist"
 }
 
 main() {

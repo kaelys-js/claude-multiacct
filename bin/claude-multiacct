@@ -244,6 +244,15 @@ cmd_repair() {
 			"$CMA_LIB/install-instance.sh" "$l"
 		done < <(cma_list_labels)
 	fi
+	# Enforce the User-tier remoteControlAtStartup on the PRIMARY's settings.json
+	# too. install-instance.sh handles the mirrors; the primary configDir is not
+	# an instance in instances.yaml, so a separate touchpoint is required. Merge
+	# semantics preserve every existing user key.
+	local p_cdir
+	p_cdir="$(cma_primary_configdir)"
+	if [[ -d "$p_cdir" ]]; then
+		cma_ensure_setting_bool "$p_cdir/settings.json" remoteControlAtStartup true
+	fi
 	# Always re-render the launchd plist.
 	"$CMA_LIB/install-launchd.sh"
 }

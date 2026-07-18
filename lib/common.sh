@@ -270,3 +270,58 @@ cma_backup_snapshot() {
   cp -R "$src" "$dst/"
   printf '%s\n' "$dst"
 }
+
+# ── Settings.json key enforcement ─────────────────────────────────────────
+#
+# cma_ensure_setting_bool <file> <key> <true|false>
+#
+# Merge a top-level boolean key into a Claude settings.json file, preserving
+# every existing key. Creates a minimal {} if the file is missing. No-op (no
+# write, no mtime bump) when the key already carries the requested value —
+# idempotency here is load-bearing: repair runs on every launchd fire, and a
+# spurious rewrite would churn file mtimes seen by Claude Desktop's own
+# settings-file watchers.
+#
+# Uses python3 (not jq) because this repo deliberately avoids jq — see the
+# comment in lib/discover.sh explaining the historical rationale. python3 is
+# stdlib on every macOS the fleet runs and is already the JSON tool used by
+# lib/install-instance.sh's mirror_claude_json helper.
+#
+# On invalid pre-existing JSON: fails loud (Rule 12). We refuse to silently
+# clobber a corrupted user file — the operator needs to see the problem.
+cma_ensure_setting_bool() {
+  local file="$1" key="$2" value="$3"
+  [[ -n "$file" && -n "$key" ]] || cma_die "cma_ensure_setting_bool: file+key required"
+  [[ "$value" == "true" || "$value" == "false" ]] \
+    || cma_die "cma_ensure_setting_bool: value must be 'true' or 'false' (got '$value')"
+
+  mkdir -p "$(dirname "$file")"
+  if [[ ! -f "$file" ]]; then
+    printf '%s\n' '{}' > "$file"
+    chmod 600 "$file"
+  fi
+
+  CMA_ES_FILE="$file" CMA_ES_KEY="$key" CMA_ES_VALUE="$value" \
+    python3 - << 'PY' || cma_die "cma_ensure_setting_bool: failed to merge $key into $file"
+import json, os, sys
+path = os.environ["CMA_ES_FILE"]
+key = os.environ["CMA_ES_KEY"]
+value = os.environ["CMA_ES_VALUE"] == "true"
+try:
+    with open(path) as f:
+        d = json.load(f)
+except json.JSONDecodeError as e:
+    sys.exit(f"invalid JSON in {path}: {e}")
+if not isinstance(d, dict):
+    sys.exit(f"top-level of {path} is not a JSON object")
+if d.get(key) == value:
+    # Already correct — no write. Preserves mtime, keeps repair idempotent.
+    sys.exit(0)
+d[key] = value
+tmp = path + ".cma.tmp"
+with open(tmp, "w") as f:
+    json.dump(d, f, indent=2)
+    f.write("\n")
+os.replace(tmp, path)
+PY
+}

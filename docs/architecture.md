@@ -93,6 +93,17 @@ The Chunk W task brief referenced auto-enabling a "remote access" toggle on each
 
 Auto-enabling a toggle whose name isn't confirmed would risk flipping the wrong one (e.g. `disableAutoUpdates` OFF, which we JUST enabled). This piece is parked pending user confirmation of the exact toggle name and its UI location — Settings tab? Session menu? Account menu? The infrastructure to enforce a per-mirror boolean is in place (the asar-patch layer + per-mirror plist pattern) and can be extended once the target toggle is identified.
 
+### Chunk X-A — `remoteControlAtStartup` auto-enable (2026-07-18)
+
+The above parking is resolved: `remoteControlAtStartup` — schema-defined as `f.boolean().optional().describe("Start Remote Control bridge automatically each session")` in `index.chunk-DqiH2czz.js` — IS the correct toggle. The SettingsResolver's `j$n(e)` walks the tier list and returns `settings.remoteControlAtStartup` from either the User tier (`<configDir>/settings.json`) or the Managed tier (the per-mirror `Contents/Resources/claude-multiacct-mirror-prefs.plist`), rejecting only Project and ProjectLocal tiers (`M$n = new Set([Ei.Project, Ei.ProjectLocal])`). The Managed tier's macOS-path bypass (`Nht(r)` returns true on darwin) means the mirror-prefs plist is honoured directly.
+
+We wire BOTH tiers, belt-and-braces:
+
+- **User tier** — `lib/install-instance.sh` calls `cma_ensure_setting_bool "<configDir>/settings.json" remoteControlAtStartup true` on every install + repair. The helper merges into an existing settings.json (preserving every other key) and no-ops when the value is already correct. `bin/claude-multiacct cmd_repair` also runs the same helper on the primary's `~/.claude/settings.json`.
+- **Managed tier** — `lib/asar-patch-clone.sh`'s `_asar_write_mirror_plist` inserts both `disableAutoUpdates=YES` and `remoteControlAtStartup=YES` into the per-mirror plist. **No JS anchor patch is needed for the new key**: the managed-tier reader `$Xt()` iterates every schema key (via `SXt() = [...IW.keys()]`, and `IW` is built from `Object.keys(hu.shape)` — every top-level key of the settings schema `Nl`), so a top-level `f.boolean()` field like `remoteControlAtStartup` appears in the read list unpatched. The Chunk W `bXt()` anchor patch is still required (it's what routes `readPlistValue` to our mirror-prefs plist in the first place); the new key just piggybacks on that plumbing.
+
+`claude-multiacct doctor` reports both signals per mirror: the User-tier `remoteControlAtStartup` in `settings.json`, and the Managed-tier `remoteControlAtStartup` in the mirror-prefs plist. Both routes are independent; either alone is sufficient to auto-enable Remote Control at session startup.
+
 ## Layered sync (see docs/sync-model.md for detail)
 
 Four layers of state need to move between instances, each with different sharing semantics:

@@ -486,6 +486,41 @@ process.stdout.write(createHash('sha256').update(raw.headerString).digest('hex')
 	[ "$status" -eq 0 ]
 }
 
+@test "asar-patch: mirror-prefs plist has remoteControlAtStartup=YES (Managed-tier auto-enable — Chunk X-A Part 1c)" {
+	setup_asar_fixture
+	"$CMA" init
+	"$CMA" add-instance "$LABEL" --email test-b@example.com
+	local mirror_plist="$TARGET_APP/Contents/Resources/claude-multiacct-mirror-prefs.plist"
+	# The Managed-tier auto-enable route. SettingsResolver's j$n() iterates
+	# tiers and picks up remoteControlAtStartup from the plist because it's a
+	# top-level f.boolean().optional() field in the schema (index.chunk-DqiH2czz.js)
+	# and thus appears in SXt()'s key list unpatched — no JS anchor patch
+	# needed. The ONLY moving piece here is the plist carrying the extra key.
+	[ -f "$mirror_plist" ]
+	local v
+	v="$(/usr/libexec/PlistBuddy -c 'Print :remoteControlAtStartup' "$mirror_plist")"
+	[ "$v" = "true" ]
+	# `defaults read` is the same command an operator would use to sanity-check
+	# the plist by hand — verifying it also surfaces the key proves the plist
+	# is in a shape Electron's readPlistValue path can consume.
+	local d
+	d="$(defaults read "${mirror_plist%.plist}" remoteControlAtStartup 2>/dev/null)"
+	[ "$d" = "1" ]
+}
+
+@test "asar-patch: mirror-prefs plist still has disableAutoUpdates=YES (belt-and-braces regression guard)" {
+	# The remoteControlAtStartup addition must not disturb the disableAutoUpdates
+	# insert already shipped in Chunk W. A regression here would resurface the
+	# "Failed to check for updates" dialog on every mirror menu-click.
+	setup_asar_fixture
+	"$CMA" init
+	"$CMA" add-instance "$LABEL" --email test-b@example.com
+	local mirror_plist="$TARGET_APP/Contents/Resources/claude-multiacct-mirror-prefs.plist"
+	local v
+	v="$(/usr/libexec/PlistBuddy -c 'Print :disableAutoUpdates' "$mirror_plist")"
+	[ "$v" = "true" ]
+}
+
 @test "asar-patch: fails loud when the bXt() anchor appears zero times (Claude Desktop internals moved)" {
 	setup_asar_fixture
 	# Corrupt the source asar so the anchor is missing. Rebuild it from a staging

@@ -89,6 +89,16 @@ JSON
     cma_ok "wrote $cdir/settings.local.json"
   fi
 
+  # Ensure the User-tier auto-enable key is present. Fires on every install +
+  # repair; merges into an existing settings.json if the user has customised it.
+  # Rationale: the SettingsResolver's j$n() picks up remoteControlAtStartup
+  # from either the User tier (this file) or the Managed tier (the mirror-prefs
+  # plist wired up by asar-patch-clone.sh). We wire BOTH — belt-and-braces —
+  # so a user who edits their settings.json manually still gets Remote Control
+  # auto-enabled at session start, and the Managed-tier route works from the
+  # moment a mirror is built (before any user has edited its settings.json).
+  cma_ensure_setting_bool "$cdir/settings.json" remoteControlAtStartup true
+
   # Shared-via-symlink subpaths — done by metadata-symlinks.sh below.
 
   # ── 2. userData dir (Claude Desktop auto-creates on launch, but pre-create) ──

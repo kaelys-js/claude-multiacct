@@ -81,6 +81,42 @@ check_one() {
       cma_warn "config-dir shared symlinks MISSING: ${missing[*]}"
       issues+=("shared-symlinks-missing:${missing[*]}")
     fi
+
+    # remoteControlAtStartup is written into every mirror's settings.json by
+    # install-instance.sh (User tier) AND into the mirror-prefs plist by
+    # asar-patch-clone.sh (Managed tier). The two tiers are belt-and-braces:
+    # either one on its own is enough for SettingsResolver's j$n() to auto-
+    # enable Remote Control at session start. Doctor reports the User-tier
+    # signal here; the Managed-tier signal is reported in the asar-patch block
+    # further down (mirror-prefs plist check).
+    local settings_file="$cdir/settings.json"
+    if [[ -f "$settings_file" ]]; then
+      local rc_val
+      rc_val="$(python3 -c '
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+    print("true" if d.get("remoteControlAtStartup") is True else "missing")
+except Exception:
+    print("unreadable")
+' "$settings_file" 2> /dev/null)"
+      case "$rc_val" in
+        true)
+          cma_ok "settings.json: remoteControlAtStartup=true (User tier)"
+          ;;
+        missing)
+          cma_warn "settings.json: remoteControlAtStartup MISSING — run \`claude-multiacct repair $label\`"
+          issues+=("remote-control-user-missing")
+          ;;
+        unreadable)
+          cma_warn "settings.json: unreadable JSON at $settings_file"
+          issues+=("settings-json-unreadable")
+          ;;
+      esac
+    else
+      cma_warn "settings.json MISSING at $settings_file"
+      issues+=("settings-json-missing")
+    fi
   else
     cma_warn "configDir missing"
     issues+=("configdir-missing")
@@ -205,10 +241,21 @@ check_one() {
       cma_warn "asar-patch: mirror-prefs plist MISSING at $mirror_plist — auto-updates NOT disabled"
       issues+=("asar-patch-plist-missing")
       patch_ok=0
-    elif ! /usr/libexec/PlistBuddy -c 'Print :disableAutoUpdates' "$mirror_plist" 2> /dev/null | grep -qx true; then
-      cma_warn "asar-patch: mirror-prefs plist present but disableAutoUpdates != true"
-      issues+=("asar-patch-plist-value")
-      patch_ok=0
+    else
+      if ! /usr/libexec/PlistBuddy -c 'Print :disableAutoUpdates' "$mirror_plist" 2> /dev/null | grep -qx true; then
+        cma_warn "asar-patch: mirror-prefs plist present but disableAutoUpdates != true"
+        issues+=("asar-patch-plist-value")
+        patch_ok=0
+      fi
+      # Managed-tier signal for Remote-Control auto-enable. Belt-and-braces
+      # with the User-tier settings.json check emitted earlier in this function;
+      # either tier alone is enough (SettingsResolver.j$n merges tiers) but
+      # doctor surfaces both so an operator can see which routes are wired up.
+      if ! /usr/libexec/PlistBuddy -c 'Print :remoteControlAtStartup' "$mirror_plist" 2> /dev/null | grep -qx true; then
+        cma_warn "asar-patch: mirror-prefs plist missing remoteControlAtStartup=true — Managed-tier auto-enable NOT wired"
+        issues+=("asar-patch-plist-remote-control-missing")
+        patch_ok=0
+      fi
     fi
     if [[ -f "$asar_file" ]] && ! grep -qF 'claude-multiacct-mirror-prefs.plist' "$asar_file" 2> /dev/null; then
       cma_warn "asar-patch: bXt() marker NOT present inside app.asar — Squirrel auto-poll not suppressed"
@@ -216,7 +263,7 @@ check_one() {
       patch_ok=0
     fi
     if [[ $patch_ok -eq 1 ]]; then
-      cma_ok "asar-patch: auto-updates disabled via per-mirror plist"
+      cma_ok "asar-patch: auto-updates disabled + Remote Control auto-enable via per-mirror plist"
     fi
     # Check LaunchServices registration.
     if "$LSREGISTER" -dump 2> /dev/null | grep -F "$app" > /dev/null; then

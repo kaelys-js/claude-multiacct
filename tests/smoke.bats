@@ -600,3 +600,149 @@ print('OK')
 	[ "$status" -eq 0 ]
 	[[ "$output" == *"OK"* ]]
 }
+
+# ── remoteControlAtStartup enforcement (Chunk X-A Part 1b) ───────────────────
+#
+# WHY this block exists (Rule 9): auto-enabling Remote Control at session
+# startup is the load-bearing outcome the User-tier settings.json write is
+# for. SettingsResolver's j$n() reads the flag off either the User tier or
+# the Managed tier and returns it; without the User-tier write, an operator
+# who hasn't got the asar-patch mirror-prefs plist (or a stale one) sees
+# Remote Control stay off. Every assertion here maps to a piece of that fix:
+#
+#     - Fresh install writes the key                → auto-enable ships out of
+#                                                     the box on every new
+#                                                     mirror instance.
+#     - Repair re-enables when a user has flipped it → doctor + repair form a
+#                                                     healing loop; a slip to
+#                                                     false on manual edit is
+#                                                     transient.
+#     - Existing keys are preserved on merge         → a user with permissions
+#                                                     tuned in settings.json
+#                                                     does not lose that on
+#                                                     first install / repair.
+#     - Doctor detects a missing key                 → operator can find drift
+#                                                     without opening the file.
+#     - Idempotent (second run makes no changes)     → repair fires on every
+#                                                     launchd trigger; a stray
+#                                                     rewrite would churn the
+#                                                     file's mtime + trigger
+#                                                     Claude Desktop's own
+#                                                     settings watcher.
+
+@test "install writes remoteControlAtStartup=true into fresh mirror settings.json" {
+	"$CMA" init
+	"$CMA" add-instance b --email test-b@example.com
+	local val
+	val="$(python3 -c "
+import json
+print(json.load(open('$HOME/.claude-b/settings.json')).get('remoteControlAtStartup'))
+")"
+	[ "$val" = "True" ]
+}
+
+@test "repair re-enables remoteControlAtStartup after a manual flip to false" {
+	"$CMA" init
+	"$CMA" add-instance b --email test-b@example.com
+	# User (or a rogue script) toggles the key off. The next repair run must
+	# heal it back to true — that's the guarantee.
+	python3 -c "
+import json
+p='$HOME/.claude-b/settings.json'
+d=json.load(open(p))
+d['remoteControlAtStartup']=False
+json.dump(d, open(p, 'w'), indent=2)
+"
+	"$CMA" repair b
+	local val
+	val="$(python3 -c "
+import json
+print(json.load(open('$HOME/.claude-b/settings.json')).get('remoteControlAtStartup'))
+")"
+	[ "$val" = "True" ]
+}
+
+@test "install merges remoteControlAtStartup into a settings.json with existing keys (preserved)" {
+	"$CMA" init
+	# Simulate a user who has pre-seeded a settings.json with their own tuning
+	# BEFORE add-instance runs — install-instance.sh's "skip if exists" branch
+	# leaves the file alone but the ensure-key step MUST still merge without
+	# clobbering.
+	mkdir -p "$HOME/.claude-b"
+	cat >"$HOME/.claude-b/settings.json" <<'JSON'
+{
+  "permissions": {
+    "allow": ["Bash(*)", "WebFetch"]
+  },
+  "customUserKey": "preserve-me"
+}
+JSON
+	"$CMA" add-instance b --email test-b@example.com
+
+	# Every existing key must survive.
+	local perms custom rc
+	perms="$(python3 -c "
+import json
+d=json.load(open('$HOME/.claude-b/settings.json'))
+print(','.join(d['permissions']['allow']))
+")"
+	custom="$(python3 -c "
+import json
+print(json.load(open('$HOME/.claude-b/settings.json'))['customUserKey'])
+")"
+	rc="$(python3 -c "
+import json
+print(json.load(open('$HOME/.claude-b/settings.json'))['remoteControlAtStartup'])
+")"
+	[ "$perms" = "Bash(*),WebFetch" ]
+	[ "$custom" = "preserve-me" ]
+	[ "$rc" = "True" ]
+}
+
+@test "doctor detects missing remoteControlAtStartup in mirror settings.json" {
+	"$CMA" init
+	"$CMA" add-instance b --email test-b@example.com
+	# Delete the key so doctor sees drift.
+	python3 -c "
+import json
+p='$HOME/.claude-b/settings.json'
+d=json.load(open(p))
+d.pop('remoteControlAtStartup', None)
+json.dump(d, open(p, 'w'), indent=2)
+"
+	run "$CMA" doctor
+	# Doctor is diagnostic — exits 0 even when it surfaces drift.
+	[ "$status" -eq 0 ] || [ "$status" -eq 1 ]
+	[[ "$output" == *"remoteControlAtStartup MISSING"* ]]
+}
+
+@test "install of remoteControlAtStartup is idempotent — second repair leaves settings.json byte-identical" {
+	"$CMA" init
+	"$CMA" add-instance b --email test-b@example.com
+	local hash1
+	hash1="$(shasum -a 256 "$HOME/.claude-b/settings.json" | awk '{print $1}')"
+	"$CMA" repair b
+	local hash2
+	hash2="$(shasum -a 256 "$HOME/.claude-b/settings.json" | awk '{print $1}')"
+	# Byte-identical: the cma_ensure_setting_bool "already correct → no write"
+	# short-circuit is what makes this safe under a launchd-triggered repair
+	# storm (Claude Desktop's own settings watcher would otherwise churn on
+	# every fire).
+	[ "$hash1" = "$hash2" ]
+}
+
+@test "repair enforces remoteControlAtStartup on the PRIMARY configDir settings.json" {
+	"$CMA" init
+	"$CMA" add-instance b --email test-b@example.com
+	# The scratch primary configDir under $HOME/.claude has been created by
+	# setup(); repair must now merge remoteControlAtStartup into its settings.json
+	# too. This covers the primary-writeback branch cmd_repair added.
+	run "$CMA" repair
+	[ "$status" -eq 0 ]
+	local val
+	val="$(python3 -c "
+import json
+print(json.load(open('$HOME/.claude/settings.json')).get('remoteControlAtStartup'))
+")"
+	[ "$val" = "True" ]
+}
