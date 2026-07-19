@@ -458,3 +458,187 @@ SH
 	[[ "$output" != *"primary-dr-not-loose"* ]]
 	[[ "$output" != *"primary-plist-auto-updates-disabled"* ]]
 }
+
+# ── Content-based anchor discovery (survives esbuild's per-build chunk renames)
+#
+# esbuild renames its .vite/build chunks on EVERY Claude Desktop build, so the
+# patch never hardcodes chunk filenames — it discovers targets by CONTENT.
+# These tests build an extract tree with DELIBERATELY renamed chunks (names no
+# hardcode could ever match) and drive the discovery + patch helpers directly:
+#
+#   - Route anchor discovery finds BOTH files carrying it, whatever they're
+#     named — Intent: a chunk rename can't silently drop one of the two bXt()
+#     route patches (which would leave one managed-config path unpatched).
+#   - Singleton discovery finds THE chunk by content and the sourceMappingURL
+#     insertion anchor is DERIVED from that chunk's own terminal line, not a
+#     constant — Intent: the propagation + rc-enforcer IIFEs land in the right
+#     file and keep the sourcemap link terminal after a rename.
+#   - Adversarial: singleton marker in ZERO files, or in TWO files, must die
+#     loud — Intent: a genuine internals change (module removed or split) must
+#     never silently inject into the wrong site or ship dead code.
+
+# Build a fresh .vite/build extract tree with caller-named chunks. Args:
+#   $1 = extract root ; $2 = singleton chunk basename (or "" to skip it) ;
+#   $3 = number of extra files that carry the route anchor (0..2) ;
+#   $4 = "with-sourcemap" | "no-sourcemap" for the singleton chunk.
+# The route anchor also lives inside the singleton chunk in production? No — in
+# production it's separate files, so we keep them separate here too.
+_mk_discovery_tree() {
+	local root="$1" singleton="$2" n_route="$3" smap="$4"
+	local build="$root/.vite/build"
+	rm -rf "$root"
+	mkdir -p "$build"
+	# The bXt() route anchor body — the terminal join is followed by `]`, so the
+	# OLD anchor `…plist")]` occurs exactly once (the earlier join ends `plist"),`).
+	local anchor_body='function bXt(){return[Kt.join("/Library/Managed Preferences","com.anthropic.claudefordesktop.plist"),Kt.join("/Library/Managed Preferences",Lle.userInfo().username,"com.anthropic.claudefordesktop.plist")]}'
+	# Deliberately alien names — no hardcode in lib/ could match these. Proper
+	# `if` (not `[ ] && …`) so the helper always returns 0 even when a branch
+	# is skipped (a trailing false `&&` would fail the caller under bats).
+	if [ "$n_route" -ge 1 ]; then printf '%s\n' "$anchor_body" >"$build/index.chunk-ROUTE1renamed.js"; fi
+	if [ "$n_route" -ge 2 ]; then printf '%s\n' "$anchor_body" >"$build/index.chunk-ROUTE2renamed.js"; fi
+	if [ -n "$singleton" ]; then
+		{
+			printf '// %s — session-manager singleton chunk, alien name.\n' "$singleton"
+			printf 'class G { async handleRemoteControlCommand(e, r) { } }\n'
+			printf 'const hs = { fake: true };\n'
+			printf 'exports.claudeCodeSessionManager=hs;\n'
+			if [ "$smap" = "with-sourcemap" ]; then printf '//# sourceMappingURL=%s.map\n' "$singleton"; fi
+		} >"$build/$singleton"
+	fi
+	return 0
+}
+
+@test "discovery: route-anchor grep finds BOTH renamed files by content (not by name)" {
+	local extract="$BATS_TEST_TMPDIR/disc-route"
+	_mk_discovery_tree "$extract" "index.chunk-ZZsingletonZZ.js" 2 with-sourcemap
+	run bash -c "source '$REPO/lib/asar-patch-clone.sh'; _asar_grep_anchor_files '$extract' \"\$CMA_ASAR_ANCHOR_OLD\""
+	[ "$status" -eq 0 ]
+	# Both alien-named route files appear; neither is a hardcoded name.
+	[[ "$output" == *".vite/build/index.chunk-ROUTE1renamed.js"* ]]
+	[[ "$output" == *".vite/build/index.chunk-ROUTE2renamed.js"* ]]
+	# The singleton chunk does NOT carry the route anchor, so it is NOT listed.
+	[[ "$output" != *"ZZsingletonZZ"* ]]
+	# Exactly two matches.
+	[ "$(printf '%s\n' "$output" | grep -c .)" = "2" ]
+}
+
+@test "discovery: singleton locate finds the renamed chunk by content" {
+	local extract="$BATS_TEST_TMPDIR/disc-single"
+	_mk_discovery_tree "$extract" "index.chunk-ZZsingletonZZ.js" 2 with-sourcemap
+	run bash -c "source '$REPO/lib/asar-patch-clone.sh'; _asar_locate_propagate_file '$extract'"
+	[ "$status" -eq 0 ]
+	[ "$output" = ".vite/build/index.chunk-ZZsingletonZZ.js" ]
+}
+
+@test "discovery: full patch+inject succeeds on renamed chunks, deriving the sourceMappingURL anchor" {
+	local extract="$BATS_TEST_TMPDIR/disc-full"
+	_mk_discovery_tree "$extract" "index.chunk-ZZsingletonZZ.js" 2 with-sourcemap
+	local singleton="$extract/.vite/build/index.chunk-ZZsingletonZZ.js"
+	run bash -c "
+source '$REPO/lib/asar-patch-clone.sh'
+_asar_apply_patches '$extract'
+rel=\"\$(_asar_locate_propagate_file '$extract')\"
+_asar_inject_session_propagation '$extract' \"\$rel\"
+_asar_inject_rc_enforcer '$extract' \"\$rel\"
+"
+	[ "$status" -eq 0 ]
+	# Route patch landed in BOTH renamed route files.
+	grep -qF 'claude-multiacct-mirror-prefs.plist' "$extract/.vite/build/index.chunk-ROUTE1renamed.js"
+	grep -qF 'claude-multiacct-mirror-prefs.plist' "$extract/.vite/build/index.chunk-ROUTE2renamed.js"
+	# Both IIFEs landed in the discovered singleton chunk.
+	grep -qF 'claude-multiacct-session-propagation' "$singleton"
+	grep -qF 'claude-multiacct-rc-enforcer' "$singleton"
+	# DERIVATION correctness: the chunk's OWN terminal sourceMappingURL line
+	# (named after the ALIEN chunk basename) is still the LAST line — proving
+	# both IIFEs were inserted ABOVE the derived anchor, not appended after it.
+	local last
+	last="$(tail -n 1 "$singleton")"
+	[ "$last" = "//# sourceMappingURL=index.chunk-ZZsingletonZZ.js.map" ]
+	# And the injected markers sit ABOVE that sourcemap line.
+	local smap_line prop_line
+	smap_line="$(grep -n 'sourceMappingURL' "$singleton" | tail -1 | cut -d: -f1)"
+	prop_line="$(grep -n 'claude-multiacct-session-propagation' "$singleton" | head -1 | cut -d: -f1)"
+	[ "$prop_line" -lt "$smap_line" ]
+	# The result is still valid JS.
+	node --check "$singleton"
+}
+
+@test "discovery: singleton chunk with NO sourceMappingURL line — IIFEs append at EOF, still valid JS" {
+	local extract="$BATS_TEST_TMPDIR/disc-nosmap"
+	_mk_discovery_tree "$extract" "index.chunk-ZZnosmapZZ.js" 2 no-sourcemap
+	local singleton="$extract/.vite/build/index.chunk-ZZnosmapZZ.js"
+	# Sanity: the fixture truly has no sourcemap line.
+	run ! grep -qF 'sourceMappingURL' "$singleton"
+	run bash -c "
+source '$REPO/lib/asar-patch-clone.sh'
+rel=\"\$(_asar_locate_propagate_file '$extract')\"
+_asar_inject_session_propagation '$extract' \"\$rel\"
+_asar_inject_rc_enforcer '$extract' \"\$rel\"
+"
+	[ "$status" -eq 0 ]
+	grep -qF 'claude-multiacct-session-propagation' "$singleton"
+	grep -qF 'claude-multiacct-rc-enforcer' "$singleton"
+	# EOF-append path produces valid JS (fallback contract of step 3).
+	node --check "$singleton"
+}
+
+@test "discovery: idempotent re-inject on renamed chunk leaves it bit-identical (single IIFE)" {
+	local extract="$BATS_TEST_TMPDIR/disc-idem"
+	_mk_discovery_tree "$extract" "index.chunk-ZZidemZZ.js" 2 with-sourcemap
+	local singleton="$extract/.vite/build/index.chunk-ZZidemZZ.js"
+	run bash -c "
+source '$REPO/lib/asar-patch-clone.sh'
+rel=\"\$(_asar_locate_propagate_file '$extract')\"
+_asar_inject_session_propagation '$extract' \"\$rel\"
+_asar_inject_rc_enforcer '$extract' \"\$rel\"
+"
+	[ "$status" -eq 0 ]
+	local h1
+	h1="$(shasum -a 256 "$singleton" | awk '{print $1}')"
+	# Second pass must be a no-op (idempotency guard fires on the injected marker).
+	run bash -c "
+source '$REPO/lib/asar-patch-clone.sh'
+rel=\"\$(_asar_locate_propagate_file '$extract')\"
+_asar_inject_session_propagation '$extract' \"\$rel\"
+_asar_inject_rc_enforcer '$extract' \"\$rel\"
+"
+	[ "$status" -eq 0 ]
+	local h2
+	h2="$(shasum -a 256 "$singleton" | awk '{print $1}')"
+	[ "$h1" = "$h2" ]
+	# Exactly one of each IIFE — a naive re-inject would double them. Count the
+	# UNIQUE version marker (the rc-enforcer payload legitimately mentions its
+	# own log-tag string on several lines, so the bare slug would over-count).
+	[ "$(grep -cF '/* claude-multiacct-session-propagation v1 */' "$singleton")" = "1" ]
+	[ "$(grep -cF '/* claude-multiacct-rc-enforcer v1 */' "$singleton")" = "1" ]
+}
+
+@test "discovery (adversarial): singleton marker in ZERO files makes the patch die loud" {
+	local extract="$BATS_TEST_TMPDIR/disc-zero"
+	# Route anchors present, but NO singleton chunk at all.
+	_mk_discovery_tree "$extract" "" 2 with-sourcemap
+	run bash -c "source '$REPO/lib/asar-patch-clone.sh'; _asar_locate_propagate_file '$extract'"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"found 0"* ]]
+	[[ "$output" == *"internals changed"* ]]
+}
+
+@test "discovery (adversarial): singleton marker in TWO files makes the patch die loud" {
+	local extract="$BATS_TEST_TMPDIR/disc-two"
+	_mk_discovery_tree "$extract" "index.chunk-ZZoneZZ.js" 2 with-sourcemap
+	# Plant a SECOND file carrying the singleton marker — an ambiguous split.
+	cp "$extract/.vite/build/index.chunk-ZZoneZZ.js" "$extract/.vite/build/index.chunk-ZZtwoZZ.js"
+	run bash -c "source '$REPO/lib/asar-patch-clone.sh'; _asar_locate_propagate_file '$extract'"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"found 2"* ]]
+	[[ "$output" == *"internals changed"* ]]
+}
+
+@test "discovery (adversarial): route anchor in ZERO files makes _asar_apply_patches die loud" {
+	local extract="$BATS_TEST_TMPDIR/disc-noroute"
+	# A singleton chunk exists, but NO file carries the bXt() route anchor.
+	_mk_discovery_tree "$extract" "index.chunk-ZZsingletonZZ.js" 0 with-sourcemap
+	run bash -c "source '$REPO/lib/asar-patch-clone.sh'; _asar_apply_patches '$extract'"
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"route anchor not found"* ]]
+}

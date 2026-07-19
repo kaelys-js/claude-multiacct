@@ -574,8 +574,11 @@ process.stdout.write(createHash('sha256').update(raw.headerString).digest('hex')
 	"$CMA" init
 	run "$CMA" add-instance "$LABEL" --email test-b@example.com
 	# add-instance must have failed loud because the patch script errored out.
+	# With content-based discovery, an anchor present in NEITHER its pristine nor
+	# its already-patched form (no .vite/build/*.js carries it) is reported as a
+	# layout change rather than a per-file count mismatch.
 	[ "$status" -ne 0 ]
-	[[ "$output" == *"expected 1 occurrence of anchor"* ]]
+	[[ "$output" == *"route anchor not found in any .vite/build/*.js file"* ]]
 }
 
 # ── Session-propagation injection (Chunk X-B) ───────────────────────────────
