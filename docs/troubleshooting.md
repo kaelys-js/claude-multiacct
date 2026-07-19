@@ -2,9 +2,21 @@
 
 Symptom → diagnosis → fix. Run `claude-multiacct doctor` first — it walks every layer and reports what's degraded before you dig manually.
 
-## Primary Claude is stock and untouched
+## Primary Claude is patched — UPDATE-SAFELY
 
-This tool NEVER patches `/Applications/Claude.app` — the primary bundle stays stock, Apple-signed, and Squirrel-updatable. If the primary freezes on open, blanks its content, or stops auto-updating, that is NOT something `claude-multiacct` caused; reinstall Claude Desktop from Anthropic to get a clean pristine bundle. (An earlier version did patch the primary in place behind a `primary-patch` subcommand; that path was removed precisely because the ad-hoc re-sign broke the primary's boot + auto-updates.)
+This tool patches `/Applications/Claude.app` in place (via `install`, `repair`, or `claude-multiacct primary-patch`) so the session-propagation + Remote-Control-enforcer IIFEs run on the primary account's sessions too. The patch is **update-safe**: after mutating the asar the bundle is re-signed **inside-out, ad-hoc, with an explicit LOOSE Designated Requirement** —
+
+```text
+designated => anchor apple generic and identifier "com.anthropic.claudefordesktop"
+```
+
+— which has **no team-id pin and no cdhash pin**. An Anthropic-signed Squirrel update satisfies that DR (`codesign --verify -R` returns 0 against the download), so Squirrel keeps validating and applying updates while the app stays patched. The `com.user.claude-primary-patch-refresh` launchd agent re-applies the patch after each Squirrel drop.
+
+This is deliberately NOT the old broken behaviour: an earlier iteration re-signed the primary ad-hoc with `codesign --deep` and no explicit requirement, which pinned the DR to a per-build cdhash. Anthropic's next update no longer satisfied that DR, so Squirrel refused to apply it and the primary froze. The fix is the loose DR + inside-out signing (never `--deep`).
+
+- **Restore the stock bundle:** `claude-multiacct primary-unpatch` restores both `app.asar` and `app.asar.unpacked` from the multiacct backups (the native `.node` modules are never lost) and removes the managed-config plist. Anthropic's original Developer ID signature returns on the next Squirrel drop or a manual reinstall.
+- **Verify update-capability:** `claude-multiacct doctor` reports whether the primary presents the loose DR and is update-capable.
+- If the primary freezes / blanks / stops updating, run `claude-multiacct doctor`; if the DR line is not the loose one, re-run `claude-multiacct primary-patch`, or `primary-unpatch` and reinstall Claude Desktop for a clean pristine bundle.
 
 ## Dock icon click does nothing (no window, no error)
 

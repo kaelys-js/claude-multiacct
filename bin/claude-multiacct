@@ -13,6 +13,21 @@
 #   refresh-clones                    rebuild every mirror clone from the current
 #                                     /Applications/Claude.app (fires automatically
 #                                     via WatchPaths on Squirrel update)
+#   primary-patch                     patch /Applications/Claude.app in place —
+#                                     inject the propagation + rc-enforcer IIFEs +
+#                                     managed-config plist route, then re-sign
+#                                     inside-out ad-hoc with an EXPLICIT LOOSE
+#                                     Designated Requirement (no team pin). That
+#                                     DR is satisfied by any Anthropic-signed
+#                                     build, so Squirrel keeps applying updates
+#                                     (UPDATE-SAFE). The primary-patch-refresh
+#                                     launchd agent re-applies after each drop.
+#   primary-unpatch                   restore /Applications/Claude.app's app.asar
+#                                     AND app.asar.unpacked from the multiacct
+#                                     backups + remove the mirror-prefs plist,
+#                                     then re-sign with the loose DR. Apple's
+#                                     Developer ID signature returns on the next
+#                                     Squirrel drop or a manual reinstall.
 #   sync-now                          manually trigger primary → mirrors sync
 #   sync-log [--tail]                 print the sessions-sync log (--tail follows it)
 #   exec <label> [--] <cmd> [args…]   run <cmd> with CLAUDE_CONFIG_DIR +
@@ -55,6 +70,8 @@ usage:
   claude-multiacct list [--tsv]
   claude-multiacct repair [<label>]
   claude-multiacct refresh-clones
+  claude-multiacct primary-patch
+  claude-multiacct primary-unpatch
   claude-multiacct sync-now
   claude-multiacct sync-log [--tail]
   claude-multiacct exec <label> [--] <cmd> [args…]
@@ -93,9 +110,26 @@ cmd_install() {
 	ln -s "$self" "$CMA_INSTALL_TARGET"
 	cma_ok "linked $CMA_INSTALL_TARGET → $self"
 	cma_dim "  ensure ~/.local/bin is on your PATH"
-	# NOTE: install DELIBERATELY never touches /Applications/Claude.app. The
-	# primary bundle stays stock, Apple-signed, and Squirrel-updatable — the
-	# tool only ever patches the per-instance mirror clones (build-clone-app).
+
+	# Patch the primary /Applications/Claude.app so the propagation +
+	# rc-enforcer IIFEs are active on the primary account's sessions too. The
+	# UPDATE-SAFE loose-DR re-sign keeps the primary Squirrel-updatable, so
+	# this is no longer the freeze-inducing in-place patch of the old
+	# regression. `cmd_primary_patch` is idempotent (no-op when the markers
+	# are already present), safe to fire on every `install`.
+	#
+	# Skipped when the primary bundle is missing (fresh machine without Claude
+	# Desktop) or currently running (would race codesign). Both are surfaced.
+	if [[ ! -d "$CMA_SOURCE_CLAUDE_APP" ]]; then
+		cma_warn "install: primary Claude.app missing at $CMA_SOURCE_CLAUDE_APP — skipping primary-patch (install Claude Desktop, then run \`claude-multiacct primary-patch\`)"
+		return 0
+	fi
+	# shellcheck disable=SC2310  # deliberate: predicate consumed as if-condition (set -e off inside is intentional)
+	if cma_primary_claude_running; then
+		cma_warn "install: primary Claude Desktop is running; quit it and run \`claude-multiacct primary-patch\` to activate the rc-enforcer on the primary"
+		return 0
+	fi
+	cmd_primary_patch
 }
 
 cmd_uninstall() {
@@ -112,6 +146,21 @@ cmd_uninstall() {
 	existing="$(readlink "$CMA_INSTALL_TARGET")"
 	if [[ "$existing" != "$self" ]]; then
 		cma_die "uninstall: $CMA_INSTALL_TARGET points at $existing, not this repo — refusing to remove"
+	fi
+
+	# Restore /Applications/Claude.app to pristine BEFORE removing the CLI
+	# symlink. Otherwise a user who runs `uninstall` and then removes the repo
+	# checkout would be left with a patched primary and no easy path back. If
+	# unpatch fails (no backup, primary running, etc.), surface it and refuse
+	# to proceed — the CLI symlink stays so the operator can retry after fixing
+	# the blocker.
+	if [[ -d "$CMA_SOURCE_CLAUDE_APP" ]] &&
+		[[ -f "$CMA_SOURCE_CLAUDE_APP/Contents/Resources/app.asar.multiacct-backup" ]]; then
+		# shellcheck disable=SC2310  # deliberate: predicate consumed as if-condition (set -e off inside is intentional)
+		if cma_primary_claude_running; then
+			cma_die "uninstall: primary Claude Desktop is running; quit it and retry"
+		fi
+		cmd_primary_unpatch
 	fi
 
 	rm -f "$CMA_INSTALL_TARGET"
@@ -264,6 +313,22 @@ cmd_repair() {
 		cma_ensure_setting_bool "$p_cdir/settings.json" remoteControlAtStartup true
 	fi
 
+	# Re-patch the primary /Applications/Claude.app if the multiacct-owned
+	# markers have drifted (a Squirrel drop replaced our patch with a fresh
+	# pristine, or the asar hash rotated). `cmd_primary_patch` is idempotent —
+	# a rerun over an already-patched primary is a no-op. Skip when the primary
+	# is missing or running (both cma_dim'd, not fatal, so repair still succeeds).
+	if [[ ! -d "$CMA_SOURCE_CLAUDE_APP" ]]; then
+		cma_dim "  = repair: primary Claude.app missing at $CMA_SOURCE_CLAUDE_APP — skipping primary-patch"
+	else
+		# shellcheck disable=SC2310
+		if cma_primary_claude_running; then
+			cma_dim "  = repair: primary Claude Desktop is running — skipping primary-patch (quit and re-run to include)"
+		else
+			cmd_primary_patch
+		fi
+	fi
+
 	# Always re-render the launchd plist.
 	"$CMA_LIB/install-launchd.sh"
 }
@@ -336,6 +401,66 @@ cmd_refresh_clones() {
 		cma_warn "refresh-clones finished with errors — see $log"
 	fi
 	return "$rc"
+}
+
+# cmd_primary_patch — patch /Applications/Claude.app in place. Applies the
+# propagation + rc-enforcer IIFEs + managed-config plist route to the primary
+# bundle, then re-signs it inside-out ad-hoc with the LOOSE Designated
+# Requirement so the primary stays Squirrel-updatable. Idempotent — a rerun
+# over an already-patched bundle is a no-op (asar-patch-clone.sh detects each
+# marker + skips its rewrite; the re-sign is cheap).
+#
+# Rule 12 disclosures (surfaced to stderr, visible on both interactive
+# invocation AND launchd log output):
+#   - The ad-hoc loose-DR re-signature replaces Anthropic's Developer ID
+#     signature. UNLIKE the old cdhash-DR regression, the primary stays
+#     update-capable: the loose DR is satisfied by any Anthropic-signed build,
+#     so Squirrel keeps validating + applying updates. Each Squirrel drop
+#     restores a fresh Anthropic-signed bundle, which the primary-patch-refresh
+#     agent then re-patches.
+#
+# Refuses to run while the primary Claude Desktop process is up — an in-place
+# re-sign races the live bundle's mmap'd Contents/Frameworks and would produce
+# a partially-signed bundle. The guard matches ONLY the primary (not mirrors).
+cmd_primary_patch() {
+	local src="$CMA_SOURCE_CLAUDE_APP"
+	[[ -d "$src" ]] || cma_die "primary-patch: primary Claude.app missing at $src (override with CMA_SOURCE_CLAUDE_APP)"
+
+	# shellcheck disable=SC2310  # deliberate: predicate consumed as if-condition (set -e off inside is intentional)
+	if cma_primary_claude_running; then
+		cma_die "primary-patch: primary Claude Desktop is running; quit it and retry (Cmd+Q, or \`pkill -TERM -f '/Applications/Claude.app/Contents/MacOS/Claude'\`)"
+	fi
+
+	cma_say "primary-patch: patching $src (asar + propagation IIFE + rc-enforcer IIFE + managed-config plist + loose-DR re-sign)"
+	cma_warn "primary-patch: replaces Apple's signature with an ad-hoc loose-DR one — the primary stays Squirrel-updatable; Apple's Developer ID returns on the next Squirrel drop"
+	"$CMA_LIB/asar-patch-clone.sh" --mode=primary primary "$src"
+
+	# The plist route also needs User-tier remoteControlAtStartup=true on the
+	# primary's configDir. cmd_repair does this for post-install runs;
+	# duplicating it here means an operator who runs `primary-patch` in
+	# isolation still gets the belt-and-braces wiring.
+	local p_cdir
+	p_cdir="$(cma_primary_configdir)"
+	if [[ -d "$p_cdir" ]]; then
+		cma_ensure_setting_bool "$p_cdir/settings.json" remoteControlAtStartup true
+	fi
+
+	cma_ok "primary patched; launch primary Claude Desktop to see the enforcer arm at [claude-multiacct-rc-enforcer]"
+}
+
+cmd_primary_unpatch() {
+	local src="$CMA_SOURCE_CLAUDE_APP"
+	[[ -d "$src" ]] || cma_die "primary-unpatch: primary Claude.app missing at $src"
+
+	# Same running-guard as primary-patch — re-sign vs. live mmap race.
+	# shellcheck disable=SC2310  # deliberate: predicate consumed as if-condition (set -e off inside is intentional)
+	if cma_primary_claude_running; then
+		cma_die "primary-unpatch: primary Claude Desktop is running; quit it and retry"
+	fi
+
+	cma_say "primary-unpatch: restoring $src (app.asar + app.asar.unpacked) from multiacct backups"
+	"$CMA_LIB/asar-patch-clone.sh" --mode=primary --unpatch primary "$src"
+	cma_ok "primary unpatched; propagation + rc-enforcer no longer active on primary until next \`primary-patch\`"
 }
 
 # sync-log — QoL wrapper over `cat` / `tail -f` on the sync worker's log file.
@@ -461,9 +586,9 @@ cmd_doctor() {
 		return 1
 	fi
 
-	# Launchd agent state. All three agents get the same treatment.
+	# Launchd agent state. All four agents get the same treatment.
 	local label
-	for label in com.user.claude-sessions-sync com.user.claude-clone-refresh com.user.claude-metadata-symlink; do
+	for label in com.user.claude-sessions-sync com.user.claude-clone-refresh com.user.claude-primary-patch-refresh com.user.claude-metadata-symlink; do
 		if launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; then
 			cma_ok "launchd agent $label loaded"
 			launchctl print "gui/$(id -u)/$label" 2>/dev/null | grep -E 'state|last exit code|watch paths' | sed 's/^/  /' >&2 || true
@@ -523,7 +648,7 @@ _cmd_doctor_json() {
 	# Launchd agent states.
 	local ld_json="{"
 	local first=1 label state
-	for label in com.user.claude-sessions-sync com.user.claude-clone-refresh com.user.claude-metadata-symlink; do
+	for label in com.user.claude-sessions-sync com.user.claude-clone-refresh com.user.claude-primary-patch-refresh com.user.claude-metadata-symlink; do
 		state="not-loaded"
 		if launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; then
 			state="loaded"
@@ -534,18 +659,35 @@ _cmd_doctor_json() {
 	done
 	ld_json+="}"
 
-	# Instances — discover.sh --json emits a bare JSON array of mirror objects.
-	# Embed it directly under the "instances" key. Only run discover when a
-	# config file exists (no mirrors to report otherwise); default to an empty
-	# array so the shape is stable for cross-mac diffing.
-	local instances_json="[]" discover_json
-	if [[ -f "$CMA_CONFIG_FILE" ]]; then
-		discover_json="$("$CMA_LIB/discover.sh" --json 2>/dev/null)"
+	# Instances + primary — discover.sh --json emits the
+	# {"primary":{…}|null,"instances":[…]} shape. Split it into the two halves
+	# and stitch both into the doctor JSON so the top-level shape is
+	# {"repo","config","logs","backups","launchd_agents","primary","instances"}.
+	# discover.sh runs regardless of config (it always reports primary state);
+	# python3 (stdlib on macOS) round-trips the trusted JSON losslessly.
+	local instances_json="[]" primary_json="null" discover_json
+	discover_json="$("$CMA_LIB/discover.sh" --json 2>/dev/null || true)"
+	if [[ -n "${discover_json:-}" ]]; then
+		primary_json="$(printf '%s' "$discover_json" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    print(json.dumps(d.get("primary")))
+except Exception:
+    print("null")
+' 2>/dev/null || printf 'null')"
+		instances_json="$(printf '%s' "$discover_json" | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    print(json.dumps(d.get("instances", [])))
+except Exception:
+    print("[]")
+' 2>/dev/null || printf '[]')"
 	fi
-	[[ -n "${discover_json:-}" ]] && instances_json="$discover_json"
 
-	printf '{"repo":"%s","config":"%s","logs":"%s","backups":"%s","launchd_agents":%s,"instances":%s}\n' \
-		"$repo" "$cfg" "$logs" "$backups" "$ld_json" "$instances_json"
+	printf '{"repo":"%s","config":"%s","logs":"%s","backups":"%s","launchd_agents":%s,"primary":%s,"instances":%s}\n' \
+		"$repo" "$cfg" "$logs" "$backups" "$ld_json" "$primary_json" "$instances_json"
 }
 
 cmd_qa() {
@@ -761,6 +903,8 @@ main() {
 	list) cmd_list "$@" ;;
 	repair) cmd_repair "$@" ;;
 	refresh-clones) cmd_refresh_clones "$@" ;;
+	primary-patch) cmd_primary_patch "$@" ;;
+	primary-unpatch) cmd_primary_unpatch "$@" ;;
 	sync-now) cmd_sync_now "$@" ;;
 	sync-log) cmd_sync_log "$@" ;;
 	exec) cmd_exec "$@" ;;

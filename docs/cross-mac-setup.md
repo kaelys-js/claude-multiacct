@@ -64,7 +64,8 @@ What the JSON contains and what each field means for the diff:
 | `repo` | NO (per-Mac path) | Each Mac's clone lives at a different path. |
 | `config` | NO (per-Mac path) | Same — `$HOME` differs. |
 | `logs`, `backups` | NO (per-Mac path) | Same. |
-| `launchd_agents` | YES — all three `loaded` | The three agents (`sessions-sync`, `clone-refresh`, `metadata-symlink`) MUST be `loaded` on any Mac running mirrors. If one shows `not-loaded`, run `claude-multiacct repair` on that Mac. |
+| `launchd_agents` | YES — all four `loaded` | The four agents (`sessions-sync`, `clone-refresh`, `primary-patch-refresh`, `metadata-symlink`) MUST be `loaded` on any Mac running mirrors. If one shows `not-loaded`, run `claude-multiacct repair` on that Mac. |
+| `primary` | YES — `health: ok` on both | Primary-bundle diagnostics (object, or `null` when `/Applications/Claude.app` is absent). `health: ok` means the primary is patched, presents the loose Designated Requirement (update-capable), and its asar-integrity hash matches. A `degraded` primary lists slugs like `primary-dr-not-loose` in `primary.issues` — re-run `claude-multiacct primary-patch`. |
 | `instances[].label` | YES | Same label set on both Macs proves the same mirror inventory. |
 | `instances[].email` | YES | Same email per label proves each mirror is signed into the same account. |
 | `instances[].configDir` / `.userData` | NO (per-Mac path) | Absolute paths under `$HOME`. |

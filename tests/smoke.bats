@@ -234,42 +234,52 @@ BIN
 	[ "$(readlink "$HOME/.local/bin/claude-multiacct")" = "/usr/bin/true" ]
 }
 
-# ── the primary /Applications/Claude.app is NEVER patched ─────────────────────
-# WHY (Rule 9): the in-place primary patch (ad-hoc re-sign + asar rewrite)
-# broke the primary — freeze / blank content / dead auto-updates. These tests
-# lock in the removal: `install` must leave the source bundle byte-identical
-# (no backup, no mirror-prefs plist, no ad-hoc _CodeSignature), and the
-# primary-patch / primary-unpatch subcommands must be gone. A regression that
-# reintroduces primary patching fails at least one of these.
+# ── primary /Applications/Claude.app patching (UPDATE-SAFE) ───────────────────
+# WHY (Rule 9): the primary IS patched now, but update-safely — the loose-DR
+# inside-out re-sign keeps Squirrel updates valid (the old cdhash-DR regression
+# is what froze the primary). Full patch coverage lives in primary-patch.bats
+# (which uses a fixture WITH an app.asar). These smoke tests lock in two
+# lighter invariants: (1) `install` fires primary-patch but NO-OPS on a bundle
+# that has no app.asar (this smoke fixture) — so the bundle is left untouched
+# and install still succeeds; (2) the primary-patch / primary-unpatch
+# subcommands are WIRED (dispatched, not "unknown subcommand").
 
-@test "install never writes to or codesigns the primary Claude.app" {
-	# Snapshot the source bundle's full content before install…
+@test "install fires primary-patch but no-ops on a bundle with no app.asar" {
+	# This smoke fixture's fake Claude.app has no app.asar, so primary-patch's
+	# asar pipeline returns early and the bundle stays byte-identical. install
+	# must still succeed (the missing-asar branch is fail-soft).
 	local before after
 	before="$(cd "$CMA_SOURCE_CLAUDE_APP" && find . -type f -exec shasum {} + | sort)"
 	run "$CMA" install
 	[ "$status" -eq 0 ]
-	# …and assert it is byte-identical afterwards (no in-place mutation).
 	after="$(cd "$CMA_SOURCE_CLAUDE_APP" && find . -type f -exec shasum {} + | sort)"
 	[ "$before" = "$after" ]
-	# None of the primary-patch artifacts may exist on the primary bundle.
+	# No patch artifacts, because there was no asar to patch.
 	[ ! -e "$CMA_SOURCE_CLAUDE_APP/Contents/Resources/app.asar.multiacct-backup" ]
 	[ ! -e "$CMA_SOURCE_CLAUDE_APP/Contents/Resources/claude-multiacct-mirror-prefs.plist" ]
-	[ ! -d "$CMA_SOURCE_CLAUDE_APP/Contents/_CodeSignature" ]
 }
 
-@test "primary-patch and primary-unpatch subcommands no longer exist" {
+@test "primary-patch and primary-unpatch subcommands are wired (not unknown)" {
+	# primary-patch on a no-asar bundle is a successful no-op (dispatched, not
+	# "unknown subcommand").
 	run "$CMA" primary-patch
-	[ "$status" -ne 0 ]
-	[[ "$output" == *"unknown subcommand"* ]]
+	[ "$status" -eq 0 ]
+	[[ "$output" != *"unknown subcommand"* ]]
+	# primary-unpatch with no backup fails with a primary-specific message —
+	# again proving it is dispatched, not an unknown subcommand.
 	run "$CMA" primary-unpatch
 	[ "$status" -ne 0 ]
-	[[ "$output" == *"unknown subcommand"* ]]
+	[[ "$output" != *"unknown subcommand"* ]]
+	[[ "$output" == *"no backup"* ]] || [[ "$output" == *"never patched"* ]]
 }
 
-@test "install-launchd renders exactly 3 agents (no primary-patch-refresh)" {
+@test "install-launchd renders exactly 4 agents (incl primary-patch-refresh)" {
 	# Under a stubbed launchctl (real one fails in a scratch $HOME) with the
-	# hermetic skip lifted, install-launchd must render exactly the three
-	# runtime agents — the primary-patch-refresh agent is gone.
+	# hermetic skip lifted, install-launchd must render exactly the four
+	# runtime agents — sessions-sync, clone-refresh, primary-patch-refresh,
+	# and metadata-symlink. The primary-patch-refresh agent re-applies the
+	# primary patch after each Squirrel drop (updates now apply thanks to the
+	# loose-DR re-sign), so it is load-bearing and must be present.
 	"$CMA" init
 	"$CMA" add-instance b --email test-b@example.com
 	local stub="$BATS_TEST_TMPDIR/stub-bin"
@@ -281,11 +291,11 @@ BIN
 	local agents="$HOME/Library/LaunchAgents"
 	[ -f "$agents/com.user.claude-sessions-sync.plist" ]
 	[ -f "$agents/com.user.claude-clone-refresh.plist" ]
+	[ -f "$agents/com.user.claude-primary-patch-refresh.plist" ]
 	[ -f "$agents/com.user.claude-metadata-symlink.plist" ]
-	[ ! -e "$agents/com.user.claude-primary-patch-refresh.plist" ]
 	local count
 	count="$(find "$agents" -name 'com.user.claude-*.plist' | wc -l | tr -d ' ')"
-	[ "$count" = "3" ]
+	[ "$count" = "4" ]
 }
 
 @test "repair <label> re-runs install for existing instance" {
@@ -617,10 +627,10 @@ SH
 	run "$CMA" doctor --json
 	[ "$status" -eq 0 ]
 	# Use python (available on every macOS by default) to parse — proves the
-	# output is real JSON, not just braces-and-strings. The doctor JSON must NOT
-	# carry a top-level `primary` key: the tool no longer inspects/patches the
-	# primary bundle, and `instances` is a plain array of mirror objects.
-	python3 -c "import json,sys; d=json.loads('''$output'''); assert 'repo' in d and 'config' in d and 'launchd_agents' in d and 'instances' in d; assert 'primary' not in d, d.keys(); assert isinstance(d['instances'], list); sys.exit(0)"
+	# output is real JSON, not just braces-and-strings. The doctor JSON carries
+	# a top-level `primary` key (primary bundle diagnostics) alongside the
+	# `instances` array of mirror objects. `primary` is an object or null.
+	python3 -c "import json,sys; d=json.loads('''$output'''); assert 'repo' in d and 'config' in d and 'launchd_agents' in d and 'instances' in d and 'primary' in d, d.keys(); assert isinstance(d['instances'], list); assert d['primary'] is None or isinstance(d['primary'], dict); sys.exit(0)"
 }
 
 @test "doctor --json includes each configured instance" {

@@ -1,16 +1,53 @@
 #!/usr/bin/env bash
-# lib/asar-patch-clone.sh — patch a MIRROR clone's app.asar so the
+# lib/asar-patch-clone.sh — patch a Claude Desktop bundle's app.asar so the
 # managed-config reader picks up a per-bundle plist AND so runtime IIFEs
 # inject session-propagation (Chunk X-B) + Remote-Control enforcement
-# (Chunk Y) — plus so Squirrel treats the bundle as "auto-updates disabled by
-# admin" instead of firing an update check that fails Designated-Requirement
-# verification against a bundle Anthropic didn't sign.
+# (Chunk Y) — plus, in mirror mode, so Squirrel treats the bundle as
+# "auto-updates disabled by admin" instead of firing an update check that
+# fails Designated-Requirement verification against a bundle Anthropic didn't
+# sign.
 #
-# SCOPE: this script ONLY ever patches per-instance mirror clones (invoked by
-# build-clone-app.sh). It NEVER touches the primary /Applications/Claude.app —
-# the primary is left stock, Apple-signed, and Squirrel-updatable. Patching the
-# primary in place (ad-hoc re-sign + in-place asar rewrite) froze the primary
-# and broke its auto-updates, so that path was removed.
+# Modes (--mode):
+#   - mirror (default) — per-instance mirror clone (invoked by
+#                        build-clone-app.sh). Writes `disableAutoUpdates=YES`
+#                        into the per-bundle plist so Squirrel is silenced (a
+#                        mirror is not Anthropic-signed; an update check would
+#                        fail DR verification). build-clone-app.sh ad-hoc
+#                        re-signs the whole clone afterwards.
+#   - primary          — the primary /Applications/Claude.app, patched IN
+#                        PLACE and re-signed UPDATE-SAFELY (see below). OMITS
+#                        `disableAutoUpdates` from the plist so Squirrel keeps
+#                        running and applying upstream updates.
+#
+# UPDATE-SAFE primary re-sign (the mechanism, empirically validated on-device):
+#   Squirrel/ShipIt validates a downloaded update against the RUNNING app's
+#   Designated Requirement (DR). The stock DR pins Anthropic's team
+#   (Q6L2SF6YDW). An ad-hoc cdhash DR (the old broken behaviour, `codesign
+#   --sign -` with no explicit requirement) makes the DR a per-build cdhash
+#   pin — an Anthropic-signed update no longer satisfies it, so Squirrel
+#   refuses to apply updates and the primary froze.
+#
+#   The fix: re-sign with an EXPLICIT LOOSE DR that has NO team pin:
+#       designated => anchor apple generic and identifier "com.anthropic.claudefordesktop"
+#   An Anthropic-signed update (Developer ID, anchor apple generic, same
+#   identifier) SATISFIES that DR, so `codesign --verify -R <dr>` returns 0 and
+#   Squirrel applies the update while the patched app keeps running. Ad-hoc
+#   signing (`--sign -`) can set this DR with no cert.
+#
+#   CAVEAT: `codesign --deep` ad-hoc leaves "nested code is modified or
+#   invalid". We therefore sign INSIDE-OUT — each nested Mach-O bundle
+#   (Squirrel/Electron frameworks, every Helper .app incl. (Renderer)/(GPU)/
+#   (Plugin)) first, then the outer app LAST — each with `--options runtime`,
+#   the loose DR via `--requirements`, and its own preserved entitlements.
+#   NOT `--deep`. See _asar_resign_primary_inside_out below.
+#
+# SCOPE: mirror mode is invoked by build-clone-app.sh on every clone build.
+# Primary mode is invoked only via `claude-multiacct primary-patch` (+ the
+# primary-patch-refresh launchd agent after each Squirrel update). Rule 12
+# disclosure: primary mode replaces Anthropic's Developer ID signature with an
+# ad-hoc loose-DR one — the app stays update-capable (its DR is satisfied by
+# any anchor-apple-generic + identifier build), and each Squirrel drop restores
+# a fresh Anthropic-signed bundle which the refresh agent then re-patches.
 #
 # The mechanism (design docs/architecture.md):
 #   1. Claude Desktop's managed-config reader iterates a list of plist paths
@@ -58,7 +95,10 @@
 # by rm -rf'ing the half-written clone.
 #
 # Usage:
-#   asar-patch-clone.sh <label> <appBundle>
+#   asar-patch-clone.sh <label> <appBundle>              # mirror (default)
+#   asar-patch-clone.sh --mode=mirror  <label> <appBundle>
+#   asar-patch-clone.sh --mode=primary primary <appBundle>
+#   asar-patch-clone.sh --mode=primary --unpatch primary <appBundle>
 
 set -euo pipefail
 
@@ -78,6 +118,26 @@ CMA_ASAR_ANCHOR_FILES=(
 # Path inside the clone where the per-mirror managed-prefs plist lives. Read
 # by the bXt() append via `process.resourcesPath+"/..."`.
 CMA_MIRROR_PLIST_BASENAME="claude-multiacct-mirror-prefs.plist"
+
+# ── Primary update-safe re-sign (loose DR) ─────────────────────────────────
+#
+# The EXACT Designated Requirement text written to the requirements file and
+# passed to `codesign --requirements`. It pins ONLY Anthropic's bundle
+# identifier under an Apple-anchored generic chain — NO team-id (Q6L2SF6YDW)
+# and NO cdhash. An Anthropic-signed Squirrel update (Developer ID: anchor
+# apple generic, identifier com.anthropic.claudefordesktop) SATISFIES this DR,
+# so `codesign --verify -R` returns 0 against the update and ShipIt applies it.
+# This string is asserted verbatim by tests/primary-patch.bats — do NOT add a
+# team pin or a cdhash here or update-capability is lost.
+CMA_PRIMARY_LOOSE_DR='designated => anchor apple generic and identifier "com.anthropic.claudefordesktop"'
+
+# Primary-mode pristine snapshots. The FULL patch surface Squirrel restores to
+# pristine on an update is app.asar + app.asar.unpacked (the native-module
+# tree Electron dlopens .node from). unpatch MUST restore BOTH — restoring
+# only app.asar (the old broken behaviour) deleted app.asar.unpacked and
+# blanked the app. Both live under Contents/Resources next to the originals.
+CMA_PRIMARY_ASAR_BACKUP="app.asar.multiacct-backup"
+CMA_PRIMARY_UNPACKED_BACKUP="app.asar.unpacked.multiacct-backup"
 
 # ── Session-propagation anchor (Chunk X-B) ────────────────────────────────
 #
@@ -466,11 +526,13 @@ fs.writeFileSync(t, merged);
 #
 # Keys written:
 #   - disableAutoUpdates=YES         → suppresses Squirrel auto-poll (Chunk W).
-#                                      Mirror clones are not Anthropic-signed,
-#                                      so a Squirrel update check would fail
-#                                      Designated-Requirement verification; we
-#                                      silence it. (The primary is never
-#                                      patched, so its Squirrel stays enabled.)
+#                                      MIRROR MODE ONLY — mirror clones are not
+#                                      Anthropic-signed, so a Squirrel update
+#                                      check would fail Designated-Requirement
+#                                      verification; we silence it. The PRIMARY
+#                                      deliberately OMITS this key so Squirrel
+#                                      keeps applying upstream updates (the
+#                                      loose-DR re-sign keeps updates valid).
 #   - remoteControlAtStartup=YES     → auto-enables Remote Control bridge on
 #                                      each new session (Chunk X-A). The Chunk Y
 #                                      enforcer catches subsequent drift but
@@ -488,21 +550,288 @@ fs.writeFileSync(t, merged);
 # with no additional JS anchor patching — SXt() returns it and $Xt() reads it
 # straight from the plist. See docs/architecture.md for the full trace.
 _asar_write_mirror_plist() {
-  local plist="$1"
+  local plist="$1" mode="${2:-mirror}"
   # `<true/>` is the plist boolean literal. plutil -create produces an
   # empty root dict; -insert adds the key.
   plutil -create xml1 "$plist" || cma_die "asar-patch: plutil -create failed for $plist"
-  plutil -insert disableAutoUpdates -bool true "$plist" \
-    || cma_die "asar-patch: plutil -insert disableAutoUpdates failed for $plist"
+  # disableAutoUpdates is MIRROR-ONLY. Writing it into the primary's plist
+  # would silence Squirrel on /Applications/Claude.app itself and freeze the
+  # primary at its currently-installed version forever — the whole point of
+  # the loose-DR re-sign is to KEEP the primary updatable.
+  if [[ "$mode" == "mirror" ]]; then
+    plutil -insert disableAutoUpdates -bool true "$plist" \
+      || cma_die "asar-patch: plutil -insert disableAutoUpdates failed for $plist"
+  fi
   plutil -insert remoteControlAtStartup -bool true "$plist" \
     || cma_die "asar-patch: plutil -insert remoteControlAtStartup failed for $plist"
 }
 
+# ── Primary-mode: snapshot / re-sign / unpatch ─────────────────────────────
+
+# Snapshot the pristine app.asar AND app.asar.unpacked ONCE per Squirrel-
+# installed version so `primary-unpatch` can restore the FULL patch surface.
+# The old bug (a real incident) snapshotted only app.asar; unpatch then
+# rm -rf'd app.asar.unpacked and restored just the asar, deleting the native
+# @ant/claude-native + claude-swift *.node modules and blanking the app. We
+# snapshot BOTH here and restore BOTH in _asar_unpatch_primary.
+#
+# On a re-run against an already-patched primary (idempotent case), the backup
+# already exists — leave it alone (it holds the pristine bytes). When Squirrel
+# drops a fresh pristine, the primary-patch-refresh agent deletes the stale
+# backups BEFORE re-invoking so this captures the NEW pristine.
+_asar_snapshot_primary_bundle() {
+  local app="$1"
+  local asar="$app/Contents/Resources/app.asar"
+  local unpacked="$app/Contents/Resources/app.asar.unpacked"
+  local asar_backup="$app/Contents/Resources/$CMA_PRIMARY_ASAR_BACKUP"
+  local unpacked_backup="$app/Contents/Resources/$CMA_PRIMARY_UNPACKED_BACKUP"
+
+  [[ -f "$asar" ]] || cma_die "asar-patch: primary app.asar missing at $asar (Claude.app corrupt?)"
+
+  if [[ -f "$asar_backup" ]]; then
+    cma_dim "  primary app.asar backup already exists at $asar_backup — keeping"
+  else
+    cp -p "$asar" "$asar_backup" \
+      || cma_die "asar-patch: failed to snapshot primary app.asar to $asar_backup"
+    cma_dim "  snapshotted primary app.asar → $asar_backup ($(du -h "$asar_backup" | awk '{print $1}'))"
+  fi
+
+  # app.asar.unpacked is the native-module tree (Electron dlopens .node from
+  # it). It is ALWAYS present on the real Claude.app; a hermetic fixture with
+  # no native modules ships without it. Snapshot it whenever it exists so
+  # unpatch can put it back byte-for-byte.
+  if [[ -d "$unpacked" ]]; then
+    if [[ -e "$unpacked_backup" ]]; then
+      cma_dim "  primary app.asar.unpacked backup already exists at $unpacked_backup — keeping"
+    else
+      cp -Rp "$unpacked" "$unpacked_backup" \
+        || cma_die "asar-patch: failed to snapshot primary app.asar.unpacked to $unpacked_backup"
+      cma_dim "  snapshotted primary app.asar.unpacked → $unpacked_backup"
+    fi
+  fi
+}
+
+# Write the loose Designated Requirement to a requirements file. Kept a
+# one-liner so the exact bytes are trivially assertable by tests. The DR is
+# the SOLE thing that keeps the patched primary update-capable — see the
+# CMA_PRIMARY_LOOSE_DR comment.
+_asar_write_dr_requirements() {
+  local reqfile="$1"
+  printf '%s\n' "$CMA_PRIMARY_LOOSE_DR" > "$reqfile" \
+    || cma_die "asar-patch: failed to write DR requirements file $reqfile"
+}
+
+# Emit the nested code-signing targets for $app in INSIDE-OUT order, one path
+# per line: every nested Mach-O-bearing bundle first (Helper .apps incl.
+# (GPU)/(Renderer)/(Plugin), then the *.framework bundles), and the OUTER app
+# LAST. The caller signs in this exact order so each seal is computed over
+# already-signed nested code — the whole reason we can't use `--deep` (which
+# leaves "nested code is modified or invalid" under ad-hoc). Factored out so a
+# test can assert the ordering without a real codesign.
+_asar_primary_sign_targets() {
+  local app="$1"
+  local fw="$app/Contents/Frameworks"
+  if [[ -d "$fw" ]]; then
+    # Helper .apps (deepest executables) first, then frameworks.
+    find "$fw" -maxdepth 1 -type d -name '*.app' 2> /dev/null | sort
+    find "$fw" -maxdepth 1 -type d -name '*.framework' 2> /dev/null | sort
+  fi
+  # Outer app LAST — its seal covers Contents/Info.plist (the rewritten
+  # ElectronAsarIntegrity hash) + the already-signed nested code.
+  printf '%s\n' "$app"
+}
+
+# Re-sign the primary bundle INSIDE-OUT, ad-hoc, with the loose DR. For each
+# target (nested first, outer app last):
+#   - extract that component's ORIGINAL entitlements (Anthropic's signature is
+#     still intact at this point — we haven't touched nested code) and re-apply
+#     them so the runtime keeps its sandbox/JIT/etc grants;
+#   - sign `--force --sign - --options runtime --requirements <loose DR>`.
+# Deliberately NOT `--deep`.
+_asar_resign_primary_inside_out() {
+  local app="$1"
+  command -v codesign > /dev/null 2>&1 || cma_die "asar-patch: codesign not found on PATH (Xcode CLT required for primary re-sign)"
+
+  local reqfile
+  reqfile="$(mktemp -t cma-dr-req 2> /dev/null || mktemp)" || cma_die "asar-patch: mktemp failed for DR requirements"
+  _asar_write_dr_requirements "$reqfile"
+
+  cma_say "primary re-sign: inside-out ad-hoc with loose DR (NO team pin, NO --deep) — keeps the primary Squirrel-updatable"
+
+  local target ent
+  while IFS= read -r target; do
+    [[ -n "$target" ]] || continue
+    ent="$(mktemp -t cma-ent 2> /dev/null || mktemp)" || cma_die "asar-patch: mktemp failed for entitlements"
+    # Preserve the component's original entitlements when it has any. `:path`
+    # form writes the entitlements xml directly to the file. If the component
+    # is unsigned / has no entitlements (e.g. a script-based fixture binary),
+    # sign without --entitlements.
+    if codesign -d --entitlements ":$ent" "$target" > /dev/null 2>&1 && [[ -s "$ent" ]]; then
+      codesign --force --sign - --options runtime --requirements "$reqfile" --entitlements "$ent" "$target" > /dev/null 2>&1 \
+        || cma_die "asar-patch: inside-out codesign failed on $target (with entitlements)"
+      cma_dim "  signed (loose DR, +entitlements): $target"
+    else
+      codesign --force --sign - --options runtime --requirements "$reqfile" "$target" > /dev/null 2>&1 \
+        || cma_die "asar-patch: inside-out codesign failed on $target"
+      cma_dim "  signed (loose DR): $target"
+    fi
+    rm -f "$ent"
+  done < <(_asar_primary_sign_targets "$app")
+
+  rm -f "$reqfile"
+}
+
+# Post-patch assertions on a patched primary (Rule 12 fail-loud):
+#   1. If the PRISTINE bundle shipped native .node modules (production always
+#      does; a hermetic fixture may not), the PATCHED bundle must still carry
+#      them under app.asar.unpacked — proves the repack/re-sign didn't blank
+#      the native-module tree (the incident this whole change guards against).
+#   2. `codesign --verify --strict` must pass with NO "nested code" complaint —
+#      proves the inside-out sign produced a valid seal (which `--deep` ad-hoc
+#      did not).
+_asar_assert_primary_healthy() {
+  local app="$1"
+  local unpacked="$app/Contents/Resources/app.asar.unpacked"
+  local unpacked_backup="$app/Contents/Resources/$CMA_PRIMARY_UNPACKED_BACKUP"
+
+  # (1) native-module survival — only enforced when the pristine had .node.
+  if [[ -d "$unpacked_backup" ]] \
+    && find "$unpacked_backup" -name '*.node' -print -quit 2> /dev/null | grep -q .; then
+    if ! find "$unpacked" -name '*.node' -print -quit 2> /dev/null | grep -q .; then
+      cma_die "asar-patch: PATCHED primary lost its native .node modules under $unpacked (pristine had them) — refusing to leave the bundle blanked"
+    fi
+    cma_dim "  assertion OK: patched primary retains native .node modules"
+  fi
+
+  # (2) codesign strict validity — no nested-code corruption.
+  local verify_out
+  verify_out="$(codesign --verify --strict "$app" 2>&1 || true)"
+  if printf '%s' "$verify_out" | grep -qiF 'nested code'; then
+    cma_die "asar-patch: codesign --verify --strict reports nested-code corruption on $app: $verify_out"
+  fi
+  # A non-empty output that isn't the nested-code case is surfaced but not
+  # fatal (some macOS builds emit informational lines); the nested-code grep
+  # above is the load-bearing check.
+  cma_dim "  assertion OK: codesign --verify --strict shows no nested-code corruption"
+}
+
+# Restore the pristine primary from the FULL snapshot (app.asar +
+# app.asar.unpacked), remove the multiacct-owned plist, recompute the
+# Info.plist integrity hash to match the pristine asar, and re-sign inside-out
+# with the loose DR. Called by `claude-multiacct primary-unpatch`.
+#
+# CRITICAL: restores app.asar.unpacked too. The old unpatch deleted it and
+# restored only the asar — that removed the native modules and blanked the
+# app. Never leave the bundle without its app.asar.unpacked native modules.
+_asar_unpatch_primary() {
+  local app="$1"
+  local asar="$app/Contents/Resources/app.asar"
+  local unpacked="$app/Contents/Resources/app.asar.unpacked"
+  local asar_backup="$app/Contents/Resources/$CMA_PRIMARY_ASAR_BACKUP"
+  local unpacked_backup="$app/Contents/Resources/$CMA_PRIMARY_UNPACKED_BACKUP"
+  local plist="$app/Contents/Info.plist"
+  local mirror_plist="$app/Contents/Resources/$CMA_MIRROR_PLIST_BASENAME"
+
+  [[ -d "$app" ]] || cma_die "asar-unpatch: appBundle not found at $app"
+  [[ -f "$asar_backup" ]] || cma_die "asar-unpatch: no backup at $asar_backup — primary was never patched by this tool"
+
+  local mod_dir
+  # shellcheck disable=SC2310
+  if ! mod_dir="$(_asar_module_dir)"; then
+    cma_die "asar-unpatch: @electron/asar module not installed (run \`mise install\` from the repo root)"
+  fi
+
+  cma_say "asar unpatch label=primary (restoring app.asar + app.asar.unpacked)"
+
+  # Restore app.asar.unpacked FIRST so an interruption never leaves the bundle
+  # with a pristine asar but no native modules. If the pristine had no unpacked
+  # tree (fixture), there is nothing to restore and nothing was removed.
+  rm -rf "$unpacked"
+  if [[ -e "$unpacked_backup" ]]; then
+    cp -Rp "$unpacked_backup" "$unpacked" \
+      || cma_die "asar-unpatch: failed to restore app.asar.unpacked from $unpacked_backup"
+    cma_dim "  restored app.asar.unpacked from backup"
+  fi
+
+  rm -f "$asar"
+  cp -p "$asar_backup" "$asar" \
+    || cma_die "asar-unpatch: failed to restore app.asar from $asar_backup"
+  cma_dim "  restored app.asar from backup"
+
+  if [[ -f "$mirror_plist" ]]; then
+    rm -f "$mirror_plist"
+    cma_dim "  removed $mirror_plist"
+  fi
+
+  local pristine_hash
+  # shellcheck disable=SC2310
+  if ! pristine_hash="$(_asar_header_hash "$asar" "$mod_dir")"; then
+    cma_die "asar-unpatch: could not compute pristine header hash"
+  fi
+  _asar_update_integrity "$plist" "$pristine_hash"
+  cma_dim "  restored Info.plist ElectronAsarIntegrity hash: $pristine_hash"
+
+  # Consume the backups now that they are restored.
+  rm -f "$asar_backup"
+  rm -rf "$unpacked_backup"
+
+  # Re-sign inside-out with the loose DR so the restored bundle is validly
+  # signed AND stays update-capable. (Anthropic's original Developer ID
+  # signature is only restored by a real Squirrel drop / reinstall.)
+  _asar_resign_primary_inside_out "$app"
+
+  cma_ok "asar unpatched: primary restored to pristine app.asar + app.asar.unpacked (re-signed with loose DR; Apple signature returns on next Squirrel drop)"
+}
+
 main() {
+  local mode="mirror"
+  local action="patch"
+  # Support --mode=<mirror|primary> AND --unpatch flag before the positionals.
+  # Default-mirror keeps existing callers (build-clone-app.sh) unchanged.
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --mode=*)
+        mode="${1#--mode=}"
+        shift
+        ;;
+      --mode)
+        mode="$2"
+        shift 2
+        ;;
+      --unpatch)
+        action="unpatch"
+        shift
+        ;;
+      *) break ;;
+    esac
+  done
+  case "$mode" in
+    mirror | primary) ;;
+    *) cma_die "asar-patch: --mode must be 'mirror' or 'primary' (got '$mode')" ;;
+  esac
+  # --unpatch is primary-only: a mirror unpatch is `remove-instance` (drops the
+  # whole clone). A mirror + --unpatch combination is a user error.
+  if [[ "$action" == "unpatch" && "$mode" != "primary" ]]; then
+    cma_die "asar-patch: --unpatch is only meaningful with --mode=primary (mirror unpatch = remove-instance)"
+  fi
+
   local label="$1" app="$2"
-  cma_validate_label "$label"
+  # Primary mode uses the reserved label "primary" (cma_validate_label refuses
+  # it — that reservation keeps 'primary' out of the mirror namespace, so the
+  # check here is a special-case bypass with a fixed label).
+  if [[ "$mode" == "primary" ]]; then
+    [[ "$label" == "primary" ]] || cma_die "asar-patch: --mode=primary requires label 'primary' (got '$label')"
+  else
+    cma_validate_label "$label"
+  fi
   [[ -n "$app" ]] || cma_die "asar-patch: missing appBundle arg"
   [[ -d "$app" ]] || cma_die "asar-patch: appBundle not found at $app"
+
+  # Dispatch --unpatch before the patch pipeline.
+  if [[ "$action" == "unpatch" ]]; then
+    _asar_unpatch_primary "$app"
+    return 0
+  fi
 
   local asar="$app/Contents/Resources/app.asar"
   local plist="$app/Contents/Info.plist"
@@ -517,6 +846,14 @@ main() {
   if [[ ! -f "$asar" ]]; then
     cma_dim "asar-patch: no $asar (fixture bundle) — nothing to patch, skipping"
     return 0
+  fi
+
+  # Primary-mode snapshot: preserve the pristine app.asar + app.asar.unpacked
+  # BEFORE we mutate anything so `primary-unpatch` can restore the FULL patch
+  # surface. Idempotent — an existing backup is kept (holds the pristine bytes
+  # from the last time we saw a pristine primary).
+  if [[ "$mode" == "primary" ]]; then
+    _asar_snapshot_primary_bundle "$app"
   fi
 
   local mod_dir
@@ -581,13 +918,25 @@ main() {
   _asar_update_integrity "$plist" "$new_hash"
   cma_dim "  Info.plist ElectronAsarIntegrity hash updated"
 
-  _asar_write_mirror_plist "$mirror_plist"
-  cma_dim "  wrote $mirror_plist"
+  _asar_write_mirror_plist "$mirror_plist" "$mode"
+  cma_dim "  wrote $mirror_plist (mode=$mode)"
 
-  # No codesign here: build-clone-app.sh ad-hoc re-signs the whole clone
-  # bundle after this returns. (This script never touches the primary bundle,
-  # so there is no in-place re-sign of an Apple-signed app.)
-  cma_ok "asar patched: label=$label (auto-updates disabled + propagation + rc-enforcer)"
+  # Codesign:
+  #   - mirror  → build-clone-app.sh ad-hoc re-signs the whole clone bundle
+  #               after this returns, so we don't re-sign here.
+  #   - primary → re-sign IN PLACE, inside-out, ad-hoc, with the loose DR so
+  #               the primary stays validly signed AND Squirrel-updatable.
+  #               Then assert native modules survived + no nested-code
+  #               corruption.
+  if [[ "$mode" == "primary" ]]; then
+    _asar_resign_primary_inside_out "$app"
+    _asar_assert_primary_healthy "$app"
+  fi
+
+  case "$mode" in
+    mirror) cma_ok "asar patched: label=$label mode=mirror (auto-updates disabled + propagation + rc-enforcer)" ;;
+    primary) cma_ok "asar patched: label=$label mode=primary (propagation + rc-enforcer; auto-updates left ENABLED, loose-DR re-signed)" ;;
+  esac
 }
 
 # Only run main() when executed directly. Sourcing the file (e.g. from bats

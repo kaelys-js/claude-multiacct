@@ -432,3 +432,43 @@ with open(tmp, "w") as f:
 os.replace(tmp, path)
 PY
 }
+
+# cma_primary_claude_running — returns 0 (running) / 1 (not running).
+#
+# Used by the primary-patch / primary-unpatch guards + the primary-patch-
+# refresh launchd script: an in-place re-sign of a LIVE bundle races
+# codesign against the running process's mmap'd Contents/Frameworks and can
+# produce a partially-signed (unlaunchable) bundle. This is the SOLE
+# running-primary predicate.
+#
+# macOS `pgrep -f` has an observed bug (2026-07-18) where some
+# LaunchServices-spawned processes get argv-truncated in the proc argv table,
+# so `pgrep -f '/Applications/Claude.app/Contents/MacOS/Claude'` misses the
+# LIVE primary even though `ps -A -o command` lists it. We use `ps -A | grep`,
+# which renders argv the same way `ps` does and matches reliably.
+#
+# Matches ONLY the primary. The needle is the FULL primary executable path
+# `<CMA_SOURCE_CLAUDE_APP>/Contents/MacOS/Claude` (default
+# /Applications/Claude.app/Contents/MacOS/Claude). A mirror runs
+# `/Users/*/Applications/Claude Account <Title>.app/Contents/MacOS/Claude.real`
+# — that path does NOT contain the primary needle (after `/Applications/Claude`
+# it reads ` Account …`, not `.app/…`). A defensive `grep -Fv 'Claude Account'`
+# excludes any mirror line regardless, so a running mirror never trips this.
+#
+# Scoping on CMA_SOURCE_CLAUDE_APP lets hermetic bats override it to a scratch
+# fixture and skip past a REAL /Applications/Claude.app that may be running on
+# the host — the guard is scoped to "the bundle THIS CLI is configured to
+# patch". `grep -c` (not `-q`) avoids the SIGPIPE-under-pipefail that early
+# stdout-close would cause. The grep pipeline self-matches its own argv, so a
+# second `grep -Fv 'grep -F'` filters the diagnostic out of the count.
+cma_primary_claude_running() {
+  local root="${CMA_SOURCE_CLAUDE_APP:-/Applications/Claude.app}"
+  local needle="$root/Contents/MacOS/Claude"
+  local hits
+  hits="$(ps -A -o command 2> /dev/null \
+    | LC_ALL=C command grep -F "$needle" \
+    | LC_ALL=C command grep -Fv 'Claude Account' \
+    | LC_ALL=C command grep -Fvc 'grep -F' \
+    || true)"
+  [[ "${hits:-0}" -gt 0 ]]
+}

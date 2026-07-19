@@ -3,13 +3,21 @@
 # and install into ~/Library/LaunchAgents/, then load. Idempotent: bootout+load
 # sequence is safe to re-run.
 #
-# Three agents are installed:
+# Four agents are installed:
 #   com.user.claude-sessions-sync         — WatchPaths on primary <userData>/Local State
 #                                           → rsyncs IndexedDB / Local Storage / Session
 #                                           Storage primary → mirrors on primary close.
 #   com.user.claude-clone-refresh         — WatchPaths on primary Claude.app/Contents/Info.plist
 #                                           → rebuilds every mirror clone after a
 #                                           Claude Desktop Squirrel autoupdate.
+#   com.user.claude-primary-patch-refresh — WatchPaths on primary Claude.app/Contents/Info.plist
+#                                           → re-runs `primary-patch` after a
+#                                           Squirrel autoupdate so the propagation
+#                                           + rc-enforcer IIFEs stay injected and
+#                                           the loose-DR re-sign is re-applied
+#                                           across the drop-replace. Shares a flock
+#                                           with clone-refresh so both agents
+#                                           serialize on the same trigger.
 #   com.user.claude-metadata-symlink      — WatchPaths on every mirror's
 #                                           <userData>/claude-code-sessions and
 #                                           <userData>/local-agent-mode-sessions
@@ -173,6 +181,22 @@ main() {
     "$CMA_REPO_ROOT/launchd/com.user.claude-clone-refresh.plist.tmpl" \
     "$CMA_LOG_DIR/clone-refresh.log" \
     "s|__REFRESH_BIN__|$CMA_LIBEXEC_DIR/bin/claude-clone-refresh.sh|g" \
+    "s|__WATCH_PATH__|$CMA_SOURCE_CLAUDE_APP/Contents/Info.plist|g"
+
+  # Agent 2b: primary-patch-refresh — re-runs `claude-multiacct primary-patch`
+  # after every Squirrel-driven Info.plist mtime bump so the propagation +
+  # rc-enforcer IIFEs and the loose-DR re-sign stay applied on
+  # /Applications/Claude.app across the drop-replace. Shares the
+  # /tmp/claude-multiacct-refresh.lock with clone-refresh so both agents
+  # serialize under the same trigger — primary-patch always completes BEFORE
+  # clone-refresh's ditto captures the primary. See
+  # bin/claude-primary-patch-refresh.sh for the lock rationale. Points at the
+  # libexec copy (H3), NOT the repo checkout.
+  install_agent \
+    "com.user.claude-primary-patch-refresh" \
+    "$CMA_REPO_ROOT/launchd/com.user.claude-primary-patch-refresh.plist.tmpl" \
+    "$CMA_LOG_DIR/primary-patch-refresh.log" \
+    "s|__PATCH_BIN__|$CMA_LIBEXEC_DIR/bin/claude-primary-patch-refresh.sh|g" \
     "s|__WATCH_PATH__|$CMA_SOURCE_CLAUDE_APP/Contents/Info.plist|g"
 
   # Agent 3: metadata-symlink — per-mirror session-metadata symlink installer,

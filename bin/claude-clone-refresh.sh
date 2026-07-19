@@ -8,11 +8,17 @@
 # rebuild logic lives in the CLI so it stays testable via the CLI's own
 # subcommand.
 #
-# Self-serialization:
+# Serialization:
 #   A rapid succession of Info.plist mtime bumps (Squirrel writes the file
 #   more than once during a single update) can fire this agent twice in quick
 #   succession. A flock at /tmp/claude-multiacct-refresh.lock serializes the
 #   fires so two ditto passes never race over the same clone bundle.
+#
+#   The SAME lock is shared with bin/claude-primary-patch-refresh.sh, which
+#   WatchPaths the same Info.plist. On a Squirrel drop both agents fire; the
+#   shared lock makes primary-patch-refresh complete FIRST so this script's
+#   ditto always captures the already-patched primary (its clones' own
+#   asar-patch then no-ops on the idempotency check). See that script's header.
 
 set -euo pipefail
 
