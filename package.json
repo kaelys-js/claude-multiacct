@@ -29,9 +29,9 @@
 	],
 	"engines": {
 		"node": "26.5.0",
-		"pnpm": "11.13.0"
+		"pnpm": "11.13.1"
 	},
-	"packageManager": "pnpm@11.13.0",
+	"packageManager": "pnpm@11.13.1",
 	"scripts": {
 		"ci:local": "node packages/shared/utils/qa/src/ci-local.ts",
 		"ci:local:clean": "node packages/shared/utils/qa/src/ci-local.ts --clean",
