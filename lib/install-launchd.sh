@@ -3,20 +3,13 @@
 # and install into ~/Library/LaunchAgents/, then load. Idempotent: bootout+load
 # sequence is safe to re-run.
 #
-# Four agents are installed:
+# Three agents are installed:
 #   com.user.claude-sessions-sync         — WatchPaths on primary <userData>/Local State
 #                                           → rsyncs IndexedDB / Local Storage / Session
 #                                           Storage primary → mirrors on primary close.
 #   com.user.claude-clone-refresh         — WatchPaths on primary Claude.app/Contents/Info.plist
 #                                           → rebuilds every mirror clone after a
 #                                           Claude Desktop Squirrel autoupdate.
-#   com.user.claude-primary-patch-refresh — WatchPaths on primary Claude.app/Contents/Info.plist
-#                                           → re-runs `primary-patch` after a
-#                                           Squirrel autoupdate so the Chunk Y
-#                                           IIFEs stay injected across the drop-
-#                                           replace. Shares a flock with clone-
-#                                           refresh so both agents serialize on
-#                                           the same trigger.
 #   com.user.claude-metadata-symlink      — WatchPaths on every mirror's
 #                                           <userData>/claude-code-sessions and
 #                                           <userData>/local-agent-mode-sessions
@@ -145,12 +138,20 @@ build_metadata_watchpaths() {
 }
 
 main() {
+  # H3 — copy the agent scripts + their lib/ deps into the non-TCC-protected
+  # libexec dir and point every plist's ProgramArguments there. This runs even
+  # under CMA_SKIP_LAUNCHD (which only skips the launchctl bootstrap, not the
+  # on-disk copy) so the copy is exercised hermetically. A background launchd
+  # agent execing from the repo checkout under ~/Documents fails with 126 /
+  # "Operation not permitted"; libexec is outside every TCC container.
+  cma_sync_libexec
+
   # Escape hatch for hermetic testing: bats runs under a scratch $HOME where
   # launchctl bootstrap fails ("5: Input/output error") because launchd only
-  # accepts plists under the user's real domain. CMA_SKIP_LAUNCHD=1 makes
-  # install-launchd.sh a no-op — install/repair still succeed under the test.
+  # accepts plists under the user's real domain. CMA_SKIP_LAUNCHD=1 makes the
+  # launchd load path a no-op — install/repair still succeed under the test.
   if [[ "${CMA_SKIP_LAUNCHD:-0}" == "1" ]]; then
-    cma_dim "  = CMA_SKIP_LAUNCHD=1 — skipping launchd install (test mode)"
+    cma_dim "  = CMA_SKIP_LAUNCHD=1 — skipping launchd load (test mode)"
     return 0
   fi
 
@@ -158,11 +159,12 @@ main() {
   primary_ls="$(cma_primary_userdata)/Local State"
 
   # Agent 1: sessions-sync — IndexedDB / LS / SS rsync on primary close.
+  # ProgramArguments points at the libexec copy (H3), NOT the repo checkout.
   install_agent \
     "com.user.claude-sessions-sync" \
     "$CMA_REPO_ROOT/launchd/com.user.claude-sessions-sync.plist.tmpl" \
     "$CMA_LOG_DIR/sessions-sync.log" \
-    "s|__SYNC_BIN__|$CMA_REPO_ROOT/bin/claude-sessions-sync.sh|g" \
+    "s|__SYNC_BIN__|$CMA_LIBEXEC_DIR/bin/claude-sessions-sync.sh|g" \
     "s|__PRIMARY_LOCALSTATE__|$primary_ls|g"
 
   # Agent 2: clone-refresh — mirror clone rebuild on Claude Desktop update.
@@ -170,22 +172,7 @@ main() {
     "com.user.claude-clone-refresh" \
     "$CMA_REPO_ROOT/launchd/com.user.claude-clone-refresh.plist.tmpl" \
     "$CMA_LOG_DIR/clone-refresh.log" \
-    "s|__REFRESH_BIN__|$CMA_REPO_ROOT/bin/claude-clone-refresh.sh|g" \
-    "s|__WATCH_PATH__|$CMA_SOURCE_CLAUDE_APP/Contents/Info.plist|g"
-
-  # Agent 2b: primary-patch-refresh — re-runs `claude-multiacct primary-patch`
-  # after every Squirrel-driven Info.plist mtime bump so the Chunk Y IIFEs
-  # (propagation + rc-enforcer) and the managed-config plist route stay
-  # injected on /Applications/Claude.app. Shares the /tmp/claude-multiacct-
-  # refresh.lock with clone-refresh so both agents serialize under the same
-  # trigger — primary-patch always completes BEFORE clone-refresh's ditto
-  # captures the primary. See bin/claude-primary-patch-refresh.sh for the
-  # lock rationale.
-  install_agent \
-    "com.user.claude-primary-patch-refresh" \
-    "$CMA_REPO_ROOT/launchd/com.user.claude-primary-patch-refresh.plist.tmpl" \
-    "$CMA_LOG_DIR/primary-patch-refresh.log" \
-    "s|__PATCH_BIN__|$CMA_REPO_ROOT/bin/claude-primary-patch-refresh.sh|g" \
+    "s|__REFRESH_BIN__|$CMA_LIBEXEC_DIR/bin/claude-clone-refresh.sh|g" \
     "s|__WATCH_PATH__|$CMA_SOURCE_CLAUDE_APP/Contents/Info.plist|g"
 
   # Agent 3: metadata-symlink — per-mirror session-metadata symlink installer,
@@ -210,7 +197,8 @@ main() {
       "com.user.claude-metadata-symlink" \
       "$CMA_REPO_ROOT/launchd/com.user.claude-metadata-symlink.plist.tmpl" \
       "$CMA_LOG_DIR/metadata-watcher.log" \
-      "s|__WATCH_BIN__|$CMA_REPO_ROOT/bin/claude-metadata-watcher.sh|g" \
+      "s|__WATCH_BIN__|$CMA_LIBEXEC_DIR/bin/claude-metadata-watcher.sh|g" \
+      "s|__CMA_AUTO_RESTART__|${CMA_AUTO_RESTART:-0}|g" \
       "/__WATCHPATHS_ENTRIES__/{
 r $entries_file
 d

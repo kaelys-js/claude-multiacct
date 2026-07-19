@@ -18,11 +18,20 @@
   header comment in lib/metadata-symlinks.sh for detail.
 
   Template placeholders (substituted at install time by lib/install-launchd.sh):
-    __WATCH_BIN__            — full path to bin/claude-metadata-watcher.sh
+    __WATCH_BIN__            — full path to bin/claude-metadata-watcher.sh under
+                               the libexec copy (~/.local/libexec/claude-
+                               multiacct/bin), NOT the repo checkout — a
+                               background launchd agent cannot exec from a
+                               TCC-protected container like ~/Documents.
     __WATCHPATHS_ENTRIES__   — one <string>…</string> per watched path (three
                                per mirror: claude-code-sessions, local-agent-
                                mode-sessions, and config.json). Injected via
                                `sed r file; d`.
+    __CMA_AUTO_RESTART__     — "0" (default) or "1". Gates the watcher's auto
+                               quit+relaunch of a mirror on first symlink
+                               install. Symlink install + sentinel always
+                               happen; only the disruptive kill/relaunch of a
+                               live mirror is opt-in. Default OFF.
     __LOG_PATH__             — full path to the log file
 
   ProcessType=Background + Nice=10 + LowPriorityIO=true: install-time symlink
@@ -44,6 +53,12 @@
         <string>/bin/bash</string>
         <string>__WATCH_BIN__</string>
     </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>CMA_AUTO_RESTART</key>
+        <string>__CMA_AUTO_RESTART__</string>
+    </dict>
 
     <key>WatchPaths</key>
     <array>

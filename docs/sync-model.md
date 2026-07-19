@@ -19,6 +19,8 @@ Both instances literally read and write the same inode. Real-time — no agent, 
 
 We also symlink `sessions`, `todos`, `shell-snapshots`, `plugins`, `skills` at the same layer for the same reason (session-id keyed, single writer, account-agnostic).
 
+**Pre-create the primary target (C2).** Some of these subdirs are created lazily by Claude Code on first use — `todos`, `plugins`, and `skills` in particular appear later than `projects`/`sessions`. A mirror installed before the primary has created a given subdir would otherwise get a symlink pointing at a nonexistent target (`-L` true but `-e` false — a dangling link). `lib/metadata-symlinks.sh` therefore `mkdir -p`'s each primary target before linking, so every installed shared link both is a symlink AND resolves.
+
 `.claude.json` and `settings.json` are per-instance — the mirror keeps its own copy (stripped of `oauthAccount` / `userID`) so identity doesn't leak.
 
 ## Layer 2 — Desktop UI session metadata

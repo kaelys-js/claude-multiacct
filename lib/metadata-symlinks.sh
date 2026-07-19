@@ -146,8 +146,16 @@ main() {
 
   # These subpaths are ACCOUNT-AGNOSTIC (Claude Code writes session-id-keyed
   # files, no per-account partitioning inside). Symlinking is safe.
+  #
+  # C2 — mkdir -p the PRIMARY target before linking. A mirror set up before the
+  # primary has ever created a given subdir (todos/plugins/skills are created
+  # lazily by Claude Code on first use — unlike projects/sessions which appear
+  # early) would otherwise get a symlink to a nonexistent target: `-L` true but
+  # `-e` false, i.e. a dangling link. Pre-creating the primary dir guarantees
+  # every installed link resolves.
   local shared
   for shared in projects sessions todos shell-snapshots plugins skills; do
+    mkdir -p "$p_cdir/$shared"
     symlink_atomic "$m_cdir/$shared" "$p_cdir/$shared"
   done
 

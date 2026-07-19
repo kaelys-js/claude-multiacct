@@ -8,14 +8,11 @@
 # rebuild logic lives in the CLI so it stays testable via the CLI's own
 # subcommand.
 #
-# Serialization with primary-patch-refresh:
-#   Both this script and bin/claude-primary-patch-refresh.sh WatchPaths the
-#   same Info.plist. To keep the ditto here from capturing a mid-patch
-#   primary, both scripts share a flock at /tmp/claude-multiacct-refresh.lock.
-#   The primary-patch-refresh script acquires the lock first (it fires on
-#   the same launchd trigger) and completes before this script's ditto runs.
-#   See the header of bin/claude-primary-patch-refresh.sh for the ordering
-#   rationale.
+# Self-serialization:
+#   A rapid succession of Info.plist mtime bumps (Squirrel writes the file
+#   more than once during a single update) can fire this agent twice in quick
+#   succession. A flock at /tmp/claude-multiacct-refresh.lock serializes the
+#   fires so two ditto passes never race over the same clone bundle.
 
 set -euo pipefail
 
@@ -30,9 +27,9 @@ mkdir -p "$(dirname "$LOG")"
 
 log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*" >> "$LOG"; }
 
-# Acquire the shared refresh lock so primary-patch-refresh completes first
-# (see script header). flock -w blocks; mkdir-based fallback is used on
-# stock macOS where flock isn't on PATH.
+# Acquire the refresh lock so overlapping fires serialize (see script header).
+# flock blocks; mkdir-based fallback is used on stock macOS where flock isn't
+# on PATH.
 if command -v flock > /dev/null 2>&1; then
   exec 200> "$LOCK"
   flock 200

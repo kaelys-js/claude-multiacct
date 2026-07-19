@@ -22,6 +22,16 @@ CMA_LOG_DIR="${CMA_LOG_DIR:-$HOME/Library/Logs/claude-multiacct}"
 # Backup dir (snapshots before destructive writes).
 CMA_BACKUP_DIR="${CMA_BACKUP_DIR:-$HOME/.claude-multiacct-backups}"
 
+# Libexec dir — the non-TCC-protected location the launchd agent scripts (+
+# their lib/ deps) are copied to, and from which every launchd plist's
+# ProgramArguments execs. Background launchd agents cannot exec scripts from
+# under ~/Documents (TCC denies the read → 126 / "Operation not permitted"),
+# so the repo checkout — which usually lives under ~/Documents — is NOT a
+# valid exec path for a launchd agent. ~/.local/libexec is outside every TCC
+# container. See cma_sync_libexec / cma_reclaim_libexec_if_unreferenced below
+# and lib/install-launchd.sh for the copy + plist wiring.
+CMA_LIBEXEC_DIR="${CMA_LIBEXEC_DIR:-$HOME/.local/libexec/claude-multiacct}"
+
 # These derived paths are DELIBERATELY NOT exported. Each subprocess sources
 # common.sh at the top and re-derives from HOME/XDG_CONFIG_HOME, so exporting
 # would let the outer process's derived value leak into a subprocess whose
@@ -258,6 +268,28 @@ except Exception:
   printf '%s\n' "$email"
 }
 
+# Read the account UUID (`lastKnownAccountUuid`) from a Claude Desktop
+# <userData>/config.json. Prints the UUID lowercased on success, empty string
+# on any failure (file missing / unparseable / key absent). NEVER dies —
+# callers treat empty as "unknown". Used by the doctor shared-account
+# contention check (two instances with the SAME account UUID resolve to one
+# live ~/.claude session store).
+cma_config_account_uuid() {
+  local cfg="$1"
+  [[ -f "$cfg" ]] || {
+    printf '%s\n' ""
+    return 0
+  }
+  python3 -c '
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+    print((d.get("lastKnownAccountUuid") or "").lower())
+except Exception:
+    print("")
+' "$cfg" 2> /dev/null || printf '%s\n' ""
+}
+
 # ── Timestamped backup helpers ────────────────────────────────────────────
 
 cma_backup_snapshot() {
@@ -269,6 +301,81 @@ cma_backup_snapshot() {
   mkdir -p "$dst"
   cp -R "$src" "$dst/"
   printf '%s\n' "$dst"
+}
+
+# ── libexec install / reclaim (TCC escape for launchd agents) ──────────────
+#
+# Background launchd agents cannot exec a script that lives under a TCC-
+# protected container (~/Documents, ~/Desktop, ~/Downloads). launchd runs the
+# agent in a context with no TCC grant for that container, so the exec fails
+# with 126 / "Operation not permitted" and the agent silently never runs. The
+# repo checkout normally lives under ~/Documents, so the launchd plists CANNOT
+# point ProgramArguments at the checkout. Instead we copy the agent scripts
+# (bin/) + their lib/ deps into ~/.local/libexec/claude-multiacct (outside
+# every TCC container) and render every plist to exec from there.
+
+# cma_sync_libexec — mirror the repo's bin/ + lib/ into CMA_LIBEXEC_DIR.
+# Idempotent: `diff -r` gates the copy so an unchanged tree is a no-op (no
+# mtime churn, no snapshot). Snapshots the existing copy before replacing a
+# drifted one. Copied so the relative `../lib/common.sh` source in each agent
+# script AND the `$CMA_BIN/claude-multiacct` re-invocation in clone-refresh
+# both resolve WITHIN libexec — the copy is self-contained and never reaches
+# back into the checkout at agent-run time.
+cma_sync_libexec() {
+  mkdir -p "$CMA_LIBEXEC_DIR"
+  local sub src_dir dst_dir
+  for sub in bin lib; do
+    src_dir="$CMA_REPO_ROOT/$sub"
+    dst_dir="$CMA_LIBEXEC_DIR/$sub"
+    [[ -d "$src_dir" ]] || cma_die "cma_sync_libexec: repo $sub dir missing at $src_dir"
+    if [[ -d "$dst_dir" ]] && diff -r "$src_dir" "$dst_dir" > /dev/null 2>&1; then
+      cma_dim "  = libexec/$sub already current"
+      continue
+    fi
+    if [[ -d "$dst_dir" ]]; then
+      local snap
+      snap="$(cma_backup_snapshot "$dst_dir" "libexec-$sub")"
+      [[ -n "$snap" ]] && cma_dim "  snapshot: $snap"
+      rm -rf "$dst_dir"
+    fi
+    mkdir -p "$dst_dir"
+    cp -R "$src_dir/." "$dst_dir/"
+    # Preserve execute bits on scripts regardless of cp's mode handling — the
+    # agents invoke sibling lib/*.sh (metadata-symlinks, build-clone-app,
+    # asar-patch-clone) directly, and clone-refresh execs the copied CLI.
+    find "$dst_dir" -type f -name '*.sh' -exec chmod +x {} + 2> /dev/null || true
+    [[ -f "$dst_dir/claude-multiacct" ]] && chmod +x "$dst_dir/claude-multiacct"
+    cma_ok "installed libexec/$sub → $dst_dir"
+  done
+}
+
+# cma_reclaim_libexec_if_unreferenced — remove CMA_LIBEXEC_DIR, but ONLY when
+# no installed launchd plist still points ProgramArguments at it. Called on
+# uninstall so the libexec copy is reclaimed once nothing execs from it, and
+# LEFT in place while any agent's plist still references it (removing it would
+# brick a still-loaded agent). Snapshots before removal.
+cma_reclaim_libexec_if_unreferenced() {
+  [[ -d "$CMA_LIBEXEC_DIR" ]] || return 0
+  local agents_dir="$HOME/Library/LaunchAgents"
+  local referenced=0 p
+  if [[ -d "$agents_dir" ]]; then
+    for p in "$agents_dir"/com.user.claude-*.plist; do
+      [[ -f "$p" ]] || continue
+      if grep -qF "$CMA_LIBEXEC_DIR" "$p" 2> /dev/null; then
+        referenced=1
+        break
+      fi
+    done
+  fi
+  if [[ $referenced -eq 1 ]]; then
+    cma_dim "  libexec still referenced by an installed launchd plist — keeping $CMA_LIBEXEC_DIR"
+    return 0
+  fi
+  local snap
+  snap="$(cma_backup_snapshot "$CMA_LIBEXEC_DIR" "libexec-reclaim")"
+  [[ -n "$snap" ]] && cma_dim "  snapshot: $snap"
+  rm -rf "$CMA_LIBEXEC_DIR"
+  cma_ok "reclaimed libexec copy at $CMA_LIBEXEC_DIR (no launchd plist references it)"
 }
 
 # ── Settings.json key enforcement ─────────────────────────────────────────
@@ -324,53 +431,4 @@ with open(tmp, "w") as f:
     f.write("\n")
 os.replace(tmp, path)
 PY
-}
-
-# cma_primary_claude_running — returns 0 (running) / 1 (not running).
-#
-# macOS pgrep -f has an observed bug (2026-07-18) where certain
-# LaunchServices-spawned processes get argv-truncated to zero-length in the
-# proc argv table, so `pgrep -f '/Applications/Claude\.app/Contents/MacOS/Claude'`
-# silently fails to match the LIVE primary Claude Desktop main process even
-# though `ps aux` lists it. The bug is reproducible: 84651 was the primary
-# main process, ps showed its command as
-# `/Applications/Claude.app/Contents/MacOS/Claude`, and no pgrep -f pattern
-# matched it. Falling back to `ps -A | grep` uses the /proc-equivalent
-# rendering path that ps uses (KERN_PROCARGS2 via getproc*) and matches
-# reliably. This helper is the SOLE running-primary predicate used by the
-# CLI + primary-patch-refresh script.
-#
-# The pattern intentionally matches the primary's `/Applications/Claude.app/`
-# main executable AND its Helper processes — either is enough to prove the
-# primary is up. It does NOT match Claude Account mirror processes (they
-# live under `/Users/*/Applications/Claude Account *.app/`, which the leading
-# `/Applications/Claude.app/` filter excludes).
-cma_primary_claude_running() {
-  # -A lists ALL processes system-wide; -o command emits command lines only.
-  # `LC_ALL=C` keeps grep binary-safe under weird locales. `command grep`
-  # sidesteps any user shell aliases that might treat binary/text differently.
-  # -F disables regex so literal `.` chars don't need escaping.
-  #
-  # `grep -q` closes stdout on first match and would SIGPIPE the upstream
-  # `ps` under `set -e + pipefail`. We do a positive-count check with `-c`
-  # instead — no early close, no SIGPIPE — and translate zero/non-zero to
-  # rc explicitly.
-  #
-  # The pattern is anchored on `<CMA_SOURCE_CLAUDE_APP>/Contents/MacOS/Claude`
-  # so hermetic bats tests that override CMA_SOURCE_CLAUDE_APP to a scratch
-  # fake-Claude.app fixture skip past the REAL /Applications/Claude.app that
-  # may be running on the host machine — the guard is scoped to "the bundle
-  # THIS CLI is configured to patch".
-  #
-  # The grep pipeline that RUNS this predicate itself shows up in the ps
-  # output with the exact same pattern as its argv (grep -F <pattern>) and
-  # would self-match. Filter out grep processes via a second grep -v so the
-  # predicate counts only Claude Desktop processes, not the diagnostic itself.
-  local root="${CMA_SOURCE_CLAUDE_APP:-/Applications/Claude.app}"
-  local hits
-  hits="$(ps -A -o command 2> /dev/null \
-    | LC_ALL=C command grep -F "$root/Contents/MacOS/Claude" \
-    | LC_ALL=C command grep -Fvc 'grep -F' \
-    || true)"
-  [[ "${hits:-0}" -gt 0 ]]
 }

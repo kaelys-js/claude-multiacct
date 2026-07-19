@@ -37,13 +37,6 @@ fi
 # --json mode.
 _json_rows=()
 
-# JSON blob for the primary bundle diagnostics. Populated by check_primary()
-# when --json is set. Left empty when not in --json mode. Consumed by main()
-# to wrap the final output as {"primary":{...},"instances":[...]} — a shape
-# change from Chunk Y so JSON consumers can see primary state alongside the
-# mirror array.
-_primary_json=""
-
 # JSON-escape a single string. Handles the four escapes JSON requires:
 # backslash, double-quote, newline, tab. Sufficient for label / email / config
 # paths — none of our fields contain control chars beyond \n / \t.
@@ -345,164 +338,13 @@ except Exception:
   fi
 }
 
-# check_primary — Chunk Y primary-bundle diagnostics. Mirrors the checks
-# check_one() emits for each mirror, adapted for the primary's semantics:
-#   - Backup file present at Contents/Resources/app.asar.multiacct-backup —
-#     proves `primary-patch` has run at least once and can be reverted.
-#   - Propagation + rc-enforcer markers byte-visible inside app.asar.
-#   - Managed-tier plist present with remoteControlAtStartup=true. Deliberately
-#     no disableAutoUpdates check here — the primary keeps Squirrel enabled.
-#   - Info.plist ElectronAsarIntegrity hash matches the on-disk asar's
-#     computed header hash (a mismatch would fatal-boot Claude Desktop).
-#
-# Emits its own report block on stderr (same shape as check_one) and a
-# separate `primary` row into the TSV/JSON pipeline. Called once by main().
-check_primary() {
-  local issues=()
-  local app="$CMA_SOURCE_CLAUDE_APP"
-
-  if [[ -z "${_cma_quiet:-}" ]]; then
-    cma_say "primary bundle: $app"
-  fi
-
-  if [[ ! -d "$app" ]]; then
-    cma_warn "primary Claude.app missing at $app"
-    issues+=("primary-missing")
-  else
-    local asar="$app/Contents/Resources/app.asar"
-    local backup="$app/Contents/Resources/app.asar.multiacct-backup"
-    local mirror_plist="$app/Contents/Resources/claude-multiacct-mirror-prefs.plist"
-    local info_plist="$app/Contents/Info.plist"
-
-    if [[ ! -f "$asar" ]]; then
-      cma_warn "primary app.asar missing at $asar (Claude.app corrupt?)"
-      issues+=("primary-asar-missing")
-    else
-      if [[ ! -f "$backup" ]]; then
-        cma_warn "primary asar-patch backup MISSING — primary has never been patched OR was manually restored"
-        issues+=("primary-asar-patch-missing")
-      else
-        cma_ok "primary asar-patch backup present ($(du -h "$backup" | awk '{print $1}'))"
-      fi
-
-      # Propagation + rc-enforcer marker checks (same byte-visible scan as
-      # per-mirror discover). Absence surfaces as its own issue slug so
-      # operator + JSON-diff both see the missing piece.
-      if grep -qF 'claude-multiacct-session-propagation' "$asar" 2> /dev/null; then
-        cma_ok "primary asar-patch: propagation IIFE injected"
-      else
-        cma_warn "primary asar-patch: propagation IIFE MISSING — cross-process session mutations won't reflect until quit+relaunch"
-        issues+=("primary-asar-propagation-missing")
-      fi
-      if grep -qF 'claude-multiacct-rc-enforcer' "$asar" 2> /dev/null; then
-        cma_ok "primary asar-patch: rc-enforcer IIFE injected"
-      else
-        cma_warn "primary asar-patch: rc-enforcer IIFE MISSING — Remote Control drift on primary sessions won't auto-heal"
-        issues+=("primary-rc-enforcer-missing")
-      fi
-
-      # Info.plist integrity hash vs. computed asar header hash. A drift
-      # here would fatal-boot Claude Desktop — surface as its own slug.
-      # Uses @electron/asar via node; if the module isn't installed, skip
-      # the check (with a warn) rather than dying. Empty `mod_dir` on any
-      # unmatched glob so the `-n mod_dir` guard downstream stays sound.
-      local mod_dir="" computed="" stored="" cand
-      for cand in "$HOME/.local/share/mise/installs/npm-electron-asar/"*"/lib/node_modules/@electron/asar" \
-        "$HOME/.local/share/mise/installs/npm-electron-asar/"*"/node_modules/@electron/asar"; do
-        if [[ -d "$cand" ]]; then
-          mod_dir="$cand"
-          break
-        fi
-      done
-      if [[ -n "$mod_dir" ]] && [[ -f "$info_plist" ]]; then
-        computed="$(node --input-type=module -e "
-import { getRawHeader } from 'file://$mod_dir/lib/asar.js';
-import { createHash } from 'crypto';
-const raw = getRawHeader('$asar');
-process.stdout.write(createHash('sha256').update(raw.headerString).digest('hex'));
-" 2> /dev/null || true)"
-        stored="$(/usr/libexec/PlistBuddy -c 'Print :ElectronAsarIntegrity:Resources/app.asar:hash' "$info_plist" 2> /dev/null || true)"
-        if [[ -n "$computed" && -n "$stored" && "$computed" == "$stored" ]]; then
-          cma_ok "primary Info.plist ElectronAsarIntegrity hash matches on-disk asar"
-        elif [[ -n "$computed" && -n "$stored" ]]; then
-          cma_warn "primary Info.plist ElectronAsarIntegrity hash DRIFT (stored=${stored:0:12}… computed=${computed:0:12}…) — Claude Desktop will fatal-boot"
-          issues+=("primary-asar-integrity-drift")
-        else
-          cma_warn "primary Info.plist ElectronAsarIntegrity check inconclusive (missing key or asar unreadable)"
-          issues+=("primary-asar-integrity-unknown")
-        fi
-      else
-        cma_dim "  primary integrity check skipped (@electron/asar module not installed)"
-      fi
-    fi
-
-    if [[ -f "$mirror_plist" ]]; then
-      if /usr/libexec/PlistBuddy -c 'Print :remoteControlAtStartup' "$mirror_plist" 2> /dev/null | grep -qx true; then
-        cma_ok "primary managed-config plist: remoteControlAtStartup=true"
-      else
-        cma_warn "primary managed-config plist present but remoteControlAtStartup != true"
-        issues+=("primary-plist-remote-control-missing")
-      fi
-      # The primary MUST NOT carry disableAutoUpdates — that would freeze the
-      # primary at its currently-installed version. If it's there, surface as
-      # its own issue so an operator can `primary-unpatch` + re-patch.
-      if /usr/libexec/PlistBuddy -c 'Print :disableAutoUpdates' "$mirror_plist" 2> /dev/null | grep -qx true; then
-        cma_warn "primary managed-config plist has disableAutoUpdates=true — primary would stop receiving Squirrel updates"
-        issues+=("primary-plist-auto-updates-disabled")
-      fi
-    else
-      cma_warn "primary managed-config plist MISSING at $mirror_plist"
-      issues+=("primary-plist-missing")
-    fi
-  fi
-
-  local health="ok"
-  [[ ${#issues[@]} -eq 0 ]] || health="degraded"
-  [[ -z "${_cma_quiet:-}" ]] && cma_dim "  → $health"
-
-  if [[ $TSV -eq 1 ]]; then
-    local issues_joined=""
-    [[ ${#issues[@]} -eq 0 ]] || issues_joined="$(
-      IFS=,
-      printf '%s' "${issues[*]}"
-    )"
-    printf '%s\t%s\t%s\n' "primary" "$health" "$issues_joined"
-  fi
-
-  # JSON output: primary state is exposed under a separate top-level key of
-  # the doctor --json output (composed in bin/claude-multiacct's
-  # _cmd_doctor_json). Persist it in a global for that composition to pick
-  # up, but do NOT append to _json_rows — that array is reserved for the
-  # `instances` mirror array so existing JSON consumers don't break under
-  # the shape change from Chunk Y.
-  if [[ $JSON -eq 1 ]]; then
-    local issues_json="[]"
-    if [[ ${#issues[@]} -gt 0 ]]; then
-      local first=1 iss
-      issues_json="["
-      for iss in "${issues[@]}"; do
-        [[ $first -eq 1 ]] || issues_json+=","
-        first=0
-        issues_json+="\"$(_json_esc "$iss")\""
-      done
-      issues_json+="]"
-    fi
-    # `_primary_json` is a top-level global set here (no `local`) so main()
-    # can pick it up. See the same pattern for `_json_rows`.
-    # shellcheck disable=SC2034  # read by discover.sh's main() JSON emission below
-    _primary_json="{\"appBundle\":\"$(_json_esc "$app")\",\"health\":\"$health\",\"issues\":$issues_json}"
-  fi
-}
-
 main() {
-  # Primary bundle diagnostics run regardless of instances.yaml state — the
-  # primary can be patched (Chunk Y) without any mirrors configured.
-  check_primary
-
-  # If no config file, only report the primary state.
+  # No config file → nothing to discover. This tool never inspects the primary
+  # /Applications/Claude.app bundle for patch state — the primary is left stock
+  # and only the per-instance mirror clones are ours to report on.
   if [[ ! -f "$CMA_CONFIG_FILE" ]]; then
     if [[ $JSON -eq 1 ]]; then
-      _emit_json_wrapped
+      _emit_json
     else
       cma_warn "no config file at $CMA_CONFIG_FILE — run \`claude-multiacct init\`"
     fi
@@ -515,37 +357,26 @@ main() {
   done < <(cma_list_labels)
 
   if [[ $JSON -eq 1 ]]; then
-    _emit_json_wrapped
+    _emit_json
     return 0
   fi
 }
 
-# Assemble the final JSON output from `_primary_json` and `_json_rows`. The
-# shape is:
-#   {"primary": {…primary-diagnostics…}, "instances": [{…mirror…}, …]}
-# `primary` is `null` when the primary Claude.app is missing; the array is
-# empty when no mirrors are configured. printf + IFS keeps the join pure-bash
-# (no jq dependency — see metadata-symlinks.sh note on why jq is deliberately
-# avoided in this repo). Chunk Y renamed this from a bare array to the
-# {"primary":…,"instances":[…]} shape so JSON consumers can see primary
-# state alongside the mirrors without a second CLI call.
-_emit_json_wrapped() {
-  local instances_json="[]"
-  if [[ ${#_json_rows[@]} -gt 0 ]]; then
-    local joined
-    joined="$(
-      IFS=,
-      printf '%s' "${_json_rows[*]}"
-    )"
-    instances_json="[$joined]"
+# Emit the mirror instances as a bare JSON array — one object per instance.
+# printf + IFS keeps the join pure-bash (no jq dependency — see
+# metadata-symlinks.sh note on why jq is deliberately avoided in this repo).
+# The array is empty when no mirrors are configured.
+_emit_json() {
+  if [[ ${#_json_rows[@]} -eq 0 ]]; then
+    printf '[]\n'
+    return 0
   fi
-  local primary_field
-  if [[ -n "$_primary_json" ]]; then
-    primary_field="$_primary_json"
-  else
-    primary_field="null"
-  fi
-  printf '{"primary":%s,"instances":%s}\n' "$primary_field" "$instances_json"
+  local joined
+  joined="$(
+    IFS=,
+    printf '%s' "${_json_rows[*]}"
+  )"
+  printf '[%s]\n' "$joined"
 }
 
 main "$@"

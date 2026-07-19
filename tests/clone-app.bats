@@ -598,6 +598,11 @@ process.stdout.write(createHash('sha256').update(raw.headerString).digest('hex')
 #   - Content anchor fails loud on drift              → a future Claude
 #     Desktop release that renames `exports.claudeCodeSessionManager` gets
 #     surfaced rather than silently injecting into the wrong site.
+#   - Additions/updates propagate but deletions DO NOT (A2) → a peer scan that
+#     transiently sees an empty/mis-resolved listing must never remove a
+#     session from the Map; it would blank the sidebar. The runtime harness
+#     asserts an external add re-emits, an external delete does NOT, and the
+#     session survives in memory.
 
 @test "asar-patch: injects session-propagation IIFE into the singleton chunk" {
 	setup_asar_fixture
@@ -720,12 +725,14 @@ process.stdout.write(createHash('sha256').update(raw.headerString).digest('hex')
 	[[ "$output" == *"session-manager singleton marker"* ]]
 }
 
-@test "asar-patch: session-propagation runtime harness — fs.watch on symlinked dir triggers re-emit" {
+@test "asar-patch: session-propagation runtime harness — external add re-emits, external delete does NOT wipe" {
 	# Runtime test: extract the injected chunk, drop it into a Node harness
 	# with stub `hs`/`o`/`k`/`E`/`b` symbols, write session files through a
 	# symlinked-target directory, and observe that the injected IIFE calls
-	# `hs.emitSessionUpdated` on external mutations. Proves the propagation
-	# mechanism works end-to-end without needing a live Claude Desktop.
+	# `hs.emitSessionUpdated` on an external ADD but — per A2 — does NOT
+	# propagate an external DELETE (no "deleted" event, the session survives in
+	# the Map). Proves the propagation mechanism + the sidebar-wipe guard
+	# work end-to-end without needing a live Claude Desktop.
 	setup_asar_fixture
 	"$CMA" init
 	"$CMA" add-instance "$LABEL" --email test-b@example.com
@@ -772,6 +779,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const EventEmitter = require('node:events');
+// H4 — simulate the Electron MAIN (browser) process. The injected IIFE guards
+// on process.type and no-ops in renderer/utility processes; the runtime
+// harness represents the one process that owns the real session store.
+process.type = 'browser';
 const storageDir = process.argv[2];
 const events = [];
 class StubManager extends EventEmitter {
@@ -814,11 +825,14 @@ __PAYLOAD__
     JSON.stringify({ sessionId:'ABC', title:'hello', lastActivityAt:1, cwd:'/x' }));
   await new Promise(r => setTimeout(r, 1000));
   const updated = events.filter(e => e.type === 'session_updated' && e.sessionId === 'ABC');
-  // External deletion — must fire "deleted".
+  // External deletion — per A2 this must NOT fire a "deleted" event and the
+  // session must SURVIVE in the in-memory Map (a transient empty/mis-resolved
+  // scan can never wipe the sidebar).
   fs.unlinkSync(path.join(storageDir, 'local_ABC.json'));
   await new Promise(r => setTimeout(r, 1000));
   const deleted = events.filter(e => e.type === 'deleted' && e.sessionId === 'ABC');
-  console.log(JSON.stringify({ updated: updated.length, deleted: deleted.length }));
+  const survived = hs.sessions.has('ABC');
+  console.log(JSON.stringify({ updated: updated.length, deleted: deleted.length, survived }));
   process.exit(0);
 })();
 HARNESS
@@ -834,8 +848,10 @@ fs.writeFileSync(process.env.CMA_HARNESS, t.replace("__PAYLOAD__", process.env.C
 	# realpath, which normalises both.
 	local result
 	result="$(node "$harness" "$rundir/mirror-view/dir")"
-	# Expect exactly 1 session_updated and 1 deleted event.
-	[[ "$result" == '{"updated":1,"deleted":1}' ]]
+	# Expect exactly 1 session_updated (the add propagated), ZERO deleted
+	# events (deletions are not propagated), and the session still present in
+	# the Map (the external delete did not wipe it).
+	[[ "$result" == '{"updated":1,"deleted":0,"survived":true}' ]]
 }
 
 # ── Remote-Control enforcer injection (Chunk Y) ─────────────────────────────
@@ -1016,6 +1032,9 @@ extractAll('$TARGET_APP/Contents/Resources/app.asar', '$extract');
 	local harness="$BATS_TEST_TMPDIR/rc-runtime-harness.js"
 	cat >"$harness" <<'HARNESS'
 const EventEmitter = require('node:events');
+// H4 — simulate the Electron MAIN (browser) process; the injected enforcer
+// IIFE guards on process.type and no-ops elsewhere.
+process.type = 'browser';
 // Compress timings for the harness. The real payload uses 5 s initial +
 // 15 s poll; we swap those via a text-preprocess before eval'ing (see below).
 const calls = [];

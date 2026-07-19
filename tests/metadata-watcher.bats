@@ -606,6 +606,11 @@ sentinel_path() { printf '%s' "$MIRROR_UDATA/.claude-multiacct/symlinks-installe
 	simulate_mirror_signin
 	setup_process_shims
 	seed_mirror_running
+	# C1 — the auto quit+relaunch is opt-in. This test asserts the RESTART
+	# path, so it explicitly opts in. The default-off behaviour is covered by
+	# its own test further down.
+	# shellcheck disable=SC2030  # bats runs each @test in a subshell; export is intentional per-test scope
+	export CMA_AUTO_RESTART=1
 	# Model a mirror that exits gracefully on TERM: pkill removes matching
 	# lines from the proc table so the wait-for-exit pgrep sees the process
 	# as gone on its next call and the loop breaks. Keep the cap short as a
@@ -674,6 +679,10 @@ sentinel_path() { printf '%s' "$MIRROR_UDATA/.claude-multiacct/symlinks-installe
 	simulate_mirror_signin
 	setup_process_shims
 	# Empty proc table — mirror not running.
+	# C1 — opt in so the not-running restart branch (and its log line) is
+	# reached; the default-off path is covered by its own test below.
+	# shellcheck disable=SC2030,SC2031  # bats runs each @test in a subshell; export is intentional per-test scope
+	export CMA_AUTO_RESTART=1
 
 	[ ! -e "$(sentinel_path)" ]
 
@@ -702,6 +711,9 @@ sentinel_path() { printf '%s' "$MIRROR_UDATA/.claude-multiacct/symlinks-installe
 	simulate_mirror_signin
 	setup_process_shims
 	seed_mirror_and_primary_running
+	# C1 — opt into the restart path so we can assert the pkill pattern.
+	# shellcheck disable=SC2030,SC2031  # bats runs each @test in a subshell; export is intentional per-test scope
+	export CMA_AUTO_RESTART=1
 	# Model a graceful-exit mirror so this test focuses on the pattern
 	# assertion rather than the wait-loop timeout branch. STUB_PKILL_SUCCEEDS=1
 	# makes pkill delete matching lines from the proc table — pgrep then reports
@@ -741,6 +753,9 @@ sentinel_path() { printf '%s' "$MIRROR_UDATA/.claude-multiacct/symlinks-installe
 	simulate_mirror_signin
 	setup_process_shims
 	seed_mirror_running
+	# C1 — opt into the restart path so the wait-timeout branch is reached.
+	# shellcheck disable=SC2031  # bats runs each @test in a subshell; export is intentional per-test scope
+	export CMA_AUTO_RESTART=1
 	# Short timeout so the poll loop exits fast under bats.
 	# shellcheck disable=SC2031  # bats runs each @test in a subshell; export is intentional per-test scope
 	export CMA_RESTART_WAIT_S=0.2
@@ -761,6 +776,71 @@ sentinel_path() { printf '%s' "$MIRROR_UDATA/.claude-multiacct/symlinks-installe
 	# Log surfaces the timeout AND the no-SIGKILL note.
 	grep -q "did not exit" "$CMA_LOG_DIR/metadata-watcher.log"
 	grep -q "do NOT SIGKILL" "$CMA_LOG_DIR/metadata-watcher.log"
+}
+
+@test "C1 default-off: first install with mirror running installs symlinks + sentinel but does NOT restart" {
+	# WHY (Rule 9): CMA_AUTO_RESTART defaults to 0. The load-bearing contract is
+	# that the disruptive part (TERM+relaunch of the user's live mirror) is
+	# suppressed by default, while the NON-disruptive part (symlink install +
+	# sentinel write) still happens on every fire. A regression that let the
+	# restart fire by default would TERM the user's live mirror during Desktop's
+	# sign-in write-bursts — the exact failure this gate exists to prevent.
+	"$CMA" init
+	"$CMA" add-instance b --email test-b@example.com
+	simulate_mirror_signin
+	setup_process_shims
+	seed_mirror_running
+	# Deliberately DO NOT export CMA_AUTO_RESTART — exercise the default (off).
+
+	[ ! -e "$(sentinel_path)" ]
+
+	run "$WATCHER"
+	[ "$status" -eq 0 ]
+
+	# Symlink IS installed (the non-disruptive work always happens).
+	local link="$MIRROR_UDATA/claude-code-sessions/$MIRROR_ACCT_UUID/$MIRROR_ORG_UUID"
+	[ -L "$link" ]
+
+	# Sentinel IS written (so a later opt-in fire won't re-restart).
+	[ -f "$(sentinel_path)" ]
+
+	# But NO restart: neither pkill nor open was invoked despite a running mirror.
+	run ! grep -qE $'^pkill\t' "$STUB_CALLS"
+	run ! grep -qE $'^open\t' "$STUB_CALLS"
+
+	# Log records the opt-out skip.
+	grep -q "CMA_AUTO_RESTART" "$CMA_LOG_DIR/metadata-watcher.log"
+}
+
+@test "C2 shared config-dir links are all symlinks AND resolve (no dangling todos/plugins/skills)" {
+	# WHY (Rule 9): a mirror installed before the primary lazily created a given
+	# subdir (todos/plugins/skills appear on first Code use, later than
+	# projects/sessions) used to get a symlink pointing at a nonexistent target
+	# — `-L` true but `-e` false. metadata-symlinks.sh now mkdir -p's the
+	# primary target first. Every shared link must be BOTH a symlink AND resolve.
+	"$CMA" init
+	"$CMA" add-instance b --email test-b@example.com
+
+	# Ensure the primary configDir has NONE of the shared subdirs yet, to model
+	# the pre-first-use state where the bug reproduced.
+	local p_cdir="$HOME/.claude"
+	local shared
+	for shared in projects sessions todos shell-snapshots plugins skills; do
+		rm -rf "${p_cdir:?}/$shared"
+	done
+
+	# Run the symlink installer directly (add-instance may have run it already;
+	# this re-run after removing the primary subdirs is the regression case).
+	run "$REPO/lib/metadata-symlinks.sh" b
+	[ "$status" -eq 0 ]
+
+	local m_cdir="$HOME/.claude-b"
+	for shared in projects sessions todos shell-snapshots plugins skills; do
+		# Is a symlink...
+		[ -L "$m_cdir/$shared" ]
+		# ...AND resolves (target exists — mkdir -p created the primary side).
+		[ -e "$m_cdir/$shared" ]
+	done
 }
 
 @test "remove-instance --keep-userdata clears the sentinel dir but preserves the rest" {

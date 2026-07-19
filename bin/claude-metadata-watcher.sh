@@ -21,7 +21,23 @@
 # token on sign-in (or creates the per-account UUID subdir on Code first-use).
 # ThrottleInterval=15 in the plist coalesces mutation bursts.
 #
+# WatchPaths / CMA_AUTO_RESTART reconciliation (C1):
+#   config.json stays in WatchPaths BECAUSE it is the post-OAuth / pre-Code
+#   trigger — Desktop writes it on sign-in, well before the user opens Code,
+#   which is what lets the symlink install happen the moment sign-in completes.
+#   The downside is that config.json is rewritten many times during Desktop's
+#   sign-in write-burst, so this handler fires repeatedly on a fresh sign-in.
+#   The symlink install + sentinel write are idempotent and safe to repeat on
+#   every fire. The auto quit+relaunch is NOT safe to repeat against a live
+#   mirror, so it is gated behind CMA_AUTO_RESTART (default 0/off, plumbed via
+#   the plist EnvironmentVariables) and additionally sentinel-gated to fire at
+#   most once. Default-off means a first sign-in installs symlinks + sentinel
+#   silently and the user relaunches the mirror by hand to refresh the sidebar.
+#
 # Env seams for hermetic tests:
+#   CMA_AUTO_RESTART   — 1 opts into the auto quit+relaunch of a live mirror on
+#                        first symlink install. Default 0 (off): install the
+#                        symlinks + sentinel but never TERM/relaunch.
 #   CMA_RESTART_WAIT_S — cap on the graceful-shutdown wait (default 5s).
 #                        Bats overrides to e.g. 0.2 to keep tests fast.
 #
@@ -87,6 +103,19 @@ handle_first_install() {
 
   if [[ $first_install -eq 0 ]]; then
     log "  $label: sentinel present (previous install) — skip auto-restart"
+    return 0
+  fi
+
+  # C1 — the auto quit+relaunch is OPT-IN (CMA_AUTO_RESTART=1). The symlink
+  # install + sentinel above happen on EVERY fire regardless; only the
+  # disruptive TERM+relaunch of a live mirror is gated. Default OFF: during
+  # Desktop's sign-in write-bursts the config.json WatchPath fires this
+  # handler repeatedly, and an unexpected TERM of the user's live mirror is
+  # worse than the one-time manual "quit+relaunch to refresh the sidebar"
+  # step. The plist's EnvironmentVariables carries the default (0); operators
+  # who want the hands-off restart install with CMA_AUTO_RESTART=1.
+  if [[ "${CMA_AUTO_RESTART:-0}" != "1" ]]; then
+    log "  $label: first symlink install but CMA_AUTO_RESTART!=1 — sentinel written, skipping auto quit+relaunch (relaunch the mirror manually to refresh its sidebar)"
     return 0
   fi
 

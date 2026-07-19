@@ -234,6 +234,60 @@ BIN
 	[ "$(readlink "$HOME/.local/bin/claude-multiacct")" = "/usr/bin/true" ]
 }
 
+# ── the primary /Applications/Claude.app is NEVER patched ─────────────────────
+# WHY (Rule 9): the in-place primary patch (ad-hoc re-sign + asar rewrite)
+# broke the primary — freeze / blank content / dead auto-updates. These tests
+# lock in the removal: `install` must leave the source bundle byte-identical
+# (no backup, no mirror-prefs plist, no ad-hoc _CodeSignature), and the
+# primary-patch / primary-unpatch subcommands must be gone. A regression that
+# reintroduces primary patching fails at least one of these.
+
+@test "install never writes to or codesigns the primary Claude.app" {
+	# Snapshot the source bundle's full content before install…
+	local before after
+	before="$(cd "$CMA_SOURCE_CLAUDE_APP" && find . -type f -exec shasum {} + | sort)"
+	run "$CMA" install
+	[ "$status" -eq 0 ]
+	# …and assert it is byte-identical afterwards (no in-place mutation).
+	after="$(cd "$CMA_SOURCE_CLAUDE_APP" && find . -type f -exec shasum {} + | sort)"
+	[ "$before" = "$after" ]
+	# None of the primary-patch artifacts may exist on the primary bundle.
+	[ ! -e "$CMA_SOURCE_CLAUDE_APP/Contents/Resources/app.asar.multiacct-backup" ]
+	[ ! -e "$CMA_SOURCE_CLAUDE_APP/Contents/Resources/claude-multiacct-mirror-prefs.plist" ]
+	[ ! -d "$CMA_SOURCE_CLAUDE_APP/Contents/_CodeSignature" ]
+}
+
+@test "primary-patch and primary-unpatch subcommands no longer exist" {
+	run "$CMA" primary-patch
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"unknown subcommand"* ]]
+	run "$CMA" primary-unpatch
+	[ "$status" -ne 0 ]
+	[[ "$output" == *"unknown subcommand"* ]]
+}
+
+@test "install-launchd renders exactly 3 agents (no primary-patch-refresh)" {
+	# Under a stubbed launchctl (real one fails in a scratch $HOME) with the
+	# hermetic skip lifted, install-launchd must render exactly the three
+	# runtime agents — the primary-patch-refresh agent is gone.
+	"$CMA" init
+	"$CMA" add-instance b --email test-b@example.com
+	local stub="$BATS_TEST_TMPDIR/stub-bin"
+	mkdir -p "$stub"
+	printf '#!/usr/bin/env bash\nexit 0\n' >"$stub/launchctl"
+	chmod +x "$stub/launchctl"
+	run env -u CMA_SKIP_LAUNCHD PATH="$stub:$PATH" "$REPO/lib/install-launchd.sh"
+	[ "$status" -eq 0 ]
+	local agents="$HOME/Library/LaunchAgents"
+	[ -f "$agents/com.user.claude-sessions-sync.plist" ]
+	[ -f "$agents/com.user.claude-clone-refresh.plist" ]
+	[ -f "$agents/com.user.claude-metadata-symlink.plist" ]
+	[ ! -e "$agents/com.user.claude-primary-patch-refresh.plist" ]
+	local count
+	count="$(find "$agents" -name 'com.user.claude-*.plist' | wc -l | tr -d ' ')"
+	[ "$count" = "3" ]
+}
+
 @test "repair <label> re-runs install for existing instance" {
 	"$CMA" init
 	"$CMA" add-instance b --email test-b@example.com
@@ -563,8 +617,10 @@ SH
 	run "$CMA" doctor --json
 	[ "$status" -eq 0 ]
 	# Use python (available on every macOS by default) to parse — proves the
-	# output is real JSON, not just braces-and-strings.
-	python3 -c "import json,sys; d=json.loads('''$output'''); assert 'repo' in d and 'config' in d and 'launchd_agents' in d and 'instances' in d; sys.exit(0)"
+	# output is real JSON, not just braces-and-strings. The doctor JSON must NOT
+	# carry a top-level `primary` key: the tool no longer inspects/patches the
+	# primary bundle, and `instances` is a plain array of mirror objects.
+	python3 -c "import json,sys; d=json.loads('''$output'''); assert 'repo' in d and 'config' in d and 'launchd_agents' in d and 'instances' in d; assert 'primary' not in d, d.keys(); assert isinstance(d['instances'], list); sys.exit(0)"
 }
 
 @test "doctor --json includes each configured instance" {
@@ -745,4 +801,87 @@ import json
 print(json.load(open('$HOME/.claude/settings.json')).get('remoteControlAtStartup'))
 ")"
 	[ "$val" = "True" ]
+}
+
+# ── C4: shared-account contention doctor warning ──────────────────────────
+#
+# The metadata symlinks point mirror<acct>/<org> → primary<acct>/<org>. If a
+# mirror is signed into the SAME Anthropic account as the primary (identical
+# lastKnownAccountUuid), the two resolve to ONE live ~/.claude session store
+# and contend over it. Doctor must WARN (never mutate the share set).
+
+@test "C4 doctor: warns CONTENTION when a mirror shares the primary's account UUID" {
+	"$CMA" init
+	"$CMA" add-instance b --email test-b@example.com
+	mkdir -p "$HOME/Library/Application Support/Claude" "$HOME/Library/Application Support/Claude-B"
+	# Primary AND mirror both carry the SAME account UUID.
+	printf '{"lastKnownAccountUuid":"11111111-1111-1111-1111-111111111111"}' \
+		>"$HOME/Library/Application Support/Claude/config.json"
+	printf '{"lastKnownAccountUuid":"11111111-1111-1111-1111-111111111111"}' \
+		>"$HOME/Library/Application Support/Claude-B/config.json"
+	run "$CMA" doctor
+	[ "$status" -eq 0 ] || [ "$status" -eq 1 ]
+	[[ "$output" == *"CONTENTION"* ]]
+	[[ "$output" == *"LIVE"* ]]
+}
+
+@test "C4 doctor: quiet when mirror + primary have DISTINCT account UUIDs" {
+	"$CMA" init
+	"$CMA" add-instance b --email test-b@example.com
+	mkdir -p "$HOME/Library/Application Support/Claude" "$HOME/Library/Application Support/Claude-B"
+	printf '{"lastKnownAccountUuid":"11111111-1111-1111-1111-111111111111"}' \
+		>"$HOME/Library/Application Support/Claude/config.json"
+	printf '{"lastKnownAccountUuid":"22222222-2222-2222-2222-222222222222"}' \
+		>"$HOME/Library/Application Support/Claude-B/config.json"
+	run "$CMA" doctor
+	[ "$status" -eq 0 ] || [ "$status" -eq 1 ]
+	[[ "$output" != *"CONTENTION"* ]]
+}
+
+# ── H3: libexec TCC escape for launchd agents ─────────────────────────────
+#
+# Background launchd agents can't exec from a TCC-protected container
+# (~/Documents → 126 / "Operation not permitted"). install-launchd copies the
+# agent scripts + lib/ deps into ~/.local/libexec/claude-multiacct and points
+# every plist there. The copy runs even under CMA_SKIP_LAUNCHD.
+
+@test "H3 libexec: init copies bin+lib into libexec and the copied lib/common.sh sources cleanly" {
+	"$CMA" init
+	local libexec="$HOME/.local/libexec/claude-multiacct"
+	[ -d "$libexec/bin" ]
+	[ -d "$libexec/lib" ]
+	[ -f "$libexec/bin/claude-metadata-watcher.sh" ]
+	[ -f "$libexec/bin/claude-sessions-sync.sh" ]
+	[ -f "$libexec/bin/claude-clone-refresh.sh" ]
+	[ -f "$libexec/bin/claude-multiacct" ]
+	[ -f "$libexec/lib/common.sh" ]
+	# The copied agent's `../lib/common.sh` source path must resolve WITHIN
+	# libexec (self-contained — never reaches back into the ~/Documents checkout).
+	run bash -c 'set -euo pipefail; . "'"$libexec"'/lib/common.sh"; printf "%s" "$CMA_LIBEXEC_DIR"'
+	[ "$status" -eq 0 ]
+	[ -n "$output" ]
+}
+
+@test "H3 libexec reclaim: removed when no launchd plist references it" {
+	local libexec="$HOME/.local/libexec/claude-multiacct"
+	mkdir -p "$libexec/bin"
+	printf 'x' >"$libexec/bin/marker"
+	mkdir -p "$HOME/Library/LaunchAgents"
+	# No plist references libexec → reclaim removes it.
+	run bash -c 'set -euo pipefail; . "'"$REPO"'/lib/common.sh"; cma_reclaim_libexec_if_unreferenced'
+	[ "$status" -eq 0 ]
+	[ ! -d "$libexec" ]
+}
+
+@test "H3 libexec reclaim: preserved while a launchd plist still references it" {
+	local libexec="$HOME/.local/libexec/claude-multiacct"
+	mkdir -p "$libexec/bin"
+	printf 'x' >"$libexec/bin/marker"
+	mkdir -p "$HOME/Library/LaunchAgents"
+	# A still-installed plist points ProgramArguments at libexec → keep it.
+	printf '<plist>%s/bin/claude-sessions-sync.sh</plist>' "$libexec" \
+		>"$HOME/Library/LaunchAgents/com.user.claude-sessions-sync.plist"
+	run bash -c 'set -euo pipefail; . "'"$REPO"'/lib/common.sh"; cma_reclaim_libexec_if_unreferenced'
+	[ "$status" -eq 0 ]
+	[ -d "$libexec" ]
 }

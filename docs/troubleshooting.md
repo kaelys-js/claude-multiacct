@@ -2,6 +2,10 @@
 
 Symptom → diagnosis → fix. Run `claude-multiacct doctor` first — it walks every layer and reports what's degraded before you dig manually.
 
+## Primary Claude is stock and untouched
+
+This tool NEVER patches `/Applications/Claude.app` — the primary bundle stays stock, Apple-signed, and Squirrel-updatable. If the primary freezes on open, blanks its content, or stops auto-updating, that is NOT something `claude-multiacct` caused; reinstall Claude Desktop from Anthropic to get a clean pristine bundle. (An earlier version did patch the primary in place behind a `primary-patch` subcommand; that path was removed precisely because the ad-hoc re-sign broke the primary's boot + auto-updates.)
+
 ## Dock icon click does nothing (no window, no error)
 
 Gatekeeper silently rejected the ad-hoc bundle. See [dock-icon-fix.md](dock-icon-fix.md).
@@ -14,19 +18,22 @@ killall Dock                      # if Dock cached the old routing
 
 ## Sidebar in the mirror shows no sessions
 
-Metadata symlinks aren't in place. In the normal happy path, the `com.user.claude-metadata-symlink` launchd agent installs these automatically the moment OAuth sign-in completes — it watches the mirror's `<userData>/config.json` (which Desktop writes on token cache) and derives the required UUIDs from `lastKnownAccountUuid` + the newest `dxt:allowlistLastUpdated:<orgUuid>` timestamp. On the first successful install the watcher also auto-restarts the mirror if it's running so Desktop's React sidebar reloads with the symlinked content in place; a per-mirror sentinel at `<userData>/.claude-multiacct/symlinks-installed` records that the auto-restart already fired and gates subsequent fires from restarting again. Sessions should appear within seconds of sign-in with no "open Code inside Desktop first" and no manual quit/relaunch step. Check via:
+Metadata symlinks aren't in place. In the normal happy path, the `com.user.claude-metadata-symlink` launchd agent installs these automatically the moment OAuth sign-in completes — it watches the mirror's `<userData>/config.json` (which Desktop writes on token cache) and derives the required UUIDs from `lastKnownAccountUuid` + the newest `dxt:allowlistLastUpdated:<orgUuid>` timestamp. The symlink install + a per-mirror sentinel at `<userData>/.claude-multiacct/symlinks-installed` are written on every fire; sessions land on disk within seconds of sign-in with no "open Code inside Desktop first" step. Check via:
 ```sh
 ls -la "~/Library/Application Support/Claude-<Titlecase>/claude-code-sessions/"
 ```
 
-Manual fallback — if the sidebar is STILL empty after sign-in (e.g. the sentinel was already present from a previous install so the auto-restart got gated out, or you launched the mirror manually before the watcher ran), quit and relaunch the mirror by hand (Cmd-Q, then click the mirror's Dock icon) to force the React sidebar to re-read the metadata dir.
+**Refreshing the sidebar.** Desktop's React sidebar reads the mirror's session dir on app-start and does NOT retroactively pick up symlinks that appeared mid-run, so after a first sign-in you quit and relaunch the mirror by hand (Cmd-Q, then click the mirror's Dock icon) to see the sessions. The watcher *can* do this quit+relaunch for you, but it is **opt-in** (`CMA_AUTO_RESTART=1`) and **off by default** — because `config.json` fires the watcher repeatedly during Desktop's sign-in write-burst, and auto-TERMing a live mirror on each of those fires is more disruptive than the one-time manual relaunch. To enable the hands-off restart, install with the env baked into the plist:
+```sh
+CMA_AUTO_RESTART=1 claude-multiacct repair   # re-renders the metadata-symlink plist with CMA_AUTO_RESTART=1
+```
 
 If you don't see a UUID dir at all, or see one but no symlink inside pointing at the primary's UUID dir, the agent either wasn't loaded or hasn't fired yet. Confirm the agent is loaded:
 ```sh
 claude-multiacct doctor          # reports all three launchd agents' state
 tail ~/Library/Logs/claude-multiacct/metadata-watcher.log
 ```
-The log records whether UUIDs were resolved on-disk (post-Code-use) or derived from `config.json` (post-OAuth pre-Code-use); a line ending `(uuids derived from config.json)` confirms the derivation path fired. Lines `auto-restarting mirror` / `relaunched` / `mirror not running` / `sentinel present` narrate the auto-restart branch.
+The log records whether UUIDs were resolved on-disk (post-Code-use) or derived from `config.json` (post-OAuth pre-Code-use); a line ending `(uuids derived from config.json)` confirms the derivation path fired. When `CMA_AUTO_RESTART` is off (the default) a first install logs `CMA_AUTO_RESTART!=1 — sentinel written, skipping auto quit+relaunch`; when it is on, lines `auto-restarting mirror` / `relaunched` / `mirror not running` / `sentinel present` narrate the restart branch.
 
 Manual fallback (also fixes the edge cases where the agent hasn't been loaded — e.g. immediately after a macOS update that clears LaunchAgents):
 ```sh
@@ -110,6 +117,19 @@ Trigger a sync manually (or just close the primary):
 ```sh
 claude-multiacct sync-now
 ```
+
+## A launchd agent logs "Operation not permitted" (exit 126) and never runs
+
+Background launchd agents can't exec a script from a TCC-protected container (`~/Documents`, `~/Desktop`, `~/Downloads`) — launchd runs them with no TCC grant for that container, so the exec fails with `126` / `Operation not permitted`. The repo checkout usually lives under `~/Documents`, so the agents do NOT exec from the checkout: `install`/`repair` copy the three agent scripts + their `lib/` deps into `~/.local/libexec/claude-multiacct/` (outside every TCC container) and point every plist's `ProgramArguments` there. If you see 126 in an agent's log, the plist is pointing at the checkout instead of libexec — re-render it:
+```sh
+claude-multiacct repair            # syncs libexec + re-renders every plist to exec from it
+grep -A2 ProgramArguments ~/Library/LaunchAgents/com.user.claude-*.plist   # should show ~/.local/libexec/…
+```
+The libexec copy is reclaimed on `uninstall`, but only once no installed plist still references it.
+
+## doctor warns "CONTENTION: mirror … resolves to the SAME account UUID as primary"
+
+The mirror is signed into the SAME Anthropic account as the primary (identical `lastKnownAccountUuid`). Because the metadata symlinks resolve the mirror's account/org folder onto the primary's, the two share ONE live `~/.claude` session store and will contend over it. `doctor` only warns — it never changes the share set. Fix by signing that mirror into a DIFFERENT account (that's the whole point of a mirror), or, if the shared-account setup is intentional, ignore the warning.
 
 ## Complete reset
 
