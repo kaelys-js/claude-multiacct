@@ -1,215 +1,109 @@
-# claude-multiacct
+# foundation-registry
 
-[![CI](https://github.com/kaelys-js/claude-multiacct/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kaelys-js/claude-multiacct/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue?style=flat-square)](LICENSE)
-[![shellcheck](https://img.shields.io/badge/shellcheck-clean-brightgreen?style=flat-square)](#quality-gates)
-[![bats](https://img.shields.io/badge/bats-hermetic-brightgreen?style=flat-square)](#quality-gates)
-[![gitleaks](https://img.shields.io/badge/gitleaks-clean-brightgreen?style=flat-square)](#quality-gates)
+[![CI](https://github.com/kaelys-js/foundation-registry/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/kaelys-js/foundation-registry/actions/workflows/ci.yml)
 
-**Run any number of Claude Desktop instances under different accounts on the same Mac, sharing sessions between them, without logout/login.**
+**Business-as-code governance layer — every firm decision as a versioned Markdown record, validated by schema, owned by named teams.**
 
 ## What it does
 
-Claude Desktop stores OAuth per-userData directory. `--user-data-dir` lets you point at a second one; combined with `CLAUDE_CONFIG_DIR` for the embedded Claude Code CLI, the same app binary boots into a different identity. This repo automates:
+Firm-level decisions scatter across wikis, chat, and one-off docs, and nobody can find the reasoning six months later. This repo keeps them as Markdown-with-YAML-frontmatter records — Product Requirement Documents (PRD), Product Decision Records (PDR), Architecture Decision Records (ADR), capability Specs (SPEC), Tasks, and Releases — validated by JSON Schema and routed to named teams via CODEOWNERS.
 
-- **Instance install** — one command builds the per-instance `configDir` + `userData` + terminal launcher + Dock-clickable `.app` bundle (a full ~745 MB clone of `/Applications/Claude.app` with a rewritten `CFBundleIdentifier` so the Dock groups each mirror separately from the primary — see [docs/dock-icon-fix.md](docs/dock-icon-fix.md)). A `launchd` WatchPaths agent auto-refreshes every clone after each Claude Desktop Squirrel update; disk cost is ~745 MB per mirror.
-- **Session sharing** at every layer that's safe to share (JSONL bodies + desktop UI metadata + agent-mode metadata → symlinked at file layer; Chromium IndexedDB / Local Storage / Session Storage → `launchd`-triggered rsync one-way primary → mirrors on primary-close).
-- **Per-instance state that must stay isolated** (Cookies / Preferences / Network Persistent State / Crashpad) is left untouched, per instance.
-- **Repair + diagnostics** — idempotent `repair` + a `doctor` subcommand that walks every layer and reports what's healthy vs drifted.
+Records partition by domain (governance, design, frontend, backend, infra, security, data, observability), and cross-link forward: PRD → (PDR / ADR) → SPEC → Tasks → Release. It's the record of what the firm decided and why — **not** a runtime application, and **not** the client TypeScript monorepo.
+
+Every record's frontmatter is validated by `packages/products/registry/src/validate-records.ts`, which loads every `records/**/*.md`, validates each against `schema/record.schema.json` (JSON Schema draft 2020-12), then asserts cross-record invariants JSON Schema can't express: id uniqueness, reference resolution, the parent-type matrix, and supersession integrity. Pure, deterministic, no network, no model calls.
 
 ## Quickstart
 
-Fresh Mac? Get the prerequisites first:
-
 ```sh
-xcode-select --install                   # git + build tools
-curl https://mise.run | sh               # mise (pins the toolchain)
-brew install gh                          # GitHub CLI (or use SSH for a private clone)
-gh auth login                            # authorise your GitHub account
+git clone https://github.com/kaelys-js/foundation-registry ~/Documents/work/@personal/foundation-registry
+cd ~/Documents/work/@personal/foundation-registry
+mise install                 # pins the whole toolchain
+pnpm install --frozen-lockfile
 ```
 
-Then clone + bootstrap:
+Run the same gates CI runs (see [CONTRIBUTING.md](CONTRIBUTING.md)):
 
 ```sh
-# 1. Clone + install the pinned toolchain (self-contained via mise).
-gh repo clone kaelys-js/claude-multiacct ~/Documents/work/@personal/claude-multiacct
-cd ~/Documents/work/@personal/claude-multiacct
-mise install                              # pins shellcheck, bats, gitleaks, yq, yamllint
-
-# 2. Put the CLI on PATH (idempotent; symlinks into ~/.local/bin/claude-multiacct).
-bin/claude-multiacct install
-# Ensure ~/.local/bin is on PATH — add to ~/.zshrc if not:
-#   export PATH="$HOME/.local/bin:$PATH"
-
-# 3. Make sure Claude Desktop is installed at /Applications/Claude.app and you've
-#    signed into the PRIMARY account you want it to boot into by default (once).
-
-# 4. Bootstrap. Detects the primary from ~/.claude/.claude.json + writes
-#    ~/.config/claude-multiacct/instances.yaml + installs the two launchd
-#    agents that don't depend on any mirrors existing yet (sessions-sync +
-#    clone-refresh). The third agent (metadata-symlink) gets installed by
-#    the first `add-instance` below.
-claude-multiacct init
-
-# 5. Add every mirror instance you want. Each mirror clones /Applications/Claude.app
-#    (~745 MB, ~30-60s per clone) into ~/Applications/Claude Account <Title>.app
-#    with its own bundle-id + shell-wrapped MacOS/Claude.
-claude-multiacct add-instance b --email you@example.com
-claude-multiacct add-instance work --email work@example.com
-
-# 6. Launch the new instance + sign in (once). The launchd metadata-symlink
-#    agent watches the per-mirror <userData>/config.json — which Desktop
-#    writes on OAuth token cache — derives the required account+org UUIDs
-#    from `lastKnownAccountUuid` + the newest `dxt:allowlistLastUpdated:<org>`
-#    timestamp, installs the session-metadata symlinks the moment sign-in
-#    completes, and on the first symlink install auto-quits + relaunches
-#    the running mirror so Desktop's React sidebar re-reads the freshly
-#    symlinked session dir. Sessions appear within seconds of sign-in with
-#    no manual quit/relaunch step.
-open ~/Applications/Claude\ Account\ B.app
-# → sign in to Account B via the normal Claude Desktop UI. Sessions appear.
-
-# 7. (Optional fallback) if the metadata symlinks didn't appear — e.g. the
-#    launchd agent hadn't been loaded, or you're on an older macOS release —
-#    run repair to install them by hand.
-claude-multiacct repair b
-
-# 8. Confirm health.
-claude-multiacct doctor
+pnpm qa:lint && pnpm qa:format:check && pnpm qa:test
+pnpm qa:schema               # validates every record against the JSON schemas
 ```
 
-### Running a command against a mirror instance
+## Record types
 
-`claude-multiacct exec <label> [--] <cmd> [args…]` sets `CLAUDE_CONFIG_DIR` and
-`CHROMIUM_USER_DATA_DIR` to the mirror's paths and execs the given command:
+Every record lives in `packages/products/registry/records/<domain>/` and matches a filename pattern `<type>-<id-lowercased>-<slug>.md`:
 
-```sh
-# Point `claude` at the 'b' mirror for one invocation:
-claude-multiacct exec b -- claude
-# Any tool that reads $CLAUDE_CONFIG_DIR (Anthropic's CLI, Claude Code SDK, etc.)
-# sees the mirror's config, not the primary.
+- **PRD** — Product Requirement Document (what problem, who, why)
+- **PDR** — Product Decision Record (how we solved it, options weighed)
+- **ADR** — Architecture Decision Record (technical trade-offs, consequences)
+- **SPEC** — capability specification (interface contract, invariants)
+- **Task** — a unit of work referencing its parent PRD/PDR/ADR/SPEC
+- **Release** — cut, notes, changed records since the prior release
 
-# No command → dry-run: prints the two `export` lines the wrapper would use.
-# Useful for `eval "$(claude-multiacct exec b)"` in a subshell.
-claude-multiacct exec b
+Templates for each type live in `packages/products/registry/templates/`. The parent-type matrix (which types may reference which) is enforced by the validator via rule codes `PT-1..PT-8`; supersession integrity via `SS-1..SS-4`.
+
+## Workspace layout
+
+pnpm workspace. Governed records + validator + toolchain each live as separate `@foundation/*` packages; repo root carries only orchestration.
+
+```text
+packages/
+  shared/
+    config/            # @foundation/config    shared tsconfig base + every tool config
+    utils/
+      core/            # @foundation/core       repoRoot() + miseExec()
+      qa/              # @foundation/qa         lint/format dispatch + schema checks
+      sync/            # @foundation/sync       generated-file drift guards
+  products/
+    registry/          # @foundation/registry   record spine + schema validator
+      records/         # records partitioned by domain
+      schema/          # JSON Schema draft 2020-12
+      templates/       # per-type templates
+      proposals/       # open-contribution drafts
+      owners.yaml      # domain → team + lead manifest
+      src/             # validate-records.ts + supporting code
+      site/            # generated static index (built in CI)
 ```
 
-The subcommand's exit code is the child command's exit code, so it composes
-cleanly in scripts and Makefiles.
+Cross-package imports resolve through each package's `exports` map and run under Node's native TypeScript type-stripping — no build step.
 
-### Uninstall
+## Adding a record
 
-```sh
-claude-multiacct remove-instance <label>   # tears down configDir + userData + clone + launcher (snapshots first)
-claude-multiacct uninstall                 # removes the ~/.local/bin symlink
-# Nuke every trace (launchd + config + backups): see docs/troubleshooting.md → "Complete reset".
-```
+1. Pick the domain (matches a directory under `records/`) and the type.
+2. Copy the matching template from `packages/products/registry/templates/<type>.template.md` into `records/<domain>/`.
+3. Rename the file per pattern: `<type>-<id-lowercased>-<slug>.md` (e.g. `adr-0042-cache-topology.md`).
+4. Fill the frontmatter — every required key comes from `schema/record.schema.json`.
+5. Add any `references:` to parent records (validator asserts the parent-type matrix).
+6. Run `pnpm qa:schema` locally. Fix any RULE-CODE violations reported by the validator.
+7. Open a PR — CODEOWNERS routes review to the domain's team per `owners.yaml`.
 
-## Upgrading an existing install
+## Ownership
 
-```sh
-# 1. Pull latest.
-cd ~/Documents/work/@personal/claude-multiacct
-git pull
-
-# 2. Re-run install so the CLI symlink at ~/.local/bin/claude-multiacct
-#    picks up any new subcommands (idempotent — safe to re-run any time;
-#    only rewrites the symlink if the target has changed).
-bin/claude-multiacct install
-
-# 3. Verify. `doctor --json` gives a structured JSON report suitable for
-#    piping to jq or diffing between two Macs.
-claude-multiacct doctor
-claude-multiacct doctor --json | jq .
-```
-
-**On any additional Mac** — run the same steps 1-3. Anthropic's per-account
-cloud already syncs each account's sessions across devices, so as long as each
-mirror on the second Mac is signed in with the same account as on the first,
-the sessions appear on both. See [docs/cross-mac-setup.md](docs/cross-mac-setup.md)
-for the field-by-field cross-Mac diff protocol.
-
-To verify two installs are structurally identical, run on each Mac:
-
-```sh
-claude-multiacct doctor --json > "$(hostname -s).json"
-```
-
-then copy both JSON files to one machine and diff them.
-
-## Sharing model
-
-See [docs/sync-model.md](docs/sync-model.md) for the full four-layer breakdown. Short version:
-
-| Layer | Location | Sharing mechanism |
-|---|---|---|
-| Session JSONL content | `~/.claude/projects/…/<sessId>.jsonl` | file-layer symlink (`~/.claude-<label>/projects` → primary) |
-| Desktop UI session metadata | `<userData>/claude-code-sessions/<accountUuid>/<orgUuid>/local_<sessId>.json` | per-account-folder symlink at userData level |
-| Agent-mode subagent metadata | `<userData>/local-agent-mode-sessions/<accountUuid>/…` | per-account-folder symlink at userData level |
-| Chromium IndexedDB / Local Storage / Session Storage | `<userData>/{IndexedDB,Local Storage,Session Storage}/` | `launchd`-triggered rsync primary → mirrors on primary close |
-| Cookies / Preferences / Network Persistent State / Crashpad | `<userData>/{Cookies,Preferences,…}` | NEVER SHARED (per-instance OAuth + window state; sharing breaks auth) |
+`owners.yaml` maps each governed domain to the GitHub **team** that owns it (CODEOWNERS review routing) and its named **lead** (accountable engineer of record). Domain values in record frontmatter must match a key in `owners.yaml`; the validator asserts this with rule code `DOMAIN_UNKNOWN` / `OWNER_DOMAIN_MISMATCH`.
 
 ## Documentation
 
-- [docs/architecture.md](docs/architecture.md) — end-to-end system diagram
-- [docs/sync-model.md](docs/sync-model.md) — the four-layer sharing model in detail
-- [docs/dock-icon-fix.md](docs/dock-icon-fix.md) — why Dock launch silently fails on unsigned bundles + the fix
-- [docs/cross-mac-setup.md](docs/cross-mac-setup.md) — running the same mirrors on multiple Macs
-- [docs/troubleshooting.md](docs/troubleshooting.md) — symptom → diagnosis table
+- [ADOPTING.md](ADOPTING.md) — how to bring a new product or runtime package into the foundation
 - [AGENTS.md](AGENTS.md) — engineering rules every contributor (human or agent) follows
 - [CONTRIBUTING.md](CONTRIBUTING.md) — local gates + PR flow
+- [PARITY.md](PARITY.md) — intentional drifts against downstream forks
+- Sibling repo: [ttt-studio-cole-30-60-90-plan](https://github.com/kaelys-js/ttt-studio-cole-30-60-90-plan) — a downstream fork that hosts the `cole-30-60-90` runtime product on top of this toolchain
 
 ## Requirements
 
-- macOS (tested on 15.x)
-- Claude Desktop installed at `/Applications/Claude.app` with the primary account signed in
-- `mise` (pins shellcheck, bats, gitleaks, yq, yamllint from `mise.toml`)
-- `gh` for a private clone (or SSH); `git` for pulls
+- macOS or Linux
+- `mise` (installs Node, pnpm, every linter/formatter from `mise.toml`)
 
 ## Development
-
-Repository layout:
-
-```text
-bin/                        # the CLI + rsync/refresh/metadata-watcher workers
-lib/                        # per-instance install/uninstall/build helpers
-launchd/                    # WatchPaths agent templates (sessions-sync / clone-refresh / metadata-symlink)
-config/instances.example.yaml
-docs/                       # architecture / sync-model / dock-icon-fix / troubleshooting / cross-mac-setup
-tests/                      # bats — smoke / sync-worker / clone-app / metadata-watcher (52 hermetic tests)
-```
-
-### Quality gates
-
-```sh
-claude-multiacct qa lint    # shellcheck -x + gitleaks
-claude-multiacct qa test    # bats tests/
-```
-
-Both must pass on `main`. `.gitleaks.toml` covers OAuth-adjacent paths that the tooling touches.
-
-### How updates work
-
-Claude Desktop ships its own Squirrel auto-updater. Squirrel verifies each update against the primary bundle's Developer ID Designated Requirement (DR) — a check that fails against a mirror's ad-hoc signature. Two things flow from that:
-
-- **Mirrors never call the Anthropic Squirrel feed.** `lib/asar-patch-clone.sh` rewrites each clone's bundled JS so Claude Desktop treats the mirror as if `disableAutoUpdates=YES` was set via MDM: the auto-poll loop short-circuits (log line `[updater] Auto-updates disabled by enterprise policy`), and the Claude menu shows a disabled "Check for Updates…" item with the sublabel "Updates disabled by admin". No "Failed to check for updates" dialog is reachable. See [docs/architecture.md § The asar patch layer](docs/architecture.md#the-asar-patch-layer) for the anchor strings the patch rewrites and how the Info.plist `ElectronAsarIntegrity` hash is kept in sync so Electron's boot-time check still passes.
-- **Squirrel still updates the primary** at `/Applications/Claude.app`. When that happens, the `com.user.claude-clone-refresh` WatchPaths agent picks up the mtime change on `Info.plist` and re-ditto's every mirror clone against the fresh primary, re-applying the asar patch, re-writing the per-mirror plist, and re-signing. Mirrors track the primary within seconds of a Squirrel update.
-
-### Known issues + fixes
-
-- **Claude Desktop updated but mirror shows old version** — the `com.user.claude-clone-refresh` WatchPaths agent auto-refreshes on Squirrel updates. If it hasn't fired (e.g. a mirror was running at update-time and the refresh skipped it), run `claude-multiacct refresh-clones` manually after quitting the mirror(s).
-- **launchd agent missing after macOS update** — macOS occasionally resets per-user launchd state after a major OS update. `claude-multiacct repair` re-installs and re-loads all three agents.
-- **Mid-run mutations from the primary don't show in a running mirror's sidebar** — Claude Desktop loads the session list from disk into an in-memory + IndexedDB cache at process start (`Loaded N persisted sessions from …` in the log). It does not watch the sessions dir for outside writes. When the primary archives / creates / deletes a session, the mirror's disk view IS up to date (the sessions dir is symlink-shared), but the mirror's UI only re-reads that view on relaunch. See [docs/architecture.md § Real-time session-state propagation](docs/architecture.md#real-time-session-state-propagation-and-why-its-not-real-time) for why file-layer watching isn't safe (LevelDB exclusive locks) and why an upstream Anthropic hook is the only route to real-time propagation across mirrors.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the local gates every push must pass.
 
 ## Support + Security
 
-- Bug reports: [Issues](https://github.com/kaelys-js/claude-multiacct/issues)
-- Questions: [Discussions](https://github.com/kaelys-js/claude-multiacct/discussions)
+- Bug reports: [Issues](https://github.com/kaelys-js/foundation-registry/issues)
+- Questions: [Discussions](https://github.com/kaelys-js/foundation-registry/discussions)
 - Security: [SECURITY.md](SECURITY.md) (private vulnerability reporting)
 - Conduct: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
 
 ## License
 
-[MIT](LICENSE) © kaelys-js
+Private — see repo settings.

@@ -1,37 +1,41 @@
 {
-  "$schema": "https://raw.githubusercontent.com/kaelys-js/kaelys-js/main/schema/kaelys-catalog.schema.json",
-  "name": "claude-multiacct",
-  "tagline": "Sign in to more than one Claude Desktop account on the same Mac, each in its own Dock-clickable app.",
-  "sellMe": "Claude Desktop only signs in to one Anthropic account at a time — switching means signing out and back in, and losing session history in between. This CLI clones the app once per account, wires each clone to its own OAuth directory (`--user-data-dir` + `CLAUDE_CONFIG_DIR`), and rewrites just enough of the bundle so the Dock lights the right icon for the right window. Sessions and agent metadata are shared safely across clones via symlinks (JSONL, UI, agent) and rsync (Chromium storage), so history follows you between accounts. Ships with three launchd agents that keep clones fresh when Anthropic pushes an update.",
-  "status": "stable",
-  "since": 2026,
-  "primaryLanguage": "Shell",
-  "technology": [
-    "Bash",
-    "bats",
-    "launchd",
-    "macos",
-    "mise"
-  ],
-  "topics": [
-    "bash",
-    "claude",
-    "claude-desktop",
-    "electron",
-    "launchd",
-    "macos",
-    "multi-account",
-    "oauth"
-  ],
-  "products": [
-    {
-      "name": "claude-multiacct",
-      "description": "CLI for installing account instances, sharing sessions between them, repairing drifted clones, and following the sync log."
-    }
-  ],
-  "links": {
-    "homepage": "https://github.com/kaelys-js/claude-multiacct",
-    "issues": "https://github.com/kaelys-js/claude-multiacct/issues",
-    "discussions": "https://github.com/kaelys-js/claude-multiacct/discussions"
-  }
+	"$schema": "https://raw.githubusercontent.com/kaelys-js/kaelys-js/main/schema/kaelys-catalog.schema.json",
+	"name": "foundation-registry",
+	"tagline": "Every decision the firm has made, stored as versioned Markdown records with schemas and clear ownership.",
+	"sellMe": "Firm-level decisions scatter across wikis, chat, and one-off docs, and nobody can find the reasoning six months later. This repo keeps them as Markdown-with-YAML-frontmatter records — PRDs, PDRs, ADRs, SPECs, Tasks, Releases — validated by JSON Schema and routed to named teams via CODEOWNERS. Records partition by domain (governance, design, frontend, backend, infra, security, data, observability) and cross-link forward: PRD → PDR/ADR → SPEC → Tasks → Release. It's the record of what the firm decided and why — not a runtime application.",
+	"status": "wip",
+	"since": 2026,
+	"primaryLanguage": "TypeScript",
+	"technology": ["TypeScript", "pnpm", "Turbo", "mise", "JSON Schema", "Markdown"],
+	"topics": [
+		"adr",
+		"business-as-code",
+		"decision-records",
+		"governance",
+		"prd",
+		"registry",
+		"spec"
+	],
+	"products": [
+		{
+			"name": "config",
+			"description": "Shared configs for every tool the firm uses — tsconfig base, oxlint, oxfmt, taplo, syncpack, markdownlint, yamllint, commitlint, gitleaks, editorconfig, lefthook."
+		},
+		{
+			"name": "core",
+			"description": "Small runtime helpers (repoRoot, miseExec) that qa and sync both depend on."
+		},
+		{
+			"name": "qa",
+			"description": "Lint, format, and structural checks across the whole tree — gitmeta, editorconfig, lefthook, and JSON-schema validation, all under one command."
+		},
+		{
+			"name": "sync",
+			"description": "Drift guard for generated files — version pins, vendored schemas, Turbo config, and the post-checkout/merge hooks that keep them in step."
+		},
+		{
+			"name": "registry",
+			"description": "The record spine itself — PRD, PDR, ADR, SPEC, tasks, releases — validated against a JSON Schema and rendered as a browseable index site."
+		}
+	]
 }

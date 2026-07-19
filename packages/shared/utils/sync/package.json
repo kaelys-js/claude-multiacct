@@ -1,0 +1,17 @@
+{
+	"$schema": "../../../../.schemas/package.json",
+	"name": "@foundation/sync",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Foundation sync tooling: version, schema, and turbo drift guards with --check gates.",
+	"license": "SEE LICENSE IN LICENSE",
+	"dependencies": {
+		"@foundation/core": "workspace:*",
+		"@foundation/qa": "workspace:*",
+		"valibot": "1.4.2"
+	},
+	"devDependencies": {
+		"@foundation/config": "workspace:*"
+	}
+}

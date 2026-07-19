@@ -1,0 +1,43 @@
+# yaml-language-server: $schema=../../../.schemas/yamllint.json
+# YAML standard for stardust — SEMANTIC lint only. oxfmt owns YAML layout
+# (indentation, spacing, line length, document markers), so every rule here is
+# one that catches a real bug or ambiguity oxfmt cannot, and every layout rule
+# is disabled to avoid fighting the formatter.
+
+yaml-files:
+  - "*.yaml"
+  - "*.yml"
+  - ".yamllint"
+
+rules:
+  # ── real bugs / ambiguity (enforced) ──────────────────────────────
+  key-duplicates: enable # duplicate mapping keys silently drop data
+  octal-values: # 0o / leading-zero surprises (e.g. permissions read as octal)
+    forbid-implicit-octal: true
+    forbid-explicit-octal: true
+  anchors:
+    forbid-undeclared-aliases: true
+    forbid-duplicated-anchors: true
+    forbid-unused-anchors: true
+  truthy:
+    # Accept the full YAML 1.1 truthy set but don't flag mapping keys named
+    # `on:` etc. — GitHub Actions workflows depend on them.
+    check-keys: false
+  key-ordering: disable # ordering is intent, not a defect
+  empty-values: disable # empty values are valid in Actions + many tool configs
+
+  # ── layout (disabled — oxfmt's job) ───────────────────────────────
+  indentation: disable
+  line-length: disable
+  document-start: disable
+  document-end: disable
+  trailing-spaces: disable
+  new-line-at-end-of-file: disable
+  brackets: disable
+  braces: disable
+  commas: disable
+  colons: disable
+  hyphens: disable
+  comments: disable
+  comments-indentation: disable
+  empty-lines: disable

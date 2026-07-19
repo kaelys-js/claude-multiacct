@@ -1,0 +1,37 @@
+#:schema ../../../.schemas/gitleaks.json
+# Secret-scanning standard for foundation-registry — gitleaks. Run via
+# `pnpm qa:lint` (staged scan in the pre-commit path). Extends gitleaks' built-in
+# ruleset rather than replacing it, then narrows false positives with a reviewed
+# allowlist.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Lockfiles and vendored assets — integrity hashes, not secrets."
+paths = [
+	'''pnpm-lock\.yaml$''',
+	'''mise\.lock$''',
+	'''(^|/)\.mise/''',
+	'''(^|/)node_modules/''',
+	'''\.min\.(js|css)$''',
+]
+
+[[allowlists]]
+description = """
+Generated build and cache artifacts — regenerated output, never committed secrets.
+A CI runner (and `pnpm ci:local` via act) installs the toolchain and deps INSIDE the
+job before the scan runs, so these dirs exist in-tree at scan time; `gitleaks dir` is
+a filesystem walk with no .gitignore awareness, so they must be excluded here or their
+package metadata (base64 blobs, hashes) trips false positives. Dotted/anchored patterns
+only, so the `records/build/` governance domain is never matched.
+"""
+paths = ['''(^|/)\.pnpm-store/''', '''(^|/)\.turbo/''', '''(^|/)coverage/''']
+
+[[allowlists]]
+description = "Obvious non-secret placeholders used in docs and examples."
+regexTarget = "match"
+regexes = [
+	'''(?i)(example|sample|dummy|placeholder|changeme|your[-_]?(token|key|secret))''',
+	'''no-reply@ttt\.studios''',
+]

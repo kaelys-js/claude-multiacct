@@ -1,43 +1,62 @@
-# mise.toml — self-contained toolchain pin for claude-multiacct.
-# Clone + `mise install` gets shellcheck + bats + gitleaks + shfmt + related
-# tools with no machine-global dependency. Docs: https://mise.jdx.dev/configuration.html
-
+#:schema ./.schemas/mise.json
+# Matches the mise version vendored by bin/mise (the repo-scoped bootstrap that
+# scripts/qa + lefthook + CI all run through), so the pinned wrapper satisfies it.
 min_version = "2026.5.0"
 
 [settings]
-experimental = true
+# Read .nvmrc as Node's version source, kept in lockstep with [tools].node.
+idiomatic_version_file_enable_tools = ["node"]
+# mise owns pnpm; corepack off.
+node.corepack = false
+# Explicit installs only.
 auto_install = false
+# mise.lock: refuse installs whose SHA doesn't match once the lockfile exists.
 lockfile = true
-# Don't trust child .mise.toml files unless allow-listed.
+experimental = true
+
+[env]
+# Workspace-scoped tool installations — all binaries live inside the repo.
+MISE_INSTALLS_DIR = "{{config_root}}/.mise/installs"
 
 [tools]
-# Shell lint — the same version stardust and dotfiles pin.
-shellcheck = "0.11.0"
-# Hermetic install/uninstall smoke tests.
-bats = "1.13.0"
-# Secrets scanning — .gitleaks.toml lives at the repo root.
-gitleaks = "8.30.1"
-# YAML lint for instances.yaml + launchd plist templates.
+node = "26.5.0"
+pnpm = "11.13.1"
+
+# ─── QA toolchain — every linter/formatter this registry uses, pinned here so
+# the repo is self-contained: `mise install` gets all of them into
+# .mise/installs. The single `qa:lint` / `qa:format` commands (scripts/qa/*)
+# run these via `mise exec`, and lefthook + CI call those same commands. mise
+# itself is bootstrapped by bin/mise.
+
+# Python — hosts the pipx-backed tools below so they need no system Python.
+python = "3.14.6"
+
+# ── ts/js + json/yaml/md formatting & js/ts lint ─────────────────────
+"npm:oxlint" = "1.74.0"
+"npm:oxfmt" = "0.59.0"
+
+# ── toml (lint + format) ─────────────────────────────────────────────
+"npm:@taplo/cli" = "0.7.0"
+
+# ── yaml (semantic lint; oxfmt owns layout) ──────────────────────────
 yamllint = "1.38.0"
-# YAML query/edit — read instances.yaml + inject into launchd plist template.
-yq = "4.53.3"
 
-# ── Shell formatter (matches the .editorconfig indent/binary-next-line
-# preferences). Run via `qa format`; checked in `qa lint` (--diff mode).
-shfmt = "3.13.1"
-
-# ── Markdown lint for the README + docs.
+# ── markdown (lint; oxfmt owns formatting) ───────────────────────────
 "npm:markdownlint-cli2" = "0.23.0"
 
-# ── Electron asar CLI + library, needed by lib/asar-patch-clone.sh to extract,
-# rewrite, and repack /Applications/Claude.app's app.asar for each mirror
-# clone. The patch prepends a per-mirror plist path to the managed-prefs list
-# so Squirrel's auto-updater short-circuits on our disableAutoUpdates=YES
-# instead of firing against a bundle Anthropic didn't sign (would fail DR).
-"npm:@electron/asar" = "4.2.0"
+# ── json schema meta-validation ──────────────────────────────────────
+"pipx:check-jsonschema" = "0.37.4"
 
-# ── Node + commitlint (@commitlint/cli via npm-managed pnpm store isn't a
-# pattern we want in a bash repo, so use pipx-style npm install via mise).
-node = "26.5.0"
-"npm:@commitlint/cli" = "21.2.1"
-"npm:@commitlint/config-conventional" = "21.2.0"
+# ── secrets ──────────────────────────────────────────────────────────
+"aqua:gitleaks/gitleaks" = "8.30.1"
+
+# ── editorconfig conformance (whitespace / final-newline / eol) ───────
+"aqua:editorconfig-checker/editorconfig-checker" = "3.8.0"
+
+# ── local GitHub Actions runner (backs `pnpm ci:local`) ──────────────
+"aqua:nektos/act" = "0.2.89"
+
+# ── licensing / SPDX compliance (REUSE) ──────────────────────────────
+# The charset-normalizer extra ships a pure-Python encoding detector so reuse
+# doesn't fall back to python-magic, which needs a system libmagic (absent here).
+"pipx:reuse" = { version = "6.2.0", extras = "charset-normalizer" }

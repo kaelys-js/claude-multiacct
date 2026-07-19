@@ -1,0 +1,18 @@
+{
+	"$schema": "../../../.schemas/package.json",
+	"name": "@foundation/claude-multiacct",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "claude-multiacct runtime product: single-app OAuth account pool for running multiple Anthropic accounts in one Claude Desktop install. Scaffold only in this PR — no product logic yet.",
+	"license": "SEE LICENSE IN LICENSE",
+	"scripts": {
+		"test": "vitest run",
+		"test:coverage": "vitest run --coverage",
+		"test:watch": "vitest",
+		"typecheck": "tsc --noEmit"
+	},
+	"devDependencies": {
+		"@foundation/config": "workspace:*"
+	}
+}

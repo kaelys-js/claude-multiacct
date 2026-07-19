@@ -1,0 +1,21 @@
+{
+	"$schema": "../../../../.schemas/package.json",
+	"name": "@foundation/mutations",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Env-flag mutation gating: withMutation() executes only when MUTATIONS_ENABLED and the per-service flag are both true. Default is dry-run — it logs the intended call and returns without touching remote state.",
+	"license": "SEE LICENSE IN LICENSE",
+	"scripts": {
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"valibot": "1.4.2"
+	},
+	"devDependencies": {
+		"@foundation/config": "workspace:*"
+	},
+	"exports": {
+		".": "./src/index.ts"
+	}
+}

@@ -1,0 +1,331 @@
+# SPDX-FileCopyrightText: 2026 TTT Studios
+# SPDX-License-Identifier: LicenseRef-Proprietary
+#
+# Template for a fork's daily auto-merge of its upstream mirror into `main`.
+# Consumed by `pnpm sync-upstream:opt-in`, which reads `.sync-upstream.json`
+# from the caller's working directory and writes the substituted output to
+# `.github/workflows/sync-upstream.yml`. Three placeholders are substituted
+# on write (names without the ${...} wrapping so this docstring itself
+# survives substitution):
+#
+#   UPSTREAM_REPO_SSH          — SSH URL of the upstream repo,
+#                                e.g. `git@github.com:owner/upstream.git`.
+#   UPSTREAM_BRANCH            — the upstream branch to track, e.g. `main`.
+#   UPSTREAM_DEPLOY_KEY_SECRET — repo-secret NAME (not value) whose SSH
+#                                private key has read on the upstream AND
+#                                write on the fork,
+#                                e.g. `UPSTREAM_DEPLOY_KEY`.
+#
+# Substitution is a literal ${NAME} string-replace; GHA's own ${{ ... }}
+# expressions pass through untouched because the outer braces do not match
+# a placeholder start. The line that reads secrets from GHA looks like
+# `${{ secrets.${UPSTREAM_DEPLOY_KEY_SECRET} }}` in the template, and
+# becomes `${{ secrets.UPSTREAM_DEPLOY_KEY }}` after substitution.
+#
+# The template intentionally omits the yaml-language-server schema-ref line —
+# the CLI prepends the correct ref for the OUTPUT location on write, so the
+# template file itself is not schema-checked (its own path differs from
+# where the generated file lands and the ref would resolve to nowhere).
+#
+# Deploy-key setup sequence (do this once per fork before enabling):
+#
+#   1. `ssh-keygen -t ed25519 -N '' -f /tmp/upstream-deploy-key -C
+#      "sync-upstream <fork>"`.
+#   2. Add `/tmp/upstream-deploy-key.pub` as a READ-ONLY deploy key on the
+#      upstream mirror (Settings -> Deploy keys -> Add).
+#   3. Add the SAME public key as a WRITE deploy key on the fork
+#      (Settings -> Deploy keys, check "Allow write access").
+#   4. Store the private key as the repo secret named by
+#      UPSTREAM_DEPLOY_KEY_SECRET on the fork.
+#   5. Wipe the local private key.
+#
+# What the workflow does at run time:
+#
+#   1. Checkout `main` with fetch-depth 0 using the deploy key (read of
+#      upstream, write of fork).
+#   2. Add the SSH `upstream` remote and fetch the tracked branch.
+#   3. Try fast-forward. On success, PATCH the fork's `main` ref via
+#      `gh api` so it points at the upstream tip; no new commit is
+#      created, and upstream commit signatures are preserved verbatim.
+#   4. On non-fast-forward: cut branch `sync/upstream-YYYY-MM-DD-<sha>`,
+#      merge with a fixed rule (upstream wins under `packages/shared` and
+#      `.schemas`; product code and product-specific workflows win
+#      locally), push, then replace the local merge commit with a
+#      `gh api`-created equivalent so GitHub signs it with the `web-flow`
+#      bot key and it shows as Verified on the PR. The PR opens, squash
+#      auto-merge with branch delete is enabled.
+#   5. If a merged path outside the two allowlists conflicts, the commit
+#      lands with conflict markers (prefixed `[CONFLICT] ` in git log). A
+#      post-push `git grep` scan on HEAD detects those markers and gates
+#      the auto-merge step: on a hit the PR opens with a
+#      `[NEEDS HUMAN REVIEW - DO NOT AUTO-MERGE]` title prefix, a
+#      `sync-upstream-conflict` label, and a comment listing the affected
+#      files; auto-merge is NOT enabled and the workflow exits nonzero.
+#      The reviewer resolves the PR by hand.
+#
+# The guard step (`Scan sync branch for conflict markers`) is what stops
+# PR #33 (kaelys-js/ttt-studio-cole-30-60-90-plan, 2026-07-17) from
+# happening again: the earlier design ran the marker check only inside
+# an `if !` branch that fires when `gh pr merge --auto` fails, but on a
+# fork without required checks `--auto` returns 0 (auto-merge enabled)
+# and the check never ran, so a dirty tree got squash-merged into main.
+# The current design runs the check unconditionally before any `gh pr
+# merge` call, and downstream merge steps are gated on its output.
+
+name: sync-upstream
+
+on:
+  schedule:
+    - cron: "0 10 * * *" # every day 10:00 UTC (03:00 America/Los_Angeles under PT)
+  workflow_dispatch:
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ssh-key: ${{ secrets.${UPSTREAM_DEPLOY_KEY_SECRET} }}
+
+      # Warm the mise toolchain BEFORE the merge step's inline install.
+      # jdx/mise-action activates mise on PATH so subsequent
+      # `./bin/mise install` calls (after the merge picks up any upstream
+      # tool bumps) run with node + pnpm already resolved. Without the
+      # warmup, the merge step's fresh `./bin/mise install` occasionally
+      # kicks off `npm install -g` for the npm-backed tools (@taplo/cli,
+      # markdownlint-cli2, oxfmt, oxlint) before node's binary lands on
+      # PATH, and each fails with `exit code 127`.
+      - name: Warm mise toolchain
+        uses: jdx/mise-action@v3
+        with:
+          install: true
+
+      - name: Configure git identity
+        run: |
+          git config user.name "Cole Beuker"
+          git config user.email "cole.beuker@ttt.studio"
+
+      - name: Add upstream remote and fetch
+        run: |
+          git remote remove upstream 2>/dev/null || true
+          git remote add upstream ${UPSTREAM_REPO_SSH}
+          git fetch upstream ${UPSTREAM_BRANCH}
+
+      - name: Try fast-forward
+        id: ff
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Move the ref via `gh api` rather than `git push`. PATCH to
+          # /git/refs/heads/main just moves the pointer to the upstream
+          # commit and preserves whatever signature (or none) the upstream
+          # commit carried. No new commit is created.
+          if git merge --ff-only upstream/${UPSTREAM_BRANCH}; then
+            echo "result=ff" >>"$GITHUB_OUTPUT"
+            UPSTREAM_HEAD=$(git rev-parse HEAD)
+            gh api -X PATCH /repos/${{ github.repository }}/git/refs/heads/main \
+              -f sha="$UPSTREAM_HEAD"
+          else
+            echo "result=conflict" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Create sync branch on non-fast-forward
+        if: steps.ff.outputs.result == 'conflict'
+        id: branch
+        run: |
+          git reset --hard origin/main
+          UPSTREAM_SHA=$(git rev-parse --short upstream/${UPSTREAM_BRANCH})
+          BRANCH="sync/upstream-$(date -u +%Y-%m-%d)-${UPSTREAM_SHA}"
+          echo "branch=${BRANCH}" >>"$GITHUB_OUTPUT"
+          git checkout -b "${BRANCH}"
+
+      - name: Merge upstream with fixed conflict rule
+        if: steps.ff.outputs.result == 'conflict'
+        run: |
+          set +e
+          git merge --no-ff --no-commit upstream/${UPSTREAM_BRANCH}
+          MERGE_STATUS=$?
+          set -e
+
+          for p in packages/shared .schemas mise.toml turbo.json; do
+            if [ -e "$p" ] || git ls-files -u "$p" | grep -q .; then
+              git checkout --theirs -- "$p" 2>/dev/null || true
+              git add -A "$p" 2>/dev/null || true
+            fi
+          done
+
+          # Fork-wins allowlist — narrowed to files that legitimately diverge
+          # per fork today. Fork-only paths (`packages/products/cole-30-60-90`,
+          # `refresh.yml`, `reminders.yml`, `sync-upstream.yml`) can't conflict
+          # because upstream doesn't carry them, so listing them is dead weight.
+          # `renovate.yml` is now byte-identical between fork and upstream
+          # (parametrised on `${{ github.repository }}`), so it also doesn't
+          # need protection here.
+          for p in \
+            .github/workflows/catalog-notify.yml \
+            .github/workflows/ci.yml \
+            pnpm-lock.yaml \
+          ; do
+            if [ -e "$p" ] || git ls-files -u "$p" | grep -q .; then
+              git checkout --ours -- "$p" 2>/dev/null || true
+              git add -A "$p" 2>/dev/null || true
+            fi
+          done
+
+          # Regenerate pnpm-lock.yaml against the merged package manifests.
+          # `pnpm-lock.yaml` is fork-wins (fork carries products the upstream
+          # doesn't, so upstream's lock would miss entries), but the merged
+          # tree can pick up upstream's package.json bumps. Without regen,
+          # fork CI's `pnpm install --frozen-lockfile` fails on the mismatch.
+          # `--lockfile-only` skips actual package downloads; the whole step
+          # is a no-op when nothing changed.
+          if command -v ./bin/mise >/dev/null; then
+            ./bin/mise install
+            ./bin/mise exec -- pnpm install --lockfile-only --no-frozen-lockfile
+            git add pnpm-lock.yaml
+          fi
+
+          git -c "user.name=Cole Beuker" -c "user.email=cole.beuker@ttt.studio" \
+            commit --no-edit || {
+              git -c "user.name=Cole Beuker" -c "user.email=cole.beuker@ttt.studio" \
+                commit -am "[CONFLICT] sync: upstream merge with unresolved conflicts (needs review)"
+            }
+          exit ${MERGE_STATUS}
+
+      - name: Push sync branch
+        if: steps.ff.outputs.result == 'conflict'
+        run: |
+          # Uploads the local merge commit + its tree so the API call
+          # below has server-side objects to reference before it replaces
+          # the branch head.
+          git push origin "${{ steps.branch.outputs.branch }}"
+
+      - name: Replace merge commit with API-signed variant
+        if: steps.ff.outputs.result == 'conflict'
+        env:
+          # The ambient GITHUB_TOKEN, not a PAT. `POST /git/commits`
+          # produces a `web-flow`-signed commit only when the caller is
+          # an OAuth app or a GitHub App installation; PATs yield an
+          # unsigned commit. The ambient token IS the "GitHub Actions"
+          # App installation token, so it triggers the signature.
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Local merge commits are signed with whatever key the runner has,
+          # if any. To land a Verified merge on the PR, re-create the commit
+          # via `gh api POST /git/commits` — with the ambient GITHUB_TOKEN,
+          # GitHub signs the result with the `web-flow` bot key, producing
+          # `verified: true` without any per-runner key setup. Same tree,
+          # same parents, same message → identical content, different
+          # signature layer.
+          TREE=$(git rev-parse HEAD^{tree})
+          P1=$(git rev-parse HEAD^1)
+          P2=$(git rev-parse HEAD^2)
+          MSG=$(git log -1 --format=%B HEAD)
+          SIGNED=$(gh api -X POST /repos/${{ github.repository }}/git/commits \
+            -f tree="$TREE" \
+            -f parents[]="$P1" -f parents[]="$P2" \
+            -f message="$MSG" \
+            --jq '.sha')
+          gh api -X PATCH \
+            /repos/${{ github.repository }}/git/refs/heads/${{ steps.branch.outputs.branch }} \
+            -f sha="$SIGNED" -F force=true
+
+      # Hard gate against auto-merge when the sync branch carries conflict
+      # markers. Runs post-commit, post-push, BEFORE any `gh pr merge`
+      # call. The earlier design ran the marker check only inside an
+      # `if !` branch that fires when `gh pr merge --auto` fails, but on
+      # a fork without required checks `--auto` returns 0 (auto-merge
+      # enabled) and the check never ran — which is how PR #33 on the
+      # ttt-studio fork (2026-07-17) squash-merged conflict markers into
+      # `main`. This step decouples the marker check from any merge call,
+      # and the downstream merge step is gated on its output.
+      #
+      # Regex: line-start-anchored ERE for the three standard git
+      # conflict markers with exactly seven marker characters —
+      #   `<<<<<<< <label>`  (ours side)
+      #   `=======`          (separator, whole line)
+      #   `>>>>>>> <label>`  (theirs side)
+      # Line-start anchoring plus the exact repeat count rules out prose
+      # and code that mentions angle brackets or equals signs.
+      - name: Scan sync branch for conflict markers
+        if: steps.ff.outputs.result == 'conflict'
+        id: guard
+        run: |
+          if git grep -q -E '^(<{7} |={7}$|>{7} )' HEAD; then
+            FILES=$(git grep -l -E '^(<{7} |={7}$|>{7} )' HEAD | paste -sd ',' -)
+            {
+              echo "conflict_markers=true"
+              echo "marked_files=${FILES}"
+            } >>"$GITHUB_OUTPUT"
+            echo "::warning::Conflict markers found in: ${FILES}. Auto-merge disabled."
+          else
+            echo "conflict_markers=false" >>"$GITHUB_OUTPUT"
+          fi
+
+      - name: Open PR
+        if: steps.ff.outputs.result == 'conflict'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TITLE="sync: upstream $(date -u +%Y-%m-%d)"
+          if [ "${{ steps.guard.outputs.conflict_markers }}" = "true" ]; then
+            TITLE="[NEEDS HUMAN REVIEW - DO NOT AUTO-MERGE] ${TITLE}"
+          fi
+          gh pr create \
+            --base main \
+            --head "${{ steps.branch.outputs.branch }}" \
+            --title "${TITLE}" \
+            --body "Automated sync of upstream/${UPSTREAM_BRANCH} into this fork. Conflict rule: upstream wins under \`packages/shared\` and \`.schemas\`; product and product-workflow paths win locally. If CI passes, this PR auto-merges (squash) and the branch is deleted."
+
+      # Clean-tree path: `--auto` refuses when the PR is in `clean` status
+      # — GitHub only enables auto-merge on PRs with pending required
+      # checks. A fork without branch protection has none, so a clean
+      # sync PR hits "Pull request is in clean status
+      # (enablePullRequestAutoMerge)". Fall through to a direct
+      # squash-merge in that case, so the flow works on both
+      # branch-protected and unprotected forks. This step is skipped
+      # entirely when the guard flagged conflict markers, so neither
+      # `--auto` nor the direct squash can land dirty content.
+      - name: Enable auto-merge on clean sync
+        if: steps.ff.outputs.result == 'conflict' && steps.guard.outputs.conflict_markers == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh pr merge \
+              "${{ steps.branch.outputs.branch }}" \
+              --auto --squash --delete-branch; then
+            gh pr merge \
+              "${{ steps.branch.outputs.branch }}" \
+              --squash --delete-branch
+          fi
+
+      # Marker path: leave the PR open for a human, tag it, comment the
+      # affected files, then fail the workflow so the incident is visible
+      # on the Actions tab. `gh label create --force` is idempotent
+      # (repeat runs on the same repo don't fail once the label exists).
+      - name: Flag PR for human review on conflict markers
+        if: steps.ff.outputs.result == 'conflict' && steps.guard.outputs.conflict_markers == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create sync-upstream-conflict \
+            --description "sync-upstream produced conflict markers; needs human review" \
+            --color d73a4a --force || true
+          gh pr edit \
+            "${{ steps.branch.outputs.branch }}" \
+            --add-label sync-upstream-conflict
+          gh pr comment \
+            "${{ steps.branch.outputs.branch }}" \
+            --body "Conflict markers detected in the merged tree: \`${{ steps.guard.outputs.marked_files }}\`. Auto-merge intentionally disabled — resolve conflicts manually before merging."
+          echo "::error::Sync branch has conflict markers; leaving PR ${{ steps.branch.outputs.branch }} open for hand review."
+          exit 1

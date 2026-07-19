@@ -1,0 +1,5 @@
+{
+	"$schema": "../../../.schemas/tsconfig.json",
+	"extends": "./tsconfig.base.json",
+	"include": ["src/**/*.ts"]
+}
