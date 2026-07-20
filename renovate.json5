@@ -84,7 +84,7 @@
 	// Cool-down: never auto-merge a release younger than this. Guards against
 	// a compromised/yanked just-published version landing hands-off. (The pnpm
 	// workspace's own minimumReleaseAge is 0; this is Renovate's independent gate.)
-	minimumReleaseAge: "3 days",
+	minimumReleaseAge: "7 days",
 
 	// Enabled managers:
 	//   - npm             -> package.json (× workspace) + pnpm-lock.yaml
@@ -176,7 +176,10 @@
 			matchManagers: ["custom.regex", "npm"],
 			matchUpdateTypes: ["major"],
 			groupName: "node + pnpm toolchain",
-			automerge: false,
+			automerge: true,
+			automergeType: "pr",
+			platformAutomerge: false,
+			minimumReleaseAge: "21 days",
 		},
 
 		// ── npm / pnpm workspace deps ────────────────────────────────────────
@@ -196,8 +199,10 @@
 			// Major npm bumps can break; review PR, its own PR (never grouped).
 			matchManagers: ["npm"],
 			matchUpdateTypes: ["major"],
-			automerge: false,
-			groupName: null,
+			automerge: true,
+			automergeType: "pr",
+			platformAutomerge: false,
+			minimumReleaseAge: "21 days",
 		},
 
 		// ── mise toolchain ───────────────────────────────────────────────────
@@ -218,8 +223,10 @@
 			// review PR, its own PR (never grouped).
 			matchManagers: ["mise"],
 			matchUpdateTypes: ["major"],
-			automerge: false,
-			groupName: null,
+			automerge: true,
+			automergeType: "pr",
+			platformAutomerge: false,
+			minimumReleaseAge: "21 days",
 		},
 
 		// ── GitHub Actions ───────────────────────────────────────────────────
@@ -240,8 +247,10 @@
 			// input names; review PR, its own PR (never grouped).
 			matchManagers: ["github-actions"],
 			matchUpdateTypes: ["major"],
-			automerge: false,
-			groupName: null,
+			automerge: true,
+			automergeType: "pr",
+			platformAutomerge: false,
+			minimumReleaseAge: "21 days",
 		},
 	],
 }
