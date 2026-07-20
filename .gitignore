@@ -333,3 +333,6 @@ temp/
 # Lock files — DO NOT IGNORE
 # pnpm-lock.yaml MUST be committed
 !pnpm-lock.yaml
+
+# local `act` wrapper artifacts (secrets file, log tmp)
+.act/
