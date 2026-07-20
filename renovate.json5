@@ -64,6 +64,23 @@
 	// Rebase stale branches so the digest/tag stays fresh until merge.
 	rebaseWhen: "behind-base-branch",
 
+	// --- Auto-merge policy ---------------------------------------------------
+	// platformAutomerge is DELIBERATELY false throughout this file. Native
+	// GitHub platform auto-merge waits for ALL required merge requirements
+	// (checks + reviews) BEFORE it triggers; ruleset `bypass_actors` only apply
+	// at the actual merge API call, NOT at the auto-merge trigger check. On
+	// this solo-dev User account the main-protection ruleset (see
+	// kaelys-js-infra/terraform/rulesets.tf) requires 1 approving + code-owner
+	// review which no other human can give, so platformAutomerge=true sits
+	// BLOCKED (mergeStateStatus=BLOCKED, reviewDecision=REVIEW_REQUIRED)
+	// forever — verified through 2026-07-19. With platformAutomerge=false,
+	// Renovate polls the PR on its next dispatch after CI turns green and
+	// calls the merge REST API directly with its App installation token;
+	// `kaelys-js-renovate` (App id 4296679) has bypass_mode="always" in every
+	// main-protection ruleset's bypass_actors, so the merge call succeeds
+	// without a review. Trade-off: PRs merge on Renovate's next dispatch after
+	// CI turns green, not the instant it turns green. Acceptable for deps.
+
 	// Cool-down: never auto-merge a release younger than this. Guards against
 	// a compromised/yanked just-published version landing hands-off. (The pnpm
 	// workspace's own minimumReleaseAge is 0; this is Renovate's independent gate.)
@@ -118,7 +135,7 @@
 	lockFileMaintenance: {
 		enabled: true,
 		automerge: true,
-		platformAutomerge: true,
+		platformAutomerge: false,
 	},
 
 	// --- packageRules --------------------------------------------------------
@@ -150,7 +167,7 @@
 			matchUpdateTypes: ["patch", "minor", "digest"],
 			automerge: true,
 			automergeType: "pr",
-			platformAutomerge: true,
+			platformAutomerge: false,
 		},
 		{
 			// Major bumps of node/pnpm (a new Node major etc.) are a human
@@ -171,7 +188,7 @@
 			matchUpdateTypes: ["patch", "minor", "digest"],
 			automerge: true,
 			automergeType: "pr",
-			platformAutomerge: true,
+			platformAutomerge: false,
 			groupName: "npm dev dependencies (non-major)",
 			commitMessageTopic: "npm dev dependencies",
 		},
@@ -192,7 +209,7 @@
 			matchUpdateTypes: ["patch", "minor"],
 			automerge: true,
 			automergeType: "pr",
-			platformAutomerge: true,
+			platformAutomerge: false,
 			groupName: "mise toolchain (non-major)",
 			commitMessageTopic: "mise toolchain",
 		},
@@ -214,7 +231,7 @@
 			matchUpdateTypes: ["patch", "minor", "digest"],
 			automerge: true,
 			automergeType: "pr",
-			platformAutomerge: true,
+			platformAutomerge: false,
 			groupName: "github actions (non-major)",
 			commitMessageTopic: "github actions",
 		},
