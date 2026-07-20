@@ -55,6 +55,14 @@ diff -rq /path/to/foundation-registry /path/to/claude-multiacct \
 - `.github/workflows/ci.yml` — byte-identical to upstream. The `validate` job
   self-skips on this fork (no `packages/products/registry/`) via the `detect`
   job's output, so no edit is needed.
+- `packages/shared/utils/qa/src/schema-check.ts` — fork drift: adds
+  `*.tmpl.json` and `*.template.json` to `isCoverageExcluded` as the JSON
+  siblings of the existing `*.template.yml` / `*.template.yaml` exclusions.
+  Needed for the browser-extension `manifest.tmpl.json` shipped by PR5b: at
+  rest it carries an unsubstituted `__PACKAGE_VERSION__` token and can't
+  validate against the real MV2 manifest schema until `build-extension.mjs`
+  substitutes at build time. Locked by a dedicated test in
+  `packages/shared/utils/qa/tests/schema-check.test.ts`.
 
 ### CI + workflows
 

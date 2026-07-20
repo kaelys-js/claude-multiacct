@@ -12,8 +12,9 @@
  * Rule-1 note: `electron-devtools-installer` is not in this workspace's
  * node_modules to pin the exact set of endpoints from; the two names
  * below are the standard Chromium CWS + install probes from the
- * Chromium source (chrome/browser/extensions/updater/). PR5b will
- * re-check the list when the extension itself lands.
+ * Chromium source (chrome/browser/extensions/updater/). PR5b's extension
+ * landed without pulling that package as a dep, so this list can only be
+ * ratified against a live app trace in PR6 — leaving both names in place.
  *
  * Chromium's parser accepts comma-separated rules (with or without
  * whitespace around the commas). We emit `,` without whitespace — the

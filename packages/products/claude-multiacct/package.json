@@ -7,8 +7,9 @@
 	"description": "claude-multiacct runtime product: single-app OAuth account pool for running multiple Anthropic accounts in one Claude Desktop install. Scaffold only in this PR — no product logic yet.",
 	"license": "SEE LICENSE IN LICENSE",
 	"scripts": {
-		"build": "pnpm run build:shim && pnpm run build:watcher && pnpm run build:daemon && pnpm run build:launcher",
+		"build": "pnpm run build:shim && pnpm run build:watcher && pnpm run build:daemon && pnpm run build:launcher && pnpm run build:extension",
 		"build:daemon": "node ./scripts/build-daemon.mjs",
+		"build:extension": "node ./scripts/build-extension.mjs",
 		"build:launcher": "node ./scripts/build-launcher.mjs",
 		"build:shim": "node ./scripts/build-shim.mjs",
 		"build:watcher": "node ./scripts/build-watcher.mjs",
@@ -22,6 +23,8 @@
 	},
 	"devDependencies": {
 		"@foundation/config": "workspace:*",
-		"esbuild": "0.28.1"
+		"@types/jsdom": "21.1.7",
+		"esbuild": "0.28.1",
+		"jsdom": "29.1.1"
 	}
 }

@@ -1,0 +1,14 @@
+{
+	"manifest_version": 2,
+	"name": "claude-multiacct code-tab picker",
+	"description": "Adds a per-session account picker + usage pill to the Claude Code tab.",
+	"version": "__VERSION__",
+	"permissions": ["storage"],
+	"content_scripts": [
+		{
+			"matches": ["https://claude.ai/*"],
+			"js": ["content.js"],
+			"run_at": "document_idle"
+		}
+	]
+}

@@ -223,6 +223,23 @@ describe("schema-check", () => {
 		expect(code).toBe(1);
 	});
 
+	it("coverage-excludes refless *.tmpl.json / *.template.json build-time templates", async () => {
+		// Build-time JSON templates (e.g. the browser-extension `manifest.tmpl.json`
+		// under `packages/products/claude-multiacct/src/extension/`) can't declare
+		// a `$schema` marker that matches the OUTPUT-shape schema, because at rest
+		// they carry unsubstituted tokens (like `__PACKAGE_VERSION__`) that would
+		// fail validation against the real manifest schema. The `.tmpl.json` /
+		// `.template.json` suffixes mark them as pre-substitution and exempt from
+		// the coverage gate; without this exclusion the gate would hard-fail on
+		// PR5b's manifest template. Two refless files with those suffixes → exit 0.
+		const root = fixture([
+			{ path: "manifest.tmpl.json", content: '{"name": "__NAME__"}\n' },
+			{ path: "config.template.json", content: '{"version": "__VERSION__"}\n' },
+		]);
+		const { code } = await runCheck(root);
+		expect(code).toBe(0);
+	});
+
 	it("hard-fails the coverage gate for a refless templates/ config (templates now gated)", async () => {
 		// `templates/` was REMOVED from the coverage exclusions: a refless
 		// `templates/*.yaml` is now a gate MISS, listed by name and exiting 1. This is
