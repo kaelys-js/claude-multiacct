@@ -12,6 +12,9 @@
 		"test:watch": "vitest",
 		"typecheck": "tsc --noEmit"
 	},
+	"dependencies": {
+		"valibot": "1.4.2"
+	},
 	"devDependencies": {
 		"@foundation/config": "workspace:*"
 	}
