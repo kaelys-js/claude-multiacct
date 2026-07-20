@@ -1,13 +1,13 @@
 {
 	"$schema": "http://json-schema.org/draft-07/schema#",
-	"$id": "https://raw.githubusercontent.com/DavidAnson/markdownlint/v0.41.0/schema/markdownlint-config-schema.json",
+	"$id": "https://raw.githubusercontent.com/DavidAnson/markdownlint/v0.41.1/schema/markdownlint-config-schema.json",
 	"title": "markdownlint configuration schema",
 	"type": "object",
 	"properties": {
 		"$schema": {
 			"description": "JSON Schema URI (expected by some editors)",
 			"type": "string",
-			"default": "https://raw.githubusercontent.com/DavidAnson/markdownlint/v0.41.0/schema/markdownlint-config-schema.json"
+			"default": "https://raw.githubusercontent.com/DavidAnson/markdownlint/v0.41.1/schema/markdownlint-config-schema.json"
 		},
 		"default": {
 			"description": "Default state for all rules",
@@ -20,7 +20,7 @@
 			"default": null
 		},
 		"MD001": {
-			"description": "MD001/heading-increment : Heading levels should only increment by one level at a time : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md001.md",
+			"description": "MD001/heading-increment : Heading levels should only increment by one level at a time : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md001.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -50,7 +50,7 @@
 			"default": true
 		},
 		"heading-increment": {
-			"description": "MD001/heading-increment : Heading levels should only increment by one level at a time : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md001.md",
+			"description": "MD001/heading-increment : Heading levels should only increment by one level at a time : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md001.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -80,7 +80,7 @@
 			"default": true
 		},
 		"MD003": {
-			"description": "MD003/heading-style : Heading style : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md003.md",
+			"description": "MD003/heading-style : Heading style : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md003.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -118,7 +118,7 @@
 			"default": true
 		},
 		"heading-style": {
-			"description": "MD003/heading-style : Heading style : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md003.md",
+			"description": "MD003/heading-style : Heading style : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md003.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -156,7 +156,7 @@
 			"default": true
 		},
 		"MD004": {
-			"description": "MD004/ul-style : Unordered list style : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md004.md",
+			"description": "MD004/ul-style : Unordered list style : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md004.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -187,7 +187,7 @@
 			"default": true
 		},
 		"ul-style": {
-			"description": "MD004/ul-style : Unordered list style : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md004.md",
+			"description": "MD004/ul-style : Unordered list style : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md004.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -218,7 +218,7 @@
 			"default": true
 		},
 		"MD005": {
-			"description": "MD005/list-indent : Inconsistent indentation for list items at the same level : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md005.md",
+			"description": "MD005/list-indent : Inconsistent indentation for list items at the same level : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md005.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -243,7 +243,7 @@
 			"default": true
 		},
 		"list-indent": {
-			"description": "MD005/list-indent : Inconsistent indentation for list items at the same level : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md005.md",
+			"description": "MD005/list-indent : Inconsistent indentation for list items at the same level : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md005.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -268,7 +268,7 @@
 			"default": true
 		},
 		"MD007": {
-			"description": "MD007/ul-indent : Unordered list indentation : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md007.md",
+			"description": "MD007/ul-indent : Unordered list indentation : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md007.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -310,7 +310,7 @@
 			"default": true
 		},
 		"ul-indent": {
-			"description": "MD007/ul-indent : Unordered list indentation : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md007.md",
+			"description": "MD007/ul-indent : Unordered list indentation : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md007.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -352,7 +352,7 @@
 			"default": true
 		},
 		"MD009": {
-			"description": "MD009/no-trailing-spaces : Trailing spaces : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md009.md",
+			"description": "MD009/no-trailing-spaces : Trailing spaces : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md009.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -398,7 +398,7 @@
 			"default": true
 		},
 		"no-trailing-spaces": {
-			"description": "MD009/no-trailing-spaces : Trailing spaces : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md009.md",
+			"description": "MD009/no-trailing-spaces : Trailing spaces : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md009.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -444,7 +444,7 @@
 			"default": true
 		},
 		"MD010": {
-			"description": "MD010/no-hard-tabs : Hard tabs : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md010.md",
+			"description": "MD010/no-hard-tabs : Hard tabs : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md010.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -486,7 +486,7 @@
 			"default": true
 		},
 		"no-hard-tabs": {
-			"description": "MD010/no-hard-tabs : Hard tabs : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md010.md",
+			"description": "MD010/no-hard-tabs : Hard tabs : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md010.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -528,7 +528,7 @@
 			"default": true
 		},
 		"MD011": {
-			"description": "MD011/no-reversed-links : Reversed link syntax : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md011.md",
+			"description": "MD011/no-reversed-links : Reversed link syntax : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md011.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -553,7 +553,7 @@
 			"default": true
 		},
 		"no-reversed-links": {
-			"description": "MD011/no-reversed-links : Reversed link syntax : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md011.md",
+			"description": "MD011/no-reversed-links : Reversed link syntax : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md011.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -578,7 +578,7 @@
 			"default": true
 		},
 		"MD012": {
-			"description": "MD012/no-multiple-blanks : Multiple consecutive blank lines : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md012.md",
+			"description": "MD012/no-multiple-blanks : Multiple consecutive blank lines : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md012.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -609,7 +609,7 @@
 			"default": true
 		},
 		"no-multiple-blanks": {
-			"description": "MD012/no-multiple-blanks : Multiple consecutive blank lines : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md012.md",
+			"description": "MD012/no-multiple-blanks : Multiple consecutive blank lines : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md012.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -640,7 +640,7 @@
 			"default": true
 		},
 		"MD013": {
-			"description": "MD013/line-length : Line length : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md013.md",
+			"description": "MD013/line-length : Line length : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md013.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -696,7 +696,7 @@
 			"default": true
 		},
 		"line-length": {
-			"description": "MD013/line-length : Line length : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md013.md",
+			"description": "MD013/line-length : Line length : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md013.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -752,7 +752,7 @@
 			"default": true
 		},
 		"MD014": {
-			"description": "MD014/commands-show-output : Dollar signs used before commands without showing output : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md014.md",
+			"description": "MD014/commands-show-output : Dollar signs used before commands without showing output : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md014.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -777,7 +777,7 @@
 			"default": true
 		},
 		"commands-show-output": {
-			"description": "MD014/commands-show-output : Dollar signs used before commands without showing output : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md014.md",
+			"description": "MD014/commands-show-output : Dollar signs used before commands without showing output : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md014.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -802,7 +802,7 @@
 			"default": true
 		},
 		"MD018": {
-			"description": "MD018/no-missing-space-atx : No space after hash on atx style heading : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md018.md",
+			"description": "MD018/no-missing-space-atx : No space after hash on atx style heading : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md018.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -827,7 +827,7 @@
 			"default": true
 		},
 		"no-missing-space-atx": {
-			"description": "MD018/no-missing-space-atx : No space after hash on atx style heading : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md018.md",
+			"description": "MD018/no-missing-space-atx : No space after hash on atx style heading : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md018.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -852,7 +852,7 @@
 			"default": true
 		},
 		"MD019": {
-			"description": "MD019/no-multiple-space-atx : Multiple spaces after hash on atx style heading : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md019.md",
+			"description": "MD019/no-multiple-space-atx : Multiple spaces after hash on atx style heading : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md019.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -877,7 +877,7 @@
 			"default": true
 		},
 		"no-multiple-space-atx": {
-			"description": "MD019/no-multiple-space-atx : Multiple spaces after hash on atx style heading : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md019.md",
+			"description": "MD019/no-multiple-space-atx : Multiple spaces after hash on atx style heading : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md019.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -902,7 +902,7 @@
 			"default": true
 		},
 		"MD020": {
-			"description": "MD020/no-missing-space-closed-atx : No space inside hashes on closed atx style heading : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md020.md",
+			"description": "MD020/no-missing-space-closed-atx : No space inside hashes on closed atx style heading : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md020.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -927,7 +927,7 @@
 			"default": true
 		},
 		"no-missing-space-closed-atx": {
-			"description": "MD020/no-missing-space-closed-atx : No space inside hashes on closed atx style heading : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md020.md",
+			"description": "MD020/no-missing-space-closed-atx : No space inside hashes on closed atx style heading : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md020.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -952,7 +952,7 @@
 			"default": true
 		},
 		"MD021": {
-			"description": "MD021/no-multiple-space-closed-atx : Multiple spaces inside hashes on closed atx style heading : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md021.md",
+			"description": "MD021/no-multiple-space-closed-atx : Multiple spaces inside hashes on closed atx style heading : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md021.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -977,7 +977,7 @@
 			"default": true
 		},
 		"no-multiple-space-closed-atx": {
-			"description": "MD021/no-multiple-space-closed-atx : Multiple spaces inside hashes on closed atx style heading : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md021.md",
+			"description": "MD021/no-multiple-space-closed-atx : Multiple spaces inside hashes on closed atx style heading : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md021.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -1002,7 +1002,7 @@
 			"default": true
 		},
 		"MD022": {
-			"description": "MD022/blanks-around-headings : Headings should be surrounded by blank lines : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md022.md",
+			"description": "MD022/blanks-around-headings : Headings should be surrounded by blank lines : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md022.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -1046,7 +1046,7 @@
 			"default": true
 		},
 		"blanks-around-headings": {
-			"description": "MD022/blanks-around-headings : Headings should be surrounded by blank lines : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md022.md",
+			"description": "MD022/blanks-around-headings : Headings should be surrounded by blank lines : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md022.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -1090,7 +1090,7 @@
 			"default": true
 		},
 		"MD023": {
-			"description": "MD023/heading-start-left : Headings must start at the beginning of the line : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md023.md",
+			"description": "MD023/heading-start-left : Headings must start at the beginning of the line : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md023.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -1115,7 +1115,7 @@
 			"default": true
 		},
 		"heading-start-left": {
-			"description": "MD023/heading-start-left : Headings must start at the beginning of the line : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md023.md",
+			"description": "MD023/heading-start-left : Headings must start at the beginning of the line : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md023.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -1140,7 +1140,7 @@
 			"default": true
 		},
 		"MD024": {
-			"description": "MD024/no-duplicate-heading : Multiple headings with the same content : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md024.md",
+			"description": "MD024/no-duplicate-heading : Multiple headings with the same content : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md024.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -1170,7 +1170,7 @@
 			"default": true
 		},
 		"no-duplicate-heading": {
-			"description": "MD024/no-duplicate-heading : Multiple headings with the same content : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md024.md",
+			"description": "MD024/no-duplicate-heading : Multiple headings with the same content : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md024.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -1200,7 +1200,7 @@
 			"default": true
 		},
 		"MD025": {
-			"description": "MD025/single-title/single-h1 : Multiple top-level headings in the same document : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md025.md",
+			"description": "MD025/single-title/single-h1 : Multiple top-level headings in the same document : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md025.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -1237,7 +1237,7 @@
 			"default": true
 		},
 		"single-title": {
-			"description": "MD025/single-title/single-h1 : Multiple top-level headings in the same document : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md025.md",
+			"description": "MD025/single-title/single-h1 : Multiple top-level headings in the same document : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md025.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -1274,7 +1274,7 @@
 			"default": true
 		},
 		"single-h1": {
-			"description": "MD025/single-title/single-h1 : Multiple top-level headings in the same document : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md025.md",
+			"description": "MD025/single-title/single-h1 : Multiple top-level headings in the same document : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md025.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -1311,7 +1311,7 @@
 			"default": true
 		},
 		"MD026": {
-			"description": "MD026/no-trailing-punctuation : Trailing punctuation in heading : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md026.md",
+			"description": "MD026/no-trailing-punctuation : Trailing punctuation in heading : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md026.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -1341,7 +1341,7 @@
 			"default": true
 		},
 		"no-trailing-punctuation": {
-			"description": "MD026/no-trailing-punctuation : Trailing punctuation in heading : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md026.md",
+			"description": "MD026/no-trailing-punctuation : Trailing punctuation in heading : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md026.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -1371,7 +1371,7 @@
 			"default": true
 		},
 		"MD027": {
-			"description": "MD027/no-multiple-space-blockquote : Multiple spaces after blockquote symbol : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md027.md",
+			"description": "MD027/no-multiple-space-blockquote : Multiple spaces after blockquote symbol : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md027.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -1401,7 +1401,7 @@
 			"default": true
 		},
 		"no-multiple-space-blockquote": {
-			"description": "MD027/no-multiple-space-blockquote : Multiple spaces after blockquote symbol : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md027.md",
+			"description": "MD027/no-multiple-space-blockquote : Multiple spaces after blockquote symbol : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md027.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -1431,7 +1431,7 @@
 			"default": true
 		},
 		"MD028": {
-			"description": "MD028/no-blanks-blockquote : Blank line inside blockquote : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md028.md",
+			"description": "MD028/no-blanks-blockquote : Blank line inside blockquote : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md028.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -1456,7 +1456,7 @@
 			"default": true
 		},
 		"no-blanks-blockquote": {
-			"description": "MD028/no-blanks-blockquote : Blank line inside blockquote : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md028.md",
+			"description": "MD028/no-blanks-blockquote : Blank line inside blockquote : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md028.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -1481,7 +1481,7 @@
 			"default": true
 		},
 		"MD029": {
-			"description": "MD029/ol-prefix : Ordered list item prefix : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md029.md",
+			"description": "MD029/ol-prefix : Ordered list item prefix : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md029.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -1512,7 +1512,7 @@
 			"default": true
 		},
 		"ol-prefix": {
-			"description": "MD029/ol-prefix : Ordered list item prefix : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md029.md",
+			"description": "MD029/ol-prefix : Ordered list item prefix : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md029.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -1543,7 +1543,7 @@
 			"default": true
 		},
 		"MD030": {
-			"description": "MD030/list-marker-space : Spaces after list markers : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md030.md",
+			"description": "MD030/list-marker-space : Spaces after list markers : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md030.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -1592,7 +1592,7 @@
 			"default": true
 		},
 		"list-marker-space": {
-			"description": "MD030/list-marker-space : Spaces after list markers : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md030.md",
+			"description": "MD030/list-marker-space : Spaces after list markers : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md030.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -1641,7 +1641,7 @@
 			"default": true
 		},
 		"MD031": {
-			"description": "MD031/blanks-around-fences : Fenced code blocks should be surrounded by blank lines : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md031.md",
+			"description": "MD031/blanks-around-fences : Fenced code blocks should be surrounded by blank lines : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md031.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -1671,7 +1671,7 @@
 			"default": true
 		},
 		"blanks-around-fences": {
-			"description": "MD031/blanks-around-fences : Fenced code blocks should be surrounded by blank lines : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md031.md",
+			"description": "MD031/blanks-around-fences : Fenced code blocks should be surrounded by blank lines : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md031.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -1701,7 +1701,7 @@
 			"default": true
 		},
 		"MD032": {
-			"description": "MD032/blanks-around-lists : Lists should be surrounded by blank lines : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md032.md",
+			"description": "MD032/blanks-around-lists : Lists should be surrounded by blank lines : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md032.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -1726,7 +1726,7 @@
 			"default": true
 		},
 		"blanks-around-lists": {
-			"description": "MD032/blanks-around-lists : Lists should be surrounded by blank lines : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md032.md",
+			"description": "MD032/blanks-around-lists : Lists should be surrounded by blank lines : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md032.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -1751,7 +1751,7 @@
 			"default": true
 		},
 		"MD033": {
-			"description": "MD033/no-inline-html : Inline HTML : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md033.md",
+			"description": "MD033/no-inline-html : Inline HTML : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md033.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -1788,7 +1788,7 @@
 			"default": true
 		},
 		"no-inline-html": {
-			"description": "MD033/no-inline-html : Inline HTML : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md033.md",
+			"description": "MD033/no-inline-html : Inline HTML : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md033.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -1825,7 +1825,7 @@
 			"default": true
 		},
 		"MD034": {
-			"description": "MD034/no-bare-urls : Bare URL used : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md034.md",
+			"description": "MD034/no-bare-urls : Bare URL used : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md034.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -1850,7 +1850,7 @@
 			"default": true
 		},
 		"no-bare-urls": {
-			"description": "MD034/no-bare-urls : Bare URL used : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md034.md",
+			"description": "MD034/no-bare-urls : Bare URL used : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md034.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -1875,7 +1875,7 @@
 			"default": true
 		},
 		"MD035": {
-			"description": "MD035/hr-style : Horizontal rule style : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md035.md",
+			"description": "MD035/hr-style : Horizontal rule style : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md035.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -1905,7 +1905,7 @@
 			"default": true
 		},
 		"hr-style": {
-			"description": "MD035/hr-style : Horizontal rule style : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md035.md",
+			"description": "MD035/hr-style : Horizontal rule style : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md035.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -1935,7 +1935,7 @@
 			"default": true
 		},
 		"MD036": {
-			"description": "MD036/no-emphasis-as-heading : Emphasis used instead of a heading : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md036.md",
+			"description": "MD036/no-emphasis-as-heading : Emphasis used instead of a heading : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md036.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -1965,7 +1965,7 @@
 			"default": true
 		},
 		"no-emphasis-as-heading": {
-			"description": "MD036/no-emphasis-as-heading : Emphasis used instead of a heading : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md036.md",
+			"description": "MD036/no-emphasis-as-heading : Emphasis used instead of a heading : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md036.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -1995,7 +1995,7 @@
 			"default": true
 		},
 		"MD037": {
-			"description": "MD037/no-space-in-emphasis : Spaces inside emphasis markers : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md037.md",
+			"description": "MD037/no-space-in-emphasis : Spaces inside emphasis markers : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md037.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -2020,7 +2020,7 @@
 			"default": true
 		},
 		"no-space-in-emphasis": {
-			"description": "MD037/no-space-in-emphasis : Spaces inside emphasis markers : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md037.md",
+			"description": "MD037/no-space-in-emphasis : Spaces inside emphasis markers : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md037.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -2045,7 +2045,7 @@
 			"default": true
 		},
 		"MD038": {
-			"description": "MD038/no-space-in-code : Spaces inside code span elements : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md038.md",
+			"description": "MD038/no-space-in-code : Spaces inside code span elements : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md038.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -2070,7 +2070,7 @@
 			"default": true
 		},
 		"no-space-in-code": {
-			"description": "MD038/no-space-in-code : Spaces inside code span elements : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md038.md",
+			"description": "MD038/no-space-in-code : Spaces inside code span elements : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md038.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -2095,7 +2095,7 @@
 			"default": true
 		},
 		"MD039": {
-			"description": "MD039/no-space-in-links : Spaces inside link text : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md039.md",
+			"description": "MD039/no-space-in-links : Spaces inside link text : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md039.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -2120,7 +2120,7 @@
 			"default": true
 		},
 		"no-space-in-links": {
-			"description": "MD039/no-space-in-links : Spaces inside link text : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md039.md",
+			"description": "MD039/no-space-in-links : Spaces inside link text : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md039.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -2145,7 +2145,7 @@
 			"default": true
 		},
 		"MD040": {
-			"description": "MD040/fenced-code-language : Fenced code blocks should have a language specified : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md040.md",
+			"description": "MD040/fenced-code-language : Fenced code blocks should have a language specified : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md040.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -2181,7 +2181,7 @@
 			"default": true
 		},
 		"fenced-code-language": {
-			"description": "MD040/fenced-code-language : Fenced code blocks should have a language specified : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md040.md",
+			"description": "MD040/fenced-code-language : Fenced code blocks should have a language specified : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md040.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -2217,7 +2217,7 @@
 			"default": true
 		},
 		"MD041": {
-			"description": "MD041/first-line-heading/first-line-h1 : First line in a file should be a top-level heading : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md041.md",
+			"description": "MD041/first-line-heading/first-line-h1 : First line in a file should be a top-level heading : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md041.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -2259,7 +2259,7 @@
 			"default": true
 		},
 		"first-line-heading": {
-			"description": "MD041/first-line-heading/first-line-h1 : First line in a file should be a top-level heading : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md041.md",
+			"description": "MD041/first-line-heading/first-line-h1 : First line in a file should be a top-level heading : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md041.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -2301,7 +2301,7 @@
 			"default": true
 		},
 		"first-line-h1": {
-			"description": "MD041/first-line-heading/first-line-h1 : First line in a file should be a top-level heading : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md041.md",
+			"description": "MD041/first-line-heading/first-line-h1 : First line in a file should be a top-level heading : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md041.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -2343,7 +2343,7 @@
 			"default": true
 		},
 		"MD042": {
-			"description": "MD042/no-empty-links : No empty links : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md042.md",
+			"description": "MD042/no-empty-links : No empty links : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md042.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -2368,7 +2368,7 @@
 			"default": true
 		},
 		"no-empty-links": {
-			"description": "MD042/no-empty-links : No empty links : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md042.md",
+			"description": "MD042/no-empty-links : No empty links : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md042.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -2393,7 +2393,7 @@
 			"default": true
 		},
 		"MD043": {
-			"description": "MD043/required-headings : Required heading structure : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md043.md",
+			"description": "MD043/required-headings : Required heading structure : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md043.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -2429,7 +2429,7 @@
 			"default": true
 		},
 		"required-headings": {
-			"description": "MD043/required-headings : Required heading structure : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md043.md",
+			"description": "MD043/required-headings : Required heading structure : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md043.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -2465,7 +2465,7 @@
 			"default": true
 		},
 		"MD044": {
-			"description": "MD044/proper-names : Proper names should have the correct capitalization : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md044.md",
+			"description": "MD044/proper-names : Proper names should have the correct capitalization : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md044.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -2506,7 +2506,7 @@
 			"default": true
 		},
 		"proper-names": {
-			"description": "MD044/proper-names : Proper names should have the correct capitalization : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md044.md",
+			"description": "MD044/proper-names : Proper names should have the correct capitalization : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md044.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -2547,7 +2547,7 @@
 			"default": true
 		},
 		"MD045": {
-			"description": "MD045/no-alt-text : Images should have alternate text (alt text) : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md045.md",
+			"description": "MD045/no-alt-text : Images should have alternate text (alt text) : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md045.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -2572,7 +2572,7 @@
 			"default": true
 		},
 		"no-alt-text": {
-			"description": "MD045/no-alt-text : Images should have alternate text (alt text) : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md045.md",
+			"description": "MD045/no-alt-text : Images should have alternate text (alt text) : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md045.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -2597,7 +2597,7 @@
 			"default": true
 		},
 		"MD046": {
-			"description": "MD046/code-block-style : Code block style : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md046.md",
+			"description": "MD046/code-block-style : Code block style : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md046.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -2628,7 +2628,7 @@
 			"default": true
 		},
 		"code-block-style": {
-			"description": "MD046/code-block-style : Code block style : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md046.md",
+			"description": "MD046/code-block-style : Code block style : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md046.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -2659,7 +2659,7 @@
 			"default": true
 		},
 		"MD047": {
-			"description": "MD047/single-trailing-newline : Files should end with a single newline character : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md047.md",
+			"description": "MD047/single-trailing-newline : Files should end with a single newline character : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md047.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -2684,7 +2684,7 @@
 			"default": true
 		},
 		"single-trailing-newline": {
-			"description": "MD047/single-trailing-newline : Files should end with a single newline character : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md047.md",
+			"description": "MD047/single-trailing-newline : Files should end with a single newline character : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md047.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -2709,7 +2709,7 @@
 			"default": true
 		},
 		"MD048": {
-			"description": "MD048/code-fence-style : Code fence style : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md048.md",
+			"description": "MD048/code-fence-style : Code fence style : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md048.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -2740,7 +2740,7 @@
 			"default": true
 		},
 		"code-fence-style": {
-			"description": "MD048/code-fence-style : Code fence style : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md048.md",
+			"description": "MD048/code-fence-style : Code fence style : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md048.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -2771,7 +2771,7 @@
 			"default": true
 		},
 		"MD049": {
-			"description": "MD049/emphasis-style : Emphasis style : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md049.md",
+			"description": "MD049/emphasis-style : Emphasis style : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md049.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -2802,7 +2802,7 @@
 			"default": true
 		},
 		"emphasis-style": {
-			"description": "MD049/emphasis-style : Emphasis style : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md049.md",
+			"description": "MD049/emphasis-style : Emphasis style : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md049.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -2833,7 +2833,7 @@
 			"default": true
 		},
 		"MD050": {
-			"description": "MD050/strong-style : Strong style : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md050.md",
+			"description": "MD050/strong-style : Strong style : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md050.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -2864,7 +2864,7 @@
 			"default": true
 		},
 		"strong-style": {
-			"description": "MD050/strong-style : Strong style : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md050.md",
+			"description": "MD050/strong-style : Strong style : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md050.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -2895,7 +2895,7 @@
 			"default": true
 		},
 		"MD051": {
-			"description": "MD051/link-fragments : Link fragments should be valid : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md051.md",
+			"description": "MD051/link-fragments : Link fragments should be valid : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md051.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -2930,7 +2930,7 @@
 			"default": true
 		},
 		"link-fragments": {
-			"description": "MD051/link-fragments : Link fragments should be valid : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md051.md",
+			"description": "MD051/link-fragments : Link fragments should be valid : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md051.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -2965,7 +2965,7 @@
 			"default": true
 		},
 		"MD052": {
-			"description": "MD052/reference-links-images : Reference links and images should use a label that is defined : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md052.md",
+			"description": "MD052/reference-links-images : Reference links and images should use a label that is defined : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md052.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -3001,7 +3001,7 @@
 			"default": true
 		},
 		"reference-links-images": {
-			"description": "MD052/reference-links-images : Reference links and images should use a label that is defined : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md052.md",
+			"description": "MD052/reference-links-images : Reference links and images should use a label that is defined : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md052.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -3037,7 +3037,7 @@
 			"default": true
 		},
 		"MD053": {
-			"description": "MD053/link-image-reference-definitions : Link and image reference definitions should be needed : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md053.md",
+			"description": "MD053/link-image-reference-definitions : Link and image reference definitions should be needed : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md053.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -3068,7 +3068,7 @@
 			"default": true
 		},
 		"link-image-reference-definitions": {
-			"description": "MD053/link-image-reference-definitions : Link and image reference definitions should be needed : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md053.md",
+			"description": "MD053/link-image-reference-definitions : Link and image reference definitions should be needed : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md053.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -3099,7 +3099,7 @@
 			"default": true
 		},
 		"MD054": {
-			"description": "MD054/link-image-style : Link and image style : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md054.md",
+			"description": "MD054/link-image-style : Link and image style : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md054.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -3150,7 +3150,7 @@
 			"default": true
 		},
 		"link-image-style": {
-			"description": "MD054/link-image-style : Link and image style : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md054.md",
+			"description": "MD054/link-image-style : Link and image style : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md054.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -3201,7 +3201,7 @@
 			"default": true
 		},
 		"MD055": {
-			"description": "MD055/table-pipe-style : Table pipe style : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md055.md",
+			"description": "MD055/table-pipe-style : Table pipe style : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md055.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -3238,7 +3238,7 @@
 			"default": true
 		},
 		"table-pipe-style": {
-			"description": "MD055/table-pipe-style : Table pipe style : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md055.md",
+			"description": "MD055/table-pipe-style : Table pipe style : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md055.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -3275,7 +3275,7 @@
 			"default": true
 		},
 		"MD056": {
-			"description": "MD056/table-column-count : Table column count : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md056.md",
+			"description": "MD056/table-column-count : Table column count : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md056.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -3300,7 +3300,7 @@
 			"default": true
 		},
 		"table-column-count": {
-			"description": "MD056/table-column-count : Table column count : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md056.md",
+			"description": "MD056/table-column-count : Table column count : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md056.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -3325,7 +3325,7 @@
 			"default": true
 		},
 		"MD058": {
-			"description": "MD058/blanks-around-tables : Tables should be surrounded by blank lines : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md058.md",
+			"description": "MD058/blanks-around-tables : Tables should be surrounded by blank lines : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md058.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -3350,7 +3350,7 @@
 			"default": true
 		},
 		"blanks-around-tables": {
-			"description": "MD058/blanks-around-tables : Tables should be surrounded by blank lines : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md058.md",
+			"description": "MD058/blanks-around-tables : Tables should be surrounded by blank lines : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md058.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -3375,7 +3375,7 @@
 			"default": true
 		},
 		"MD059": {
-			"description": "MD059/descriptive-link-text : Link text should be descriptive : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md059.md",
+			"description": "MD059/descriptive-link-text : Link text should be descriptive : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md059.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -3406,7 +3406,7 @@
 			"default": true
 		},
 		"descriptive-link-text": {
-			"description": "MD059/descriptive-link-text : Link text should be descriptive : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md059.md",
+			"description": "MD059/descriptive-link-text : Link text should be descriptive : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md059.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -3437,7 +3437,7 @@
 			"default": true
 		},
 		"MD060": {
-			"description": "MD060/table-column-style : Table column style : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md060.md",
+			"description": "MD060/table-column-style : Table column style : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md060.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
@@ -3473,7 +3473,7 @@
 			"default": true
 		},
 		"table-column-style": {
-			"description": "MD060/table-column-style : Table column style : https://github.com/DavidAnson/markdownlint/blob/v0.41.0/doc/md060.md",
+			"description": "MD060/table-column-style : Table column style : https://github.com/DavidAnson/markdownlint/blob/v0.41.1/doc/md060.md",
 			"oneOf": [
 				{ "type": "boolean" },
 				{ "enum": ["error", "warning"] },
