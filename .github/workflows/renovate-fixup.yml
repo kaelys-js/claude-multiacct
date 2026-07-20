@@ -72,7 +72,7 @@ jobs:
 
       # Same toolchain as CI (mise.toml pins shfmt / shellcheck / bats / …).
       - name: Install mise + pinned toolchain
-        uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d  # v4.2.0
+        uses: jdx/mise-action@dad1bfd3df957f44999b559dd69dc1671cb4e9ea  # v4.2.1
 
       # `bin/claude-multiacct qa format` runs `shfmt -w bin/* lib/*.sh
       # tests/*.bats` — the write-mode counterpart to CI's `shfmt -d …` check.
