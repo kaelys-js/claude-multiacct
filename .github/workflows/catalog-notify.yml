@@ -11,6 +11,12 @@ name: catalog-notify
     branches: [main]
     paths:
       - ".github/kaelys-catalog.json"
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: "Report what would be dispatched to kaelys-js/kaelys-js without sending the repository_dispatch event."
+        type: boolean
+        default: false
 
 concurrency:
   group: catalog-notify
@@ -61,6 +67,13 @@ jobs:
           SRC_REPO: ${{ github.repository }}
           SRC_SHA: ${{ github.sha }}
         run: |
+          if [ "${{ inputs.dry-run }}" = "true" ]; then
+            echo "dry-run: would POST repos/${GITHUB_REPOSITORY_OWNER}/kaelys-js/dispatches"
+            echo "dry-run:   event_type=catalog-updated"
+            echo "dry-run:   client_payload[repo]=${SRC_REPO}"
+            echo "dry-run:   client_payload[sha]=${SRC_SHA}"
+            exit 0
+          fi
           gh api "repos/${GITHUB_REPOSITORY_OWNER}/kaelys-js/dispatches" \
             --method POST \
             --field event_type=catalog-updated \
