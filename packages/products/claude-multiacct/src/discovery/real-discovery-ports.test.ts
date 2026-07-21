@@ -29,6 +29,22 @@ type ExecFileArgs = [
 
 const execFileSpy = vi.fn();
 const readFileSpy = vi.fn();
+const readdirSpy = vi.fn();
+const statSpy = vi.fn();
+
+// provisionOne wraps the real provisionAccount + a real AtomicRegistryWriter
+// pointed at ~/.config. Mock the provisioning module so the test drives
+// provisionOne's ok/failure mapping (and the syntheticVerify it injects)
+// without ever touching the real registry on disk.
+let provisionImpl: (input: {
+	token: string;
+	label: string;
+	ports: { verify: (token: string) => Promise<unknown> };
+}) => Promise<unknown> = () => Promise.resolve({ ok: false, kind: "unset", detail: "unset" });
+vi.mock("../oauth/provisioning.ts", () => ({
+	provisionAccount: (input: never) => provisionImpl(input as never),
+	flagOn: () => false,
+}));
 
 vi.mock("node:child_process", async () => {
 	const { promisify } = await import("node:util");
@@ -68,6 +84,8 @@ vi.mock("node:fs/promises", async () => {
 	return {
 		...actual,
 		readFile: (path: string, encoding?: string) => readFileSpy(path, encoding),
+		readdir: (path: string) => readdirSpy(path),
+		stat: (path: string) => statSpy(path),
 	};
 });
 
@@ -87,9 +105,30 @@ function resetMocks(): void {
 	execFileSpy.mockClear();
 	readFileSpy.mockReset();
 	readFileSpy.mockImplementation(() => Promise.reject(new Error("ENOENT")));
+	readdirSpy.mockReset();
+	readdirSpy.mockImplementation(() => Promise.reject(new Error("ENOENT")));
+	statSpy.mockReset();
+	statSpy.mockImplementation(() => Promise.reject(new Error("ENOENT")));
+	provisionImpl = () => Promise.resolve({ ok: false, kind: "unset", detail: "unset" });
 	execFileImpl = (_args, _opts, cb) => {
 		cb(Object.assign(new Error("not found"), { code: 44 }), "", "");
 	};
+}
+
+const noopLogger = { log: () => {}, warn: () => {} };
+function makePorts(
+	over: Partial<
+		Parameters<typeof import("./real-discovery-ports.ts").makeRealDiscoveryPorts>[0]
+	> = {},
+): Promise<ReturnType<typeof import("./real-discovery-ports.ts").makeRealDiscoveryPorts>> {
+	return importReal().then(({ makeRealDiscoveryPorts }) =>
+		makeRealDiscoveryPorts({
+			tokenStore: { put: async () => {} } as never,
+			readRegistry: async () => undefined,
+			logger: noopLogger,
+			...over,
+		}),
+	);
 }
 
 describe("makeRealDiscoveryPorts.readKeychainPassword", () => {
@@ -393,13 +432,211 @@ describe("makeRealDiscoveryPorts.readClaudeCliCredential", () => {
 		execFileImpl = (_args, _opts, cb) => {
 			cb(null, "raw-token\n", "");
 		};
-		const { makeRealDiscoveryPorts } = await importReal();
-		const ports = makeRealDiscoveryPorts({
-			tokenStore: { put: async () => {} } as never,
-			readRegistry: async () => undefined,
-			logger: { log: () => {}, warn: () => {} },
-		});
+		const ports = await makePorts();
 		const raw = await ports.readClaudeCliCredential("Claude Code-credentials-x");
 		expect(raw).toBe("raw-token");
+	});
+
+	it("returns undefined when security fails (missing slot)", async () => {
+		resetMocks(); // default execFileImpl errors with code 44
+		const ports = await makePorts();
+		expect(await ports.readClaudeCliCredential("Claude Code-credentials-missing")).toBeUndefined();
+	});
+});
+
+describe("makeRealDiscoveryPorts.listClaudeCliServices — label sources", () => {
+	it("keeps a registry label already in canonical form as-is (no double prefix)", async () => {
+		resetMocks();
+		const probed = new Set<string>();
+		execFileImpl = (args, _opts, cb) => {
+			const argv = args[1] as readonly string[];
+			const sIdx = argv.indexOf("-s");
+			if (sIdx >= 0) {
+				probed.add(argv[sIdx + 1] as string);
+			}
+			cb(Object.assign(new Error("not found"), { code: 44 }), "", "");
+		};
+		const ports = await makePorts({
+			readRegistry: async () =>
+				({
+					accounts: [
+						{
+							uuid: "11111111-1111-4111-8111-111111111111",
+							label: "Claude Code-credentials-bob",
+							isPrimary: true,
+							subscriptionType: "u",
+							rateLimitTier: "u",
+							encryptedTokenRef: "r",
+						},
+					],
+				}) as never,
+		});
+		await ports.listClaudeCliServices();
+		// The label was already fully-qualified → probed verbatim, not re-prefixed.
+		expect(probed.has("Claude Code-credentials-bob")).toBe(true);
+		expect(probed.has("Claude Code-credentials-Claude Code-credentials-bob")).toBe(false);
+	});
+
+	it("accepts a top-level string array and a `credentials` array from the label files", async () => {
+		resetMocks();
+		readFileSpy.mockImplementation((path: string) => {
+			if (path.endsWith(".credentials.json")) {
+				return Promise.resolve(JSON.stringify(["work"]));
+			}
+			if (path.endsWith("settings.json")) {
+				return Promise.resolve(JSON.stringify({ credentials: ["home"] }));
+			}
+			return Promise.reject(new Error("ENOENT"));
+		});
+		const probed = new Set<string>();
+		execFileImpl = (args, _opts, cb) => {
+			const argv = args[1] as readonly string[];
+			const sIdx = argv.indexOf("-s");
+			if (sIdx >= 0) {
+				probed.add(argv[sIdx + 1] as string);
+			}
+			cb(Object.assign(new Error("not found"), { code: 44 }), "", "");
+		};
+		const ports = await makePorts();
+		await ports.listClaudeCliServices();
+		expect(probed.has("Claude Code-credentials-work")).toBe(true);
+		expect(probed.has("Claude Code-credentials-home")).toBe(true);
+	});
+
+	it("warns and continues when the registry read itself throws", async () => {
+		resetMocks();
+		const warned: string[] = [];
+		const ports = await makePorts({
+			readRegistry: () => Promise.reject(new Error("registry corrupt")),
+			logger: { log: () => {}, warn: (m: string) => warned.push(m) },
+		});
+		const services = await ports.listClaudeCliServices();
+		// Registry read failure is non-fatal — the canonical candidate is still probed.
+		expect(services).toEqual([]);
+		expect(warned.some((m) => m.includes("registry read failed"))).toBe(true);
+	});
+});
+
+describe("makeRealDiscoveryPorts.listCloneApps", () => {
+	it("maps `Claude Account <Label>.app` bundles to label + Application Support store dir", async () => {
+		resetMocks();
+		readdirSpy.mockImplementation(() =>
+			Promise.resolve([
+				"Claude Account Gmail.app",
+				"Claude Account Work Space.app",
+				"Safari.app",
+				"not-a-clone",
+			]),
+		);
+		const ports = await makePorts();
+		const clones = await ports.listCloneApps();
+		const labels = clones.map((c) => c.label);
+		expect(labels).toEqual(["gmail", "work-space"]);
+		const gmail = clones.find((c) => c.label === "gmail")!;
+		expect(gmail.bundlePath.endsWith("Claude Account Gmail.app")).toBe(true);
+		expect(gmail.storeDir.endsWith("Application Support/Claude-Gmail")).toBe(true);
+	});
+
+	it("returns [] when the Applications dir cannot be read", async () => {
+		resetMocks(); // readdir rejects by default
+		const ports = await makePorts();
+		expect(await ports.listCloneApps()).toEqual([]);
+	});
+});
+
+async function collectEntries(
+	iter: AsyncIterable<{ key: Buffer; value: Buffer }>,
+): Promise<Array<{ key: Buffer; value: Buffer }>> {
+	const out: Array<{ key: Buffer; value: Buffer }> = [];
+	for await (const e of iter) {
+		out.push(e);
+	}
+	return out;
+}
+
+describe("makeRealDiscoveryPorts.iterateLevelDb + scanV10Values", () => {
+	it("scans .log/.ldb files and yields every embedded v10 blob (two hits → sliced at the next prefix)", async () => {
+		resetMocks();
+		statSpy.mockImplementation(() => Promise.resolve({ isDirectory: () => true }));
+		readdirSpy.mockImplementation(() => Promise.resolve(["000005.log", "CURRENT", "LOCK"]));
+		// Two v10 blobs back to back plus a trailing one; scanV10Values slices the
+		// first up to the second prefix, the last up to EOF.
+		const raw = Buffer.concat([
+			Buffer.from("junk-header"),
+			Buffer.from("v10AAAAAAAA"),
+			Buffer.from("v10BBBBBBBB"),
+		]);
+		readFileSpy.mockImplementation(() => Promise.resolve(raw));
+		const ports = await makePorts();
+		const out = await collectEntries(ports.iterateLevelDb("/store/leveldb"));
+		expect(out).toHaveLength(2);
+		expect(out[0]!.value.subarray(0, 3).toString()).toBe("v10");
+		expect(out[1]!.value.subarray(0, 3).toString()).toBe("v10");
+	});
+
+	it("yields nothing when the file holds no v10 blob", async () => {
+		resetMocks();
+		statSpy.mockImplementation(() => Promise.resolve({ isDirectory: () => true }));
+		readdirSpy.mockImplementation(() => Promise.resolve(["000005.ldb"]));
+		readFileSpy.mockImplementation(() => Promise.resolve(Buffer.from("nothing encrypted here")));
+		const ports = await makePorts();
+		expect(await collectEntries(ports.iterateLevelDb("/store/leveldb"))).toEqual([]);
+	});
+
+	it("returns empty when the path is not a directory", async () => {
+		resetMocks();
+		statSpy.mockImplementation(() => Promise.resolve({ isDirectory: () => false }));
+		const ports = await makePorts();
+		expect(await collectEntries(ports.iterateLevelDb("/store/leveldb"))).toEqual([]);
+	});
+
+	it("returns empty (silent) when the dir is missing", async () => {
+		resetMocks(); // stat rejects by default
+		const ports = await makePorts();
+		expect(await collectEntries(ports.iterateLevelDb("/nope"))).toEqual([]);
+	});
+
+	it("warns and skips a file whose read fails, without aborting the dir walk", async () => {
+		resetMocks();
+		statSpy.mockImplementation(() => Promise.resolve({ isDirectory: () => true }));
+		readdirSpy.mockImplementation(() => Promise.resolve(["bad.log", "good.ldb"]));
+		readFileSpy.mockImplementation((path: string) =>
+			path.endsWith("bad.log")
+				? Promise.reject(new Error("EIO"))
+				: Promise.resolve(Buffer.concat([Buffer.from("v10"), Buffer.from("CIPHERBYTES")])),
+		);
+		const warned: string[] = [];
+		const ports = await makePorts({
+			logger: { log: () => {}, warn: (m: string) => warned.push(m) },
+		});
+		const out = await collectEntries(ports.iterateLevelDb("/store/leveldb"));
+		expect(out).toHaveLength(1);
+		expect(warned.some((m) => m.includes("read") && m.includes("failed"))).toBe(true);
+	});
+});
+
+describe("makeRealDiscoveryPorts.provisionOne", () => {
+	it("maps a successful provisionAccount to {ok, uuid} and invokes the synthetic verify", async () => {
+		resetMocks();
+		let verifiedToken: string | undefined;
+		provisionImpl = async (input) => {
+			// Exercise the injected syntheticVerify so its uuid/subscription defaults run.
+			const verify = (await input.ports.verify(input.token)) as { accountUuid: string };
+			verifiedToken = input.token;
+			return { ok: true, account: { uuid: verify.accountUuid } };
+		};
+		const ports = await makePorts();
+		const result = await ports.provisionOne({ token: "T-1", label: "gmail" });
+		expect(result.ok).toBe(true);
+		expect(verifiedToken).toBe("T-1");
+		expect((result as { uuid: string }).uuid).toMatch(/^[0-9a-f-]{36}$/u);
+	});
+
+	it("maps a failed provisionAccount to {ok:false, kind, detail} with an empty-string detail fallback", async () => {
+		resetMocks();
+		provisionImpl = () => Promise.resolve({ ok: false, kind: "verify_failed" }); // detail omitted
+		const ports = await makePorts();
+		const result = await ports.provisionOne({ token: "T-2", label: "work" });
+		expect(result).toEqual({ ok: false, kind: "verify_failed", detail: "" });
 	});
 });

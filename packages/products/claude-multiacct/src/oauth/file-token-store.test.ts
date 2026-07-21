@@ -15,12 +15,17 @@
  */
 
 import { mkdir, mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AccountUuid } from "../domain/account.ts";
 import type { MutableTokenStore } from "./token-store-mut.ts";
-import { FileTokenStore, tokenPath } from "./file-token-store.ts";
+import {
+	defaultKeystoreKeyPath,
+	defaultRoot,
+	FileTokenStore,
+	tokenPath,
+} from "./file-token-store.ts";
 import { isKeychainInteractionError, LayeredTokenStore } from "./layered-token-store.ts";
 
 const UUID_A = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa" as AccountUuid;
@@ -102,6 +107,29 @@ describe("FileTokenStore", () => {
 		await writeFile(keyPath, Buffer.from([0x01, 0x02, 0x03]), { mode: 0o600 });
 		const store = new FileTokenStore(join(keyPath, ".."), keyPath);
 		await expect(store.put(UUID_A, "t")).rejects.toThrow(/wrong length/u);
+	});
+
+	it("throws loud when keystore.key is unreadable for a reason other than ENOENT", async () => {
+		// getKey generates a fresh key only on ENOENT. Any other read failure (here:
+		// the key path is actually a directory → EISDIR) must surface, not be
+		// swallowed into a silent new-key generation that would orphan every token
+		// already encrypted under the real key. Drop the `code !== "ENOENT"` guard
+		// and this write would succeed against a bogus key — RED.
+		const root = await mkdtemp(join(tmpdir(), "cma-fts-"));
+		const keyPath = join(root, "keystore.key");
+		await mkdir(keyPath, { recursive: true });
+		const store = new FileTokenStore(root, keyPath);
+		await expect(store.put(UUID_A, "t")).rejects.toThrow(/keystore\.key unreadable/u);
+	});
+});
+
+describe("file-token-store default paths", () => {
+	it("defaultRoot resolves under ~/.config/claude-multiacct", () => {
+		expect(defaultRoot()).toBe(join(homedir(), ".config", "claude-multiacct"));
+	});
+
+	it("defaultKeystoreKeyPath is keystore.key inside the default root", () => {
+		expect(defaultKeystoreKeyPath()).toBe(join(defaultRoot(), "keystore.key"));
 	});
 });
 

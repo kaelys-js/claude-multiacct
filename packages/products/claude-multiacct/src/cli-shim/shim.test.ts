@@ -10,7 +10,8 @@
  * primary session.
  */
 
-import { describe, expect, it, vi } from "vitest";
+import { EventEmitter } from "node:events";
+import { afterEach, describe, expect, it, type Mock, vi } from "vitest";
 import type { AccountUuid } from "../domain/account.ts";
 import type { AccountRegistry } from "../domain/registry.ts";
 import type { ChoiceStore, TokenStore } from "../ports.ts";
@@ -349,6 +350,335 @@ describe("runShim — logSpawn audit hook", () => {
 		});
 		const result = await runShim(deps);
 		expect(result.exitCode).toBe(0);
+	});
+});
+
+type SpawnFn = NonNullable<ShimDeps["spawn"]>;
+type SpawnReturn = ReturnType<SpawnFn>;
+
+// A stand-in for child_process.ChildProcess exposing only what the shim's
+// hot-swap path touches: exit/error events, kill(), and the exitCode/signalCode
+// the SIGHUP handler inspects before deciding to kill. ChildProcess IS an
+// EventEmitter, so the fake mirrors that API rather than EventTarget.
+// eslint-disable-next-line unicorn/prefer-event-target -- mirrors node:child_process.ChildProcess, which is an EventEmitter
+class FakeChild extends EventEmitter {
+	exitCode: number | null = null;
+	signalCode: NodeJS.Signals | null = null;
+	kill = vi.fn<(signal?: NodeJS.Signals | number) => boolean>(() => true);
+	// Simulate the child exiting (a code, or a signal death).
+	finish(code: number | null, signal: NodeJS.Signals | null = null): void {
+		this.exitCode = code;
+		this.signalCode = signal;
+		this.emit("exit", code, signal);
+	}
+	// Simulate a spawn-level error event.
+	fail(error: Error): void {
+		this.emit("error", error);
+	}
+}
+
+const tick = (): Promise<void> =>
+	new Promise<void>((resolve) => {
+		setImmediate(resolve);
+	});
+
+// A typed `spawn` mock that hands out the queued fake children in order.
+function spawnFromQueue(queue: FakeChild[]): Mock<SpawnFn> {
+	return vi.fn<SpawnFn>(() => queue.shift() as unknown as SpawnReturn);
+}
+
+// Capture the SIGHUP handler the shim registers so a test can fire it.
+function sighupCapture(): { onSighup: NonNullable<ShimDeps["onSighup"]>; fire: () => void } {
+	let handler: (() => void) | undefined;
+	const onSighup: NonNullable<ShimDeps["onSighup"]> = (h) => {
+		handler = h;
+		return () => {};
+	};
+	return { onSighup, fire: () => handler?.() };
+}
+
+const CHOICE_FOR_B: ChoiceStore = {
+	read: () =>
+		Promise.resolve({
+			[SESSION_A]: {
+				sessionUuid: SESSION_A,
+				accountUuid: UUID_B,
+				chosenAt: "2026-07-19T00:00:00.000Z",
+			},
+		}),
+	write: async () => {},
+};
+const TOKEN_B: TokenStore = { get: () => Promise.resolve("swapped-token"), put: async () => {} };
+
+// Hot-swap deps require spawn + onSighup + writePidFile + removePidFile.
+function hotSwapDeps(overrides: Partial<ShimDeps> = {}): {
+	deps: ShimDeps;
+	calls: SpawnCall[];
+	warn: ReturnType<typeof vi.fn>;
+} {
+	return makeDeps({
+		onSighup: () => () => {},
+		writePidFile: () => Promise.resolve(),
+		removePidFile: () => Promise.resolve(),
+		...overrides,
+	});
+}
+
+describe("runShim — hot-swap async path", () => {
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it("writes the pid, spawns via the async spawn, forwards the exit code, removes the pid", async () => {
+		const child = new FakeChild();
+		const spawn = spawnFromQueue([child]);
+		const writePidFile = vi.fn<(u: string) => Promise<void>>(() => Promise.resolve());
+		const removePidFile = vi.fn<(u: string) => Promise<void>>(() => Promise.resolve());
+		const { deps, calls } = hotSwapDeps({ spawn, writePidFile, removePidFile });
+		const p = runShim(deps);
+		await tick();
+		expect(writePidFile).toHaveBeenCalledWith(SESSION_A);
+		expect(spawn).toHaveBeenCalledTimes(1);
+		child.finish(7);
+		const result = await p;
+		expect(result.exitCode).toBe(7);
+		expect(removePidFile).toHaveBeenCalledWith(SESSION_A);
+		// The classic spawnSync path must NOT run on the hot-swap route.
+		expect(calls).toStrictEqual([]);
+	});
+
+	it("SIGHUP SIGTERMs the running child and respawns with a freshly-computed env", async () => {
+		const child1 = new FakeChild();
+		const child2 = new FakeChild();
+		const spawn = spawnFromQueue([child1, child2]);
+		const { onSighup, fire } = sighupCapture();
+		const removePidFile = vi.fn<(u: string) => Promise<void>>(() => Promise.resolve());
+		const { deps } = hotSwapDeps({
+			spawn,
+			onSighup,
+			removePidFile,
+			choiceStore: CHOICE_FOR_B,
+			tokenStore: TOKEN_B,
+		});
+		const p = runShim(deps);
+		await tick();
+		expect(spawn).toHaveBeenCalledTimes(1);
+		// Daemon signalled a choice change mid-session.
+		fire();
+		expect(child1.kill).toHaveBeenCalledWith("SIGTERM");
+		// child1 dies from the SIGTERM; the loop recomputes + respawns.
+		child1.finish(null, "SIGTERM");
+		await tick();
+		expect(spawn).toHaveBeenCalledTimes(2);
+		child2.finish(0);
+		const result = await p;
+		expect(result.exitCode).toBe(0);
+		expect(removePidFile).toHaveBeenCalledWith(SESSION_A);
+	});
+
+	it("SIGHUP escalates to SIGKILL when the child ignores SIGTERM for 3s", async () => {
+		vi.useFakeTimers();
+		const child1 = new FakeChild();
+		const child2 = new FakeChild();
+		const spawn = spawnFromQueue([child1, child2]);
+		const { onSighup, fire } = sighupCapture();
+		const { deps } = hotSwapDeps({
+			spawn,
+			onSighup,
+			choiceStore: CHOICE_FOR_B,
+			tokenStore: TOKEN_B,
+		});
+		const p = runShim(deps);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(spawn).toHaveBeenCalledTimes(1);
+		fire();
+		expect(child1.kill).toHaveBeenCalledWith("SIGTERM");
+		// Child is still alive (exitCode/signalCode null) → 3s grace elapses → SIGKILL.
+		await vi.advanceTimersByTimeAsync(3000);
+		expect(child1.kill).toHaveBeenCalledWith("SIGKILL");
+		child1.finish(null, "SIGKILL");
+		await vi.advanceTimersByTimeAsync(0);
+		child2.finish(0);
+		const result = await p;
+		expect(result.exitCode).toBe(0);
+	});
+
+	it("writePidFile failure disables hot-swap: warns and falls back to spawnSync single-shot", async () => {
+		const spawn = spawnFromQueue([]);
+		const { deps, calls, warn } = hotSwapDeps({
+			spawn,
+			writePidFile: () => Promise.reject(new Error("pid boom")),
+		});
+		const result = await runShim(deps);
+		expect(warn).toHaveBeenCalledWith(expect.stringMatching(/writePidFile failed/u));
+		expect(spawn).not.toHaveBeenCalled();
+		// Single-shot spawnSync fallback ran instead.
+		expect(calls).toHaveLength(1);
+		expect(result.exitCode).toBe(0);
+	});
+
+	it("writePidFile failure + spawnSync error → 127", async () => {
+		const spawn = spawnFromQueue([]);
+		const { deps } = hotSwapDeps({
+			spawn,
+			writePidFile: () => Promise.reject(new Error("pid boom")),
+			spawnSync: () => ({ status: null, error: new Error("ENOENT: no real bin") }),
+		});
+		const result = await runShim(deps);
+		expect(result.exitCode).toBe(127);
+	});
+
+	it("a failed swap recompute on SIGHUP passes through with the original env", async () => {
+		const child1 = new FakeChild();
+		const child2 = new FakeChild();
+		const spawn = spawnFromQueue([child1, child2]);
+		const { onSighup, fire } = sighupCapture();
+		// First read (initial env) resolves; the SIGHUP recompute rejects.
+		const read = vi
+			.fn<ChoiceStore["read"]>()
+			.mockResolvedValueOnce({
+				[SESSION_A]: {
+					sessionUuid: SESSION_A,
+					accountUuid: UUID_B,
+					chosenAt: "2026-07-19T00:00:00.000Z",
+				},
+			})
+			.mockRejectedValueOnce(new Error("recompute boom"));
+		const choiceStore: ChoiceStore = { read, write: async () => {} };
+		const { deps, warn } = hotSwapDeps({ spawn, onSighup, choiceStore, tokenStore: TOKEN_B });
+		const p = runShim(deps);
+		await tick();
+		fire();
+		child1.finish(null, "SIGTERM");
+		await tick();
+		child2.finish(0);
+		const result = await p;
+		expect(warn).toHaveBeenCalledWith(expect.stringMatching(/recompute failed/u));
+		// Recompute failed → the respawn used the original (pass-through) env.
+		expect(result.swapped).toBe(false);
+	});
+
+	it("a child that dies from a signal yields 128 + signal number", async () => {
+		const child = new FakeChild();
+		const spawn = spawnFromQueue([child]);
+		const { deps } = hotSwapDeps({ spawn });
+		const p = runShim(deps);
+		await tick();
+		child.finish(null, "SIGKILL"); // 128 + 9
+		const result = await p;
+		expect(result.exitCode).toBe(137);
+	});
+
+	it("a child 'error' event yields 127 and warns", async () => {
+		const child = new FakeChild();
+		const spawn = spawnFromQueue([child]);
+		const { deps, warn } = hotSwapDeps({ spawn });
+		const p = runShim(deps);
+		await tick();
+		child.fail(new Error("spawn ENOENT"));
+		const result = await p;
+		expect(result.exitCode).toBe(127);
+		expect(warn).toHaveBeenCalledWith(expect.stringMatching(/exec of/u));
+	});
+
+	it("a child that exits with neither code nor signal yields 0", async () => {
+		const child = new FakeChild();
+		const spawn = spawnFromQueue([child]);
+		const { deps } = hotSwapDeps({ spawn });
+		const p = runShim(deps);
+		await tick();
+		child.finish(null, null);
+		const result = await p;
+		expect(result.exitCode).toBe(0);
+	});
+
+	it("an unmapped signal contributes 0 to the 128+signal exit code", async () => {
+		const child = new FakeChild();
+		const spawn = spawnFromQueue([child]);
+		const { deps } = hotSwapDeps({ spawn });
+		const p = runShim(deps);
+		await tick();
+		child.finish(null, "SIGUSR1"); // not in the POSIX table → 128 + 0
+		const result = await p;
+		expect(result.exitCode).toBe(128);
+	});
+
+	it("writePidFile failure fallback coerces a null spawnSync status to 0", async () => {
+		const spawn = spawnFromQueue([]);
+		const { deps } = hotSwapDeps({
+			spawn,
+			writePidFile: () => Promise.reject(new Error("pid boom")),
+			spawnSync: () => ({ status: null }),
+		});
+		const result = await runShim(deps);
+		expect(result.exitCode).toBe(0);
+	});
+
+	it("a SIGHUP that arrives after the child already exited does not try to kill it", async () => {
+		const child1 = new FakeChild();
+		const child2 = new FakeChild();
+		const spawn = spawnFromQueue([child1, child2]);
+		const { onSighup, fire } = sighupCapture();
+		const { deps } = hotSwapDeps({
+			spawn,
+			onSighup,
+			choiceStore: CHOICE_FOR_B,
+			tokenStore: TOKEN_B,
+		});
+		const p = runShim(deps);
+		await tick();
+		// Simulate the child having exited already, then fire SIGHUP.
+		child1.exitCode = 0;
+		fire();
+		expect(child1.kill).not.toHaveBeenCalled();
+		// The exit event still drives the loop; swapPending → respawn → exit.
+		child1.finish(0);
+		await tick();
+		child2.finish(0);
+		const result = await p;
+		expect(result.exitCode).toBe(0);
+	});
+
+	it("the SIGKILL grace timer does not fire when the child exits within 3s", async () => {
+		vi.useFakeTimers();
+		const child1 = new FakeChild();
+		const child2 = new FakeChild();
+		const spawn = spawnFromQueue([child1, child2]);
+		const { onSighup, fire } = sighupCapture();
+		const { deps } = hotSwapDeps({
+			spawn,
+			onSighup,
+			choiceStore: CHOICE_FOR_B,
+			tokenStore: TOKEN_B,
+		});
+		const p = runShim(deps);
+		await vi.advanceTimersByTimeAsync(0);
+		fire();
+		expect(child1.kill).toHaveBeenCalledWith("SIGTERM");
+		child1.kill.mockClear();
+		// Child obeys SIGTERM and exits well before the 3s grace elapses.
+		child1.finish(null, "SIGTERM");
+		await vi.advanceTimersByTimeAsync(3000);
+		// The grace-timer callback saw the child already gone → no SIGKILL.
+		expect(child1.kill).not.toHaveBeenCalledWith("SIGKILL");
+		child2.finish(0);
+		const result = await p;
+		expect(result.exitCode).toBe(0);
+	});
+});
+
+describe("runShim — fireLogSpawn with an empty (pass-through) token", () => {
+	it("hashes an empty string when the child env carries no OAuth token", async () => {
+		const logSpawn = vi.fn<(uuid: string | undefined, hash: string) => void>();
+		// Pass-through invocation (no --resume) with an env that has no token.
+		const { deps } = makeDeps({
+			argv: ["node", "/path/claude", "--print", "hi"],
+			env: { PATH: "/usr/bin", HOME: "/Users/dev" },
+			logSpawn,
+		});
+		await runShim(deps);
+		// sha256("") = e3b0c442... → first 16 hex chars.
+		expect(logSpawn).toHaveBeenCalledWith(undefined, "e3b0c44298fc1c14");
 	});
 });
 

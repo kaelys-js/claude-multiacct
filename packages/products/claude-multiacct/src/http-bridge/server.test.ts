@@ -46,6 +46,21 @@ function bridgeLogsContain(spy: { mock: { calls: unknown[][] } }, needle: string
 	});
 }
 
+// Find the first string argument passed to a console spy that satisfies `pred`.
+// Module-scoped so the predicate check stays out of the test body.
+function findLoggedLine(
+	spy: { mock: { calls: unknown[][] } },
+	pred: (m: string) => boolean,
+): string | undefined {
+	for (const call of spy.mock.calls) {
+		const [first] = call;
+		if (typeof first === "string" && pred(first)) {
+			return first;
+		}
+	}
+	return undefined;
+}
+
 async function scratchPath(): Promise<string> {
 	const dir = await mkdtemp(join(tmpdir(), "cma-server-"));
 	return join(dir, "bridge.json");
@@ -347,6 +362,78 @@ describe("start", () => {
 			},
 		);
 		expect(res.status).toBe(400);
+	});
+
+	it("wires the default signalSwap + default logger.log when opts omit them", async () => {
+		// When callers don't inject signalSwap/logger, start() must bind the real
+		// defaultSignalSwap (SIGHUP the session pid file) and a console-backed
+		// logger. A POST /choice for a session with no live shim resolves to
+		// "no-owner" (no pid file in the isolated HOME) and the default logger.log
+		// emits the hot-swap outcome line. Drop the defaults and this line never
+		// appears.
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+		try {
+			const path = await scratchPath();
+			// No signalSwap, no logger → defaults exercised.
+			const s = await start({ ...noopDeps, bridgeJsonPath: path });
+			alive.push(s);
+			const res = await fetch(
+				`http://127.0.0.1:${String(s.port)}/choice/22222222-2222-4222-8222-222222222222`,
+				{
+					method: "POST",
+					headers: {
+						origin: "https://claude.ai",
+						"x-cma-bridge-secret": s.secret,
+						"content-type": "application/json",
+					},
+					body: JSON.stringify({ accountUuid: "11111111-1111-4111-8111-111111111111" }),
+				},
+			);
+			expect(res.status).toBe(200);
+			await new Promise((resolve) => {
+				setImmediate(resolve);
+			});
+			const swapLine = findLoggedLine(logSpy, (m) => m.startsWith("bridge: hot-swap signal for"));
+			expect(swapLine).toMatch(/→ no-owner$/u);
+		} finally {
+			logSpy.mockRestore();
+		}
+	});
+
+	it("wires the default logger.warn when a signalSwap throws and no logger was injected", async () => {
+		// Same default-logger wiring, warn branch: inject a signalSwap that rejects
+		// but leave logger defaulted. handleSetChoice swallows the throw and routes
+		// it to the default console.warn. The choice still persists (200).
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			const path = await scratchPath();
+			const s = await start({
+				...noopDeps,
+				bridgeJsonPath: path,
+				signalSwap: () => Promise.reject(new Error("signal boom")),
+			});
+			alive.push(s);
+			const res = await fetch(
+				`http://127.0.0.1:${String(s.port)}/choice/22222222-2222-4222-8222-222222222222`,
+				{
+					method: "POST",
+					headers: {
+						origin: "https://claude.ai",
+						"x-cma-bridge-secret": s.secret,
+						"content-type": "application/json",
+					},
+					body: JSON.stringify({ accountUuid: "11111111-1111-4111-8111-111111111111" }),
+				},
+			);
+			expect(res.status).toBe(200);
+			await new Promise((resolve) => {
+				setImmediate(resolve);
+			});
+			const warnLine = findLoggedLine(warnSpy, (m) => m.includes("hot-swap signal"));
+			expect(warnLine).toContain("signal boom");
+		} finally {
+			warnSpy.mockRestore();
+		}
 	});
 
 	it("SIGTERM handler triggers close() and calls injected exit(0)", async () => {
