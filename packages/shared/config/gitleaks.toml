@@ -15,6 +15,10 @@ paths = [
 	'''(^|/)\.mise/''',
 	'''(^|/)node_modules/''',
 	'''\.min\.(js|css)$''',
+	# Claude Code worktree clones — ephemeral, gitignored, contain their own
+	# .mise/node_modules trees the outer allowlists reach via prefix-different
+	# path segments. Anchored so the `packages/` tree is never matched.
+	'''(^|/)\.claude/worktrees/''',
 ]
 
 [[allowlists]]

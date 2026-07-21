@@ -336,3 +336,7 @@ temp/
 
 # local `act` wrapper artifacts (secrets file, log tmp)
 .act/
+
+# Claude Code worktrees — ephemeral, per-session
+.claude/worktrees/
+
