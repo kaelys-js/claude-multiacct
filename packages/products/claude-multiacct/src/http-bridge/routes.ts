@@ -58,6 +58,15 @@ export type VerifyAccountFn = (uuid: string) => Promise<{
 /** List accounts function. Injected so tests never touch disk. */
 export type ListAccountsFn = () => Promise<Account[]>;
 
+/**
+ * Signal the running shim for `sessionUuid` that its account choice changed
+ * so it hot-swaps the child claude with a fresh OAuth token. Returns the
+ * outcome of the signal attempt — the daemon logs it but never surfaces it
+ * to the HTTP caller (mid-session swap is fire-and-forget from the extension's
+ * point of view: the choice is persisted regardless of shim reachability).
+ */
+export type SignalSwapFn = (sessionUuid: string) => Promise<"signalled" | "no-owner" | "stale">;
+
 /** Injected port bundle every handler takes. */
 export type RouteDeps = {
 	listAccounts: ListAccountsFn;
@@ -71,6 +80,13 @@ export type RouteDeps = {
 	port: number;
 	/** ISO timestamp the bridge secret was last generated. */
 	secretRotatedAt: string;
+	/**
+	 * Signal the shim owning `sessionUuid` to hot-swap. Wired to
+	 * `cli-shim/session-pid.ts::signalSwap` in production; tests inject a spy.
+	 */
+	signalSwap: SignalSwapFn;
+	/** Info-level log sink for signalling outcomes. */
+	logger: { log: (m: string) => void; warn: (m: string) => void };
 };
 
 /** Minimal request shape the handlers consume. Serves `server.ts`'s bridge. */
@@ -196,6 +212,18 @@ export async function handleSetChoice(
 		chosenAt: new Date().toISOString(),
 	};
 	await deps.choiceStore.write(choice);
+	// Fire-and-forget hot-swap signal to any live shim owning this session.
+	// The signal outcome is logged but never surfaced on the wire: the choice
+	// is persisted regardless of shim reachability (the shim reads it fresh
+	// on next spawn if no live process picks up SIGHUP now).
+	try {
+		const outcome = await deps.signalSwap(uuidParsed.output);
+		deps.logger.log(`bridge: hot-swap signal for ${uuidParsed.output} → ${outcome}`);
+	} catch (error) {
+		deps.logger.warn(
+			`bridge: hot-swap signal for ${uuidParsed.output} threw: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	}
 	return { status: 200, body: { ok: true, choice } };
 }
 

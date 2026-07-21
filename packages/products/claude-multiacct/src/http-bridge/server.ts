@@ -26,10 +26,17 @@ import { readFile, unlink } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { signalSwap as defaultSignalSwap } from "../cli-shim/session-pid.ts";
 import type { Account } from "../domain/account.ts";
 import type { ChoiceStore } from "../ports.ts";
 import { atomicWriteJson } from "./atomic-json.ts";
-import { dispatch, type RouteDeps, type RouteResult, type VerifyAccountFn } from "./routes.ts";
+import {
+	dispatch,
+	type RouteDeps,
+	type RouteResult,
+	type SignalSwapFn,
+	type VerifyAccountFn,
+} from "./routes.ts";
 import {
 	assertLoopback,
 	BRIDGE_SECRET_HEADER,
@@ -62,6 +69,14 @@ export type StartOptions = {
 	isPidAlive?: (pid: number) => boolean;
 	/** Override `process.exit` for SIGTERM/SIGINT paths. Test injects. */
 	exit?: (code: number) => void;
+	/**
+	 * Override the hot-swap signalling port. Defaults to
+	 * `cli-shim/session-pid.ts::signalSwap` (SIGHUP the pid file for the
+	 * session). Tests inject a spy so they never SIGHUP a live process.
+	 */
+	signalSwap?: SignalSwapFn;
+	/** Structured log sink. Defaults to `console`. */
+	logger?: { log: (m: string) => void; warn: (m: string) => void };
 };
 
 /** `start()` result. `close()` gracefully shuts down. */
@@ -282,6 +297,13 @@ export async function start(opts: StartOptions): Promise<StartResult> {
 		version: opts.version,
 		port: 0, // filled after listen
 		secretRotatedAt,
+		signalSwap: opts.signalSwap ?? ((sessionUuid: string) => defaultSignalSwap(sessionUuid)),
+		logger: opts.logger ?? {
+			// eslint-disable-next-line no-console -- daemon runs under launchd; stdout/stderr are its log
+			log: (m: string) => console.log(m),
+			// eslint-disable-next-line no-console -- see above
+			warn: (m: string) => console.warn(m),
+		},
 	};
 
 	const handler = makeRequestHandler(routeDeps, secret);

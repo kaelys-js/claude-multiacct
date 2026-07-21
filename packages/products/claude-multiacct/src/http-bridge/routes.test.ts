@@ -24,6 +24,7 @@ import {
 	handleSetChoice,
 	handleUsage,
 	type RouteDeps,
+	type SignalSwapFn,
 	type VerifyAccountFn,
 } from "./routes.ts";
 
@@ -65,6 +66,11 @@ function makeDeps(overrides: Partial<RouteDeps> = {}): RouteDeps {
 		version: overrides.version ?? "0.0.0",
 		port: overrides.port ?? 12_345,
 		secretRotatedAt: overrides.secretRotatedAt ?? "2026-07-20T00:00:00.000Z",
+		signalSwap: overrides.signalSwap ?? vi.fn<SignalSwapFn>(() => Promise.resolve("no-owner")),
+		logger: overrides.logger ?? {
+			log: vi.fn<(m: string) => void>(),
+			warn: vi.fn<(m: string) => void>(),
+		},
 	};
 }
 
@@ -142,6 +148,49 @@ describe("handleSetChoice (flag gate + validation)", () => {
 		expect(stamped.sessionUuid).toBe(sessUuid);
 		expect(stamped.accountUuid).toBe(acctUuid);
 		expect(stamped.chosenAt).toMatch(/^\d{4}-\d{2}-\d{2}T/u);
+	});
+
+	it("fires signalSwap with the session uuid after persisting the choice (drop the signal → hot-swap regression RED)", async () => {
+		const write = vi.fn<() => Promise<void>>(() => Promise.resolve());
+		const signalSwap = vi.fn<SignalSwapFn>(() => Promise.resolve("signalled"));
+		const deps = makeDeps({ choiceStore: { write }, signalSwap });
+		const r = await handleSetChoice(deps, sessUuid, { accountUuid: acctUuid });
+		expect(r.status).toBe(200);
+		expect(write).toHaveBeenCalledTimes(1);
+		expect(signalSwap).toHaveBeenCalledTimes(1);
+		expect(signalSwap).toHaveBeenCalledWith(sessUuid);
+	});
+
+	it("response is unaffected by signalSwap outcome (no-owner is normal)", async () => {
+		const signalSwap = vi.fn<SignalSwapFn>(() => Promise.resolve("no-owner"));
+		const deps = makeDeps({ signalSwap });
+		const r = await handleSetChoice(deps, sessUuid, { accountUuid: acctUuid });
+		expect(r.status).toBe(200);
+		expect((r.body as { ok: boolean }).ok).toBe(true);
+		expect(signalSwap).toHaveBeenCalledOnce();
+	});
+
+	it("signalSwap that throws is swallowed and logged (choice still persists)", async () => {
+		const write = vi.fn<() => Promise<void>>(() => Promise.resolve());
+		const warn = vi.fn<(m: string) => void>();
+		const signalSwap = vi.fn<SignalSwapFn>(() => Promise.reject(new Error("boom")));
+		const deps = makeDeps({
+			choiceStore: { write },
+			signalSwap,
+			logger: { log: vi.fn<(m: string) => void>(), warn },
+		});
+		const r = await handleSetChoice(deps, sessUuid, { accountUuid: acctUuid });
+		expect(r.status).toBe(200);
+		expect(write).toHaveBeenCalledOnce();
+		expect(warn).toHaveBeenCalledOnce();
+	});
+
+	it("flag-off short-circuit does not fire signalSwap", async () => {
+		const signalSwap = vi.fn<SignalSwapFn>(() => Promise.resolve("signalled"));
+		const deps = makeDeps({ flagOn: false, signalSwap });
+		const r = await handleSetChoice(deps, sessUuid, { accountUuid: acctUuid });
+		expect(r.status).toBe(403);
+		expect(signalSwap).not.toHaveBeenCalled();
 	});
 
 	it("non-uuid sessionUuid → 400 with body path (loosen path validation → RED)", async () => {
