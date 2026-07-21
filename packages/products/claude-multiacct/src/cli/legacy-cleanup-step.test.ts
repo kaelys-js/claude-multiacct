@@ -1,13 +1,18 @@
 /* eslint-disable vitest/no-conditional-in-test, jsdoc/require-returns, jsdoc/require-param, jsdoc/require-jsdoc */
 /**
  * Intent: the install-pipeline `legacy-cleanup` step MUST be a thin wrapper
- * around `runLegacyCleanup`: skip when `flag=false`, honor `assumeYes`,
- * return `ok:true` even when the wrapped run partially fails, and never
- * throw (a detection error must not abort the whole install).
+ * around `runLegacyCleanup` with a HARD safety default — a plain `cma install`
+ * does not touch the user's clone apps, mirror stores, or launchd plists.
+ * Opt-in is `purgeLegacy: true`; skipping the interactive prompt on top of
+ * that requires `assumeYes: true`.
  *
- * Adversarial: remove the `try/catch` around `runLegacyCleanup` and the
- * "detect throws" test flips RED. Change the `flag !== true` gate and the
- * "skips when flag=false" test flips RED.
+ * Adversarial:
+ *   - Flip the `purgeLegacy` default to `true` and the "default install does
+ *     not detect legacy" test flips RED.
+ *   - Remove the `try/catch` around `runLegacyCleanup` and the "detect
+ *     throws" test flips RED.
+ *   - Change the `flag !== true` gate and the "skips when flag=false" test
+ *     flips RED.
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -41,20 +46,58 @@ function mkPorts(
 
 describe("makeLegacyCleanupStep", () => {
 	it("has name 'legacy-cleanup'", () => {
-		const step = makeLegacyCleanupStep(mkPorts(), { assumeYes: true });
+		const step = makeLegacyCleanupStep(mkPorts(), { purgeLegacy: true, assumeYes: true });
 		expect(step.name).toBe("legacy-cleanup");
 	});
 
 	it("skips work when flag is false", async () => {
 		const detect = vi.fn<() => Promise<LegacyArtifacts>>(() => Promise.resolve(EMPTY));
-		const step = makeLegacyCleanupStep(mkPorts(EMPTY, { detect }), { assumeYes: true });
+		const step = makeLegacyCleanupStep(mkPorts(EMPTY, { detect }), {
+			purgeLegacy: true,
+			assumeYes: true,
+		});
 		const result = await step.install(false);
 		expect(result.ok).toBe(true);
 		expect(result.detail).toContain("skipped");
 		expect(detect).not.toHaveBeenCalled();
 	});
 
-	it("detects and cleans when flag=true; passes assumeYes through", async () => {
+	// The regression that motivated the safety gate: `cma install` with a
+	// truthy env yes-shortcut deleted the user's clone apps. Now, default
+	// install NEVER runs detection or removal — the caller must explicitly
+	// pass `--purge-legacy` (mapped to `purgeLegacy: true`).
+	it("default install (purgeLegacy=false) does NOT detect or remove anything", async () => {
+		const detect = vi.fn<() => Promise<LegacyArtifacts>>(() =>
+			Promise.resolve({
+				cloneApps: ["/Applications/Claude Account Gmail.app"],
+				launchdPlists: ["/Users/x/Library/LaunchAgents/com.user.claude-sessions-sync.plist"],
+				legacyCli: undefined,
+				mirrorStores: ["/Users/x/Library/Application Support/Claude-Gmail"],
+				legacyDataDir: undefined,
+			}),
+		);
+		const removeClone = vi.fn<(p: string) => Promise<void>>();
+		const removePlist = vi.fn<(p: string) => Promise<void>>();
+		const removeMirror = vi.fn<(p: string) => Promise<void>>();
+		const step = makeLegacyCleanupStep(
+			mkPorts(EMPTY, {
+				detect,
+				removeCloneApp: removeClone,
+				removeLaunchdPlist: removePlist,
+				removeMirrorStore: removeMirror,
+			}),
+			{ purgeLegacy: false, assumeYes: true },
+		);
+		const result = await step.install(true);
+		expect(result.ok).toBe(true);
+		expect(result.detail).toContain("--purge-legacy");
+		expect(detect).not.toHaveBeenCalled();
+		expect(removeClone).not.toHaveBeenCalled();
+		expect(removePlist).not.toHaveBeenCalled();
+		expect(removeMirror).not.toHaveBeenCalled();
+	});
+
+	it("detects and cleans when purgeLegacy=true + assumeYes=true", async () => {
 		const detected: LegacyArtifacts = {
 			cloneApps: ["/Applications/Claude Account Foo.app"],
 			launchdPlists: ["/Users/x/Library/LaunchAgents/com.user.claude-sessions-sync.plist"],
@@ -77,7 +120,7 @@ describe("makeLegacyCleanupStep", () => {
 				removeMirrorStore: removeMirror,
 				removeLegacyDataDir: removeData,
 			}),
-			{ assumeYes: true },
+			{ purgeLegacy: true, assumeYes: true },
 		);
 		const result = await step.install(true);
 		expect(result.ok).toBe(true);
@@ -90,7 +133,7 @@ describe("makeLegacyCleanupStep", () => {
 		expect(removeData).toHaveBeenCalledOnce();
 	});
 
-	it("prompts when assumeYes=false and honors user decline", async () => {
+	it("prompts when purgeLegacy=true + assumeYes=false and honors user decline", async () => {
 		const detected: LegacyArtifacts = {
 			cloneApps: ["/Applications/Claude Account Bar.app"],
 			launchdPlists: [],
@@ -102,7 +145,7 @@ describe("makeLegacyCleanupStep", () => {
 		const removeClone = vi.fn<(p: string) => Promise<void>>(() => Promise.resolve());
 		const step = makeLegacyCleanupStep(
 			mkPorts(detected, { promptConfirm: prompt, removeCloneApp: removeClone }),
-			{ assumeYes: false },
+			{ purgeLegacy: true, assumeYes: false },
 		);
 		const result = await step.install(true);
 		expect(result.ok).toBe(true);
@@ -121,7 +164,7 @@ describe("makeLegacyCleanupStep", () => {
 				detect,
 				logger: { log: vi.fn<(m: string) => void>(), warn },
 			}),
-			{ assumeYes: true },
+			{ purgeLegacy: true, assumeYes: true },
 		);
 		const result = await step.install(true);
 		expect(result.ok).toBe(true);
@@ -142,6 +185,7 @@ describe("makeLegacyCleanupStep", () => {
 			.mockResolvedValueOnce(undefined)
 			.mockRejectedValueOnce(new Error("EACCES"));
 		const step = makeLegacyCleanupStep(mkPorts(detected, { removeCloneApp: removeClone }), {
+			purgeLegacy: true,
 			assumeYes: true,
 		});
 		const result = await step.install(true);
@@ -151,7 +195,10 @@ describe("makeLegacyCleanupStep", () => {
 
 	it("uninstall is a no-op", async () => {
 		const detect = vi.fn<() => Promise<LegacyArtifacts>>(() => Promise.resolve(EMPTY));
-		const step = makeLegacyCleanupStep(mkPorts(EMPTY, { detect }), { assumeYes: true });
+		const step = makeLegacyCleanupStep(mkPorts(EMPTY, { detect }), {
+			purgeLegacy: true,
+			assumeYes: true,
+		});
 		const result = await step.uninstall(true);
 		expect(result.ok).toBe(true);
 		expect(result.detail).toContain("no-op");

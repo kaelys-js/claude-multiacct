@@ -82,6 +82,7 @@ import {
 	read as readConfig,
 	write as writeConfig,
 } from "./config-store.ts";
+import type { ParsedArgs } from "./args.ts";
 import type { LegacyArtifacts, LegacyCleanupPorts } from "./legacy-cleanup.ts";
 import { makeLegacyCleanupStep } from "./legacy-cleanup-step.ts";
 import {
@@ -139,17 +140,40 @@ async function scanCliDirs(): Promise<string[]> {
 	return dirs;
 }
 
+type LegacyFlags = {
+	purgeLegacy: boolean;
+	assumeYes: boolean;
+};
+
 /**
- * Build the four-step orchestration list bound to real installers.
+ * Derive the legacy-cleanup flags from parsed argv and the env. Both surfaces
+ * feed the same booleans so tests can drive either.
+ *
+ * @param {ParsedArgs | undefined} parsed - Parsed argv from `dispatch`.
+ * @param {Record<string, string | undefined> | undefined} env - Environment.
+ * @returns {LegacyFlags} Resolved flags.
+ */
+function resolveLegacyFlags(
+	parsed: ParsedArgs | undefined,
+	env: Record<string, string | undefined> | undefined,
+): LegacyFlags {
+	const flags = parsed?.flags ?? {};
+	const e = env ?? process.env;
+	const purgeLegacy = flags["purge-legacy"] === true || e.CMA_PURGE_LEGACY === "1";
+	const assumeYes = flags["yes-i-really-mean-it"] === true || e.CMA_YES_I_REALLY_MEAN_IT === "1";
+	return { purgeLegacy, assumeYes };
+}
+
+/**
+ * Build the five-step orchestration list bound to real installers.
  *
  * @param {WiringDeps} deps - Logger + env.
+ * @param {LegacyFlags} legacyFlags - Opt-in flags for the destructive legacy-cleanup step.
  * @returns {readonly OrchestrationStep[]} Steps in canonical order.
  */
-function buildSteps(deps: WiringDeps): readonly OrchestrationStep[] {
+function buildSteps(deps: WiringDeps, legacyFlags: LegacyFlags): readonly OrchestrationStep[] {
 	const uid = process.getuid?.() ?? 0;
-	const stepLegacyCleanup = makeLegacyCleanupStep(realLegacyCleanupPorts(deps), {
-		assumeYes: (deps.env ?? process.env).CMA_YES === "1",
-	});
+	const stepLegacyCleanup = makeLegacyCleanupStep(realLegacyCleanupPorts(deps), legacyFlags);
 	const stepShim: OrchestrationStep = {
 		name: "shim",
 		install: async (flag) => {
@@ -389,34 +413,67 @@ function realLegacyCleanupPorts(deps: WiringDeps): LegacyCleanupPorts {
 				const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
 				rl.question("", (answer) => {
 					rl.close();
-					resolve(/^y(es)?$/iu.test(answer.trim()));
+					// Case-sensitive PURGE. The word "yes" (or a stray "y") must not
+					// count — the previous permissive check enabled the destructive
+					// default that motivated this whole gate.
+					resolve(answer.trim() === "PURGE");
 				});
 			});
 		},
 		removeCloneApp: async (path) => {
-			await rm(path, { recursive: true, force: true });
+			await moveToTrash(path, deps.logger);
 		},
 		removeLaunchdPlist: async (path) => {
 			// launchctl unload is best-effort: an already-unloaded plist yields a
-			// non-zero exit that we swallow so `rm` still runs.
+			// non-zero exit that we swallow so the move still runs.
 			await execFileAsync("launchctl", ["unload", "-w", path]).catch((error: unknown) => {
 				deps.logger.warn(
 					`legacy-cleanup: launchctl unload ${path} failed (already unloaded?): ${error instanceof Error ? error.message : String(error)}`,
 				);
 			});
-			await rm(path, { force: true });
+			await moveToTrash(path, deps.logger);
 		},
 		removeLegacyCli: async (path) => {
-			await rm(path, { force: true });
+			await moveToTrash(path, deps.logger);
 		},
 		removeMirrorStore: async (path) => {
-			await rm(path, { recursive: true, force: true });
+			await moveToTrash(path, deps.logger);
 		},
 		removeLegacyDataDir: async (path) => {
-			await rm(path, { recursive: true, force: true });
+			await moveToTrash(path, deps.logger);
 		},
 		logger: deps.logger,
 	};
+}
+
+/**
+ * Move a filesystem entry into `~/.Trash/` with an epoch suffix so the user
+ * can recover it. Never `rm -rf`. If the source is missing the call is a
+ * no-op. If the rename fails (permissions, cross-device — Trash lives on the
+ * user's home volume so this is unusual on macOS), the error is thrown so
+ * the caller reports it via the outcome's `failed` list.
+ *
+ * @param {string} src - Absolute path to remove.
+ * @param {{ warn: (m: string) => void }} logger - Warning sink.
+ * @returns {Promise<void>} Resolves once the move (or no-op) completes.
+ */
+async function moveToTrash(src: string, logger: { warn: (m: string) => void }): Promise<void> {
+	const exists = await stat(src).catch(() => null);
+	if (exists === null) {
+		return;
+	}
+	const trashDir = join(homedir(), ".Trash");
+	await mkdir(trashDir, { recursive: true });
+	const base = src.slice(src.lastIndexOf("/") + 1);
+	const dest = join(trashDir, `${base}.${String(Date.now())}`);
+	try {
+		await rename(src, dest);
+	} catch (error) {
+		logger.warn(
+			`legacy-cleanup: rename ${src} -> ${dest} failed: ${error instanceof Error ? error.message : String(error)}`,
+		);
+		throw error;
+	}
 }
 
 /**
@@ -470,11 +527,12 @@ function realExtensionFs(): ExtensionFs {
  * Build the real `InstallPorts` bundle for `cma install`.
  *
  * @param {WiringDeps} deps - Logger + env.
+ * @param {ParsedArgs | undefined} parsed - Parsed argv; source of `--purge-legacy` and `--yes-i-really-mean-it`.
  * @returns {Promise<InstallPorts>} Fully wired.
  */
-export function makeRealInstallPorts(deps: WiringDeps): Promise<InstallPorts> {
+export function makeRealInstallPorts(deps: WiringDeps, parsed?: ParsedArgs): Promise<InstallPorts> {
 	return Promise.resolve({
-		steps: buildSteps(deps),
+		steps: buildSteps(deps, resolveLegacyFlags(parsed, deps.env)),
 		readConfig: () => readConfig(defaultConfigPath()),
 		writeConfig: (c: CmaConfig) => writeConfig(defaultConfigPath(), c),
 		ensureInit: async () => {
@@ -495,8 +553,10 @@ export function makeRealInstallPorts(deps: WiringDeps): Promise<InstallPorts> {
  * @returns {Promise<UninstallPorts>} Fully wired.
  */
 export function makeRealUninstallPorts(deps: WiringDeps): Promise<UninstallPorts> {
+	// Uninstall never runs the legacy-cleanup step (its `uninstall` handler is a
+	// no-op); the flags are irrelevant here — pass the safe default.
 	return Promise.resolve({
-		steps: buildSteps(deps),
+		steps: buildSteps(deps, { purgeLegacy: false, assumeYes: false }),
 		readConfig: () => readConfig(defaultConfigPath()),
 		writeConfig: (c: CmaConfig) => writeConfig(defaultConfigPath(), c),
 		logger: deps.logger,
