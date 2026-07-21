@@ -271,6 +271,122 @@ describe("makeRealDiscoveryPorts.listClaudeCliServices", () => {
 	});
 });
 
+describe("makeRealDiscoveryPorts.iterateAppConfigJson", () => {
+	it("yields decoded v10 bytes for each base64-`djEw` string value in config.json", async () => {
+		resetMocks();
+		// Raw v10 blob → base64 begins `djEw`. Give two encrypted values +
+		// one non-v10 string that must be filtered out.
+		const blobA = Buffer.concat([Buffer.from("v10"), Buffer.from("cipher-A")]);
+		const blobB = Buffer.concat([Buffer.from("v10"), Buffer.from("cipher-B")]);
+		const config = {
+			locale: "en-US",
+			"oauth:tokenCache": blobA.toString("base64"),
+			"oauth:tokenCacheV2": blobB.toString("base64"),
+			unrelated: "not-encrypted",
+		};
+		readFileSpy.mockImplementation((path: string) =>
+			path.endsWith("/config.json")
+				? Promise.resolve(JSON.stringify(config))
+				: Promise.reject(new Error("ENOENT")),
+		);
+		const { makeRealDiscoveryPorts } = await importReal();
+		const ports = makeRealDiscoveryPorts({
+			tokenStore: { put: async () => {} } as never,
+			readRegistry: async () => undefined,
+			logger: { log: () => {}, warn: () => {} },
+		});
+		const yields: Array<{ key: string; value: string }> = [];
+		for await (const entry of ports.iterateAppConfigJson("/tmp/x/config.json")) {
+			yields.push({ key: entry.key.toString("utf8"), value: entry.value.toString("binary") });
+		}
+		expect(yields).toHaveLength(2);
+		expect(yields.map((y) => y.key).toSorted()).toEqual(["oauth:tokenCache", "oauth:tokenCacheV2"]);
+		expect(yields[0]!.value.startsWith("v10")).toBe(true);
+	});
+
+	it("yields nothing when the file is missing (silent — daemon must still boot)", async () => {
+		resetMocks();
+		const { makeRealDiscoveryPorts } = await importReal();
+		const ports = makeRealDiscoveryPorts({
+			tokenStore: { put: async () => {} } as never,
+			readRegistry: async () => undefined,
+			logger: { log: () => {}, warn: () => {} },
+		});
+		const yields = [];
+		for await (const entry of ports.iterateAppConfigJson("/nope/config.json")) {
+			yields.push(entry);
+		}
+		expect(yields).toEqual([]);
+	});
+
+	it("warns and yields nothing when config.json is malformed JSON", async () => {
+		resetMocks();
+		readFileSpy.mockImplementation(() => Promise.resolve("not-json{{"));
+		const warned: string[] = [];
+		const { makeRealDiscoveryPorts } = await importReal();
+		const ports = makeRealDiscoveryPorts({
+			tokenStore: { put: async () => {} } as never,
+			readRegistry: async () => undefined,
+			logger: {
+				log: () => {},
+				warn: (m: string) => {
+					warned.push(m);
+				},
+			},
+		});
+		const yields = [];
+		for await (const entry of ports.iterateAppConfigJson("/tmp/config.json")) {
+			yields.push(entry);
+		}
+		expect(yields).toEqual([]);
+		expect(warned.some((m) => m.includes("is not valid JSON"))).toBe(true);
+	});
+
+	it("filters out non-string and non-`djEw` values (locale / plain strings must not be yielded)", async () => {
+		resetMocks();
+		readFileSpy.mockImplementation(() =>
+			Promise.resolve(
+				JSON.stringify({
+					locale: "en-US",
+					counter: 42,
+					flag: true,
+					blob: null,
+					"oauth:tokenCache": Buffer.concat([Buffer.from("v10"), Buffer.from("cipher")]).toString(
+						"base64",
+					),
+				}),
+			),
+		);
+		const { makeRealDiscoveryPorts } = await importReal();
+		const ports = makeRealDiscoveryPorts({
+			tokenStore: { put: async () => {} } as never,
+			readRegistry: async () => undefined,
+			logger: { log: () => {}, warn: () => {} },
+		});
+		const yields = [];
+		for await (const entry of ports.iterateAppConfigJson("/tmp/config.json")) {
+			yields.push(entry.key.toString("utf8"));
+		}
+		expect(yields).toEqual(["oauth:tokenCache"]);
+	});
+
+	it("yields nothing when the top-level JSON is not an object (e.g. array or scalar)", async () => {
+		resetMocks();
+		readFileSpy.mockImplementation(() => Promise.resolve("[1,2,3]"));
+		const { makeRealDiscoveryPorts } = await importReal();
+		const ports = makeRealDiscoveryPorts({
+			tokenStore: { put: async () => {} } as never,
+			readRegistry: async () => undefined,
+			logger: { log: () => {}, warn: () => {} },
+		});
+		const yields = [];
+		for await (const entry of ports.iterateAppConfigJson("/tmp/config.json")) {
+			yields.push(entry);
+		}
+		expect(yields).toEqual([]);
+	});
+});
+
 describe("makeRealDiscoveryPorts.readClaudeCliCredential", () => {
 	it("strips the trailing newline security appends", async () => {
 		resetMocks();

@@ -70,6 +70,18 @@ export type DiscoveryPorts = {
 	 */
 	iterateLevelDb: (dir: string) => AsyncIterable<{ key: Buffer; value: Buffer }>;
 	/**
+	 * Enumerate v10-encrypted values embedded in an Electron `config.json`.
+	 * Claude.app writes its OAuth token cache into
+	 * `<AppStoreDir>/config.json` under keys like `oauth:tokenCache` and
+	 * `oauth:tokenCacheV2`, as base64-encoded v10 blobs (raw bytes start
+	 * with `v10` → base64 prefix `djEw`). Yields the decoded raw bytes so
+	 * the caller can decrypt them with the same Safe Storage key used for
+	 * LevelDB values. Missing / unreadable file → empty iterator.
+	 *
+	 * Path is absolute, e.g. `~/Library/Application Support/Claude/config.json`.
+	 */
+	iterateAppConfigJson: (path: string) => AsyncIterable<{ key: Buffer; value: Buffer }>;
+	/**
 	 * List `~/Applications/Claude Account *.app` clone bundles. Returns
 	 * one entry per clone with its bundle path + label (derived from
 	 * bundle name, e.g. `gmail` for `Claude Account Gmail.app`).
@@ -175,6 +187,17 @@ export async function discoverAccounts(ports: DiscoveryPorts): Promise<Discovery
 				}
 			}
 		}
+		// Modern Claude.app (electron `safeStorage`) stores its OAuth token
+		// cache in `config.json` rather than in Local Storage / IndexedDB.
+		// Scan the same v10 blob shape from there.
+		for await (const entry of ports.iterateAppConfigJson(configJsonPath(mainStore))) {
+			outcome.scanned.mainApp += 1;
+			const found = tryDecryptAndExtract(entry.value, key);
+			if (found !== undefined) {
+				// eslint-disable-next-line no-await-in-loop -- registration is serial by design (same as the LevelDB loop above)
+				await tryRegister(`main:${entry.key.toString("utf8")}`, found.token, found.email);
+			}
+		}
 	}
 
 	// Source 2: clone apps
@@ -195,6 +218,19 @@ export async function discoverAccounts(ports: DiscoveryPorts): Promise<Discovery
 					// eslint-disable-next-line no-await-in-loop -- serial
 					await tryRegister(`clone:${clone.label}:${dir}`, found.token, found.email);
 				}
+			}
+		}
+		// eslint-disable-next-line no-await-in-loop -- streaming iterator; sequential is intended
+		for await (const entry of ports.iterateAppConfigJson(configJsonPath(clone.storeDir))) {
+			outcome.scanned.cloneApps += 1;
+			const found = tryDecryptAndExtract(entry.value, key);
+			if (found !== undefined) {
+				// eslint-disable-next-line no-await-in-loop -- serial
+				await tryRegister(
+					`clone:${clone.label}:${entry.key.toString("utf8")}`,
+					found.token,
+					found.email,
+				);
 			}
 		}
 	}
@@ -293,6 +329,17 @@ function mainAppStoreDir(): string {
  */
 export function chromiumStoreSubdirs(appStoreDir: string): string[] {
 	return [`${appStoreDir}/Local Storage/leveldb`, `${appStoreDir}/IndexedDB`];
+}
+
+/**
+ * Absolute path to an Electron app's `config.json` under its Application
+ * Support store dir. Claude.app writes its OAuth token cache here.
+ *
+ * @param {string} appStoreDir - `~/Library/Application Support/<App>/`.
+ * @returns {string} Absolute path to `<appStoreDir>/config.json`.
+ */
+export function configJsonPath(appStoreDir: string): string {
+	return `${appStoreDir}/config.json`;
 }
 
 /**

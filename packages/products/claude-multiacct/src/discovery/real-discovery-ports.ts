@@ -111,7 +111,11 @@ export function makeRealDiscoveryPorts(deps: RealPortDeps): DiscoveryPorts {
 					{ timeout: SECURITY_CALL_TIMEOUT_MS },
 				);
 				return stdout.replace(/\n$/u, "");
-			} catch {
+			} catch (error) {
+				// Log the classified failure. Without this the caller only sees
+				// "no key in keychain" and can't tell missing-item from ACL
+				// denial from timeout — three very different fix paths.
+				deps.logger.warn(`readKeychainPassword(${service}/${account}) failed: ${String(error)}`);
 				// eslint-disable-next-line unicorn/no-useless-undefined -- Explicit undefined so the caller's `if (raw === undefined)` branch stays readable.
 				return undefined;
 			}
@@ -131,6 +135,7 @@ export function makeRealDiscoveryPorts(deps: RealPortDeps): DiscoveryPorts {
 			}
 		},
 		iterateLevelDb: (dir) => iterateLevelDbFiles(dir, deps.logger),
+		iterateAppConfigJson: (path) => iterateConfigJsonV10Values(path, deps.logger),
 		listCloneApps: async () => {
 			const appsDir = join(homedir(), "Applications");
 			let entries: string[];
@@ -228,6 +233,50 @@ async function* iterateLevelDbFiles(
 					yield { key, value };
 				}
 			}
+		}
+	}
+}
+
+/**
+ * Read an Electron `config.json` and yield each base64-encoded v10 blob
+ * embedded as a top-level string value, decoded to raw bytes. This is the
+ * shape modern Claude.app uses for `oauth:tokenCache` /
+ * `oauth:tokenCacheV2` — the desktop client stopped writing those tokens
+ * into Local Storage / IndexedDB and moved them into `config.json` via
+ * Electron's `safeStorage` API. Missing / unreadable / non-JSON file
+ * yields nothing (silent, no throw); the daemon must still boot.
+ *
+ * @param {string} path - Absolute path to the `config.json` file.
+ * @param {{warn: (m: string) => void}} logger - Warn sink for read/parse errors.
+ * @yields {{key: Buffer, value: Buffer}} JSON key + decoded v10 blob bytes.
+ */
+async function* iterateConfigJsonV10Values(
+	path: string,
+	logger: { warn: (m: string) => void },
+): AsyncIterable<{ key: Buffer; value: Buffer }> {
+	let raw: string;
+	try {
+		raw = await readFile(path, "utf8");
+	} catch {
+		return;
+	}
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch (error) {
+		logger.warn(`iterateAppConfigJson: ${path} is not valid JSON: ${String(error)}`);
+		return;
+	}
+	if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+		return;
+	}
+	// Chromium v10 blobs base64-encode to a string starting `djEw` because
+	// the raw bytes are `v10` (0x76 0x31 0x30) → base64 quartet `djEw`.
+	// That first quartet decodes to exactly those three bytes, so the
+	// prefix check is sufficient — no need to re-verify after decoding.
+	for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+		if (typeof v === "string" && v.startsWith("djEw")) {
+			yield { key: Buffer.from(k, "utf8"), value: Buffer.from(v, "base64") };
 		}
 	}
 }

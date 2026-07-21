@@ -47,6 +47,9 @@ function mkPorts(overrides: Partial<DiscoveryPorts> = {}): DiscoveryPorts {
 		iterateLevelDb: async function* () {
 			// yield nothing
 		},
+		iterateAppConfigJson: async function* () {
+			// yield nothing
+		},
 		listCloneApps: () => Promise.resolve([]),
 		provisionOne: ({ token, label }) => {
 			const uuid =
@@ -238,6 +241,147 @@ describe("discoverAccounts", () => {
 			}),
 		);
 		expect(outcome.registered).toHaveLength(0);
+	});
+
+	it("registers a token from Claude.app's config.json oauth:tokenCache (v10 → decrypt → JSON)", async () => {
+		// Regression: modern Claude.app writes its OAuth token cache into
+		// `config.json` via Electron `safeStorage`, not into Local Storage
+		// / IndexedDB. Discovery must scan that path or it misses the
+		// primary happy-path account on every up-to-date machine.
+		const outcome = await discoverAccounts(
+			mkPorts({
+				iterateAppConfigJson: async function* (path) {
+					// eslint-disable-next-line vitest/no-conditional-in-test
+					if (path.endsWith("/config.json")) {
+						yield {
+							key: Buffer.from("oauth:tokenCache", "utf8"),
+							value: encryptForTest('{"access_token":"T-primary","email":"me@icloud.com"}'),
+						};
+					}
+				},
+			}),
+		);
+		expect(outcome.registered).toHaveLength(1);
+		expect(outcome.registered[0]!.label).toBe("icloud");
+		expect(outcome.scanned.mainApp).toBe(1);
+	});
+
+	it("counts a non-decryptable config.json blob under scanned but does not register anything", async () => {
+		// The `found === undefined` branch of the config.json loop matters —
+		// Claude.app also stores other v10 blobs (e.g. `dxt:allowlistCache:*`)
+		// that decrypt to non-token JSON. Those must be scanned + skipped
+		// silently, not treated as OAuth.
+		const outcome = await discoverAccounts(
+			mkPorts({
+				iterateAppConfigJson: async function* () {
+					yield {
+						key: Buffer.from("dxt:allowlistCache"),
+						value: encryptForTest('{"not":"oauth"}'),
+					};
+				},
+			}),
+		);
+		expect(outcome.registered).toHaveLength(0);
+		expect(outcome.scanned.mainApp).toBe(1);
+	});
+
+	it("registers a token from a clone-app's LevelDB (shared safe-storage key)", async () => {
+		// Covers the clone-app LevelDB scan branch: iterateLevelDb yields a
+		// v10 blob under the clone's storeDir, tryDecryptAndExtract returns
+		// a token, tryRegister accepts it.
+		const outcome = await discoverAccounts(
+			mkPorts({
+				listCloneApps: () =>
+					Promise.resolve([
+						{
+							bundlePath: "/Applications/Claude Account Gmail.app",
+							label: "gmail",
+							storeDir: "/tmp/claude-gmail",
+						},
+					]),
+				iterateLevelDb: async function* (dir) {
+					// eslint-disable-next-line vitest/no-conditional-in-test
+					if (dir.startsWith("/tmp/claude-gmail")) {
+						yield {
+							key: Buffer.from("k"),
+							value: encryptForTest('{"access_token":"T-gmail","email":"me@gmail.com"}'),
+						};
+					}
+				},
+			}),
+		);
+		expect(outcome.registered).toHaveLength(1);
+		expect(outcome.registered[0]!.label).toBe("gmail");
+	});
+
+	it("silently skips a v10 blob whose decrypt throws (truncated / bad IV / wrong key)", async () => {
+		// Covers the `catch { return undefined }` branch inside
+		// tryDecryptAndExtract — a corrupted blob must not surface as a
+		// discovery failure, just be skipped.
+		const outcome = await discoverAccounts(
+			mkPorts({
+				iterateLevelDb: async function* (dir) {
+					// eslint-disable-next-line vitest/no-conditional-in-test
+					if (dir.endsWith("Local Storage/leveldb")) {
+						// v10 prefix but zero cipher bytes → decryptV10 throws.
+						yield { key: Buffer.from("k"), value: Buffer.from("v10") };
+					}
+				},
+			}),
+		);
+		expect(outcome.registered).toHaveLength(0);
+		expect(outcome.scanned.mainApp).toBe(1);
+	});
+
+	it("scans config.json for clone-app stores under the shared safe-storage key", async () => {
+		const outcome = await discoverAccounts(
+			mkPorts({
+				listCloneApps: () =>
+					Promise.resolve([
+						{
+							bundlePath: "/Applications/Claude Account Work.app",
+							label: "work",
+							storeDir: "/tmp/claude-work",
+						},
+					]),
+				iterateAppConfigJson: async function* (path) {
+					// eslint-disable-next-line vitest/no-conditional-in-test
+					if (path.startsWith("/tmp/claude-work")) {
+						yield {
+							key: Buffer.from("oauth:tokenCache"),
+							value: encryptForTest('{"access_token":"T-work","email":"me@work.co"}'),
+						};
+					}
+				},
+			}),
+		);
+		expect(outcome.registered).toHaveLength(1);
+		expect(outcome.registered[0]!.label).toBe("work");
+		expect(outcome.scanned.cloneApps).toBe(1);
+	});
+
+	it("deduplicates a token found in both LevelDB and config.json (Chromium double-write)", async () => {
+		const outcome = await discoverAccounts(
+			mkPorts({
+				iterateLevelDb: async function* (dir) {
+					// eslint-disable-next-line vitest/no-conditional-in-test
+					if (dir.endsWith("Local Storage/leveldb")) {
+						yield {
+							key: Buffer.from("k"),
+							value: encryptForTest('{"access_token":"T-dup","email":"a@icloud.com"}'),
+						};
+					}
+				},
+				iterateAppConfigJson: async function* () {
+					yield {
+						key: Buffer.from("oauth:tokenCache"),
+						value: encryptForTest('{"access_token":"T-dup","email":"a@icloud.com"}'),
+					};
+				},
+			}),
+		);
+		expect(outcome.registered).toHaveLength(1);
+		expect(outcome.skippedAlreadyRegistered).toBe(1);
 	});
 
 	it("registers tokens from clone apps sharing the parent's keychain key", async () => {
