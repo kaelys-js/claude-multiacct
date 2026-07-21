@@ -37,6 +37,7 @@
  */
 
 import type * as childProcess from "node:child_process";
+import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import type { Account, AccountUuid } from "../domain/account.ts";
 import { type AccountRegistry, byUuid } from "../domain/registry.ts";
@@ -94,6 +95,15 @@ export type ShimDeps = {
 	writePidFile?: (sessionUuid: string) => Promise<void>;
 	/** Remove the PID file on graceful exit. Injected — runtime binds `removeSessionPid`. */
 	removePidFile?: (sessionUuid: string) => Promise<void>;
+	/**
+	 * Audit hook fired on every child spawn (both the initial spawn and each
+	 * SIGHUP-driven respawn on the hot-swap path). `tokenHash` is a short
+	 * digest of the token that will be handed to `claude.real` — the raw
+	 * token is never surfaced here. Runtime binds this to an append-only
+	 * log file under `~/.claude-multiacct/logs/`. Optional; when absent the
+	 * spawn proceeds silently.
+	 */
+	logSpawn?: (sessionUuid: string | undefined, tokenHash: string) => void;
 };
 
 /** Result of one shim invocation. `swapped` tells the caller which path won. */
@@ -133,9 +143,17 @@ export async function runShim(deps: ShimDeps): Promise<ShimResult> {
 		deps.removePidFile !== undefined;
 
 	if (canHotSwap && sessionUuid !== undefined) {
-		return await runShimHotSwappable(deps, realBin, forwardedArgs, envForChild, sessionUuid, swappedEnv !== undefined);
+		return await runShimHotSwappable(
+			deps,
+			realBin,
+			forwardedArgs,
+			envForChild,
+			sessionUuid,
+			swappedEnv !== undefined,
+		);
 	}
 
+	fireLogSpawn(deps, sessionUuid, envForChild);
 	const spawnResult = deps.spawnSync(realBin, forwardedArgs, {
 		stdio: "inherit",
 		env: envForChild,
@@ -178,9 +196,15 @@ async function runShimHotSwappable(
 	try {
 		await writePidFile(sessionUuid);
 	} catch (error) {
-		deps.warn(`cma-shim: writePidFile failed (${describe(error)}); hot-swap disabled for this session`);
+		deps.warn(
+			`cma-shim: writePidFile failed (${describe(error)}); hot-swap disabled for this session`,
+		);
 		// Fall back to spawnSync single-shot path.
-		const spawnResult = deps.spawnSync(realBin, forwardedArgs, { stdio: "inherit", env: initialEnv });
+		fireLogSpawn(deps, sessionUuid, initialEnv);
+		const spawnResult = deps.spawnSync(realBin, forwardedArgs, {
+			stdio: "inherit",
+			env: initialEnv,
+		});
 		if (spawnResult.error !== undefined) {
 			deps.warn(`cma-shim: exec of ${realBin} failed: ${describe(spawnResult.error)}`);
 			return { exitCode: 127, swapped: initialSwapped };
@@ -224,6 +248,7 @@ async function runShimHotSwappable(
 	// eslint-disable-next-line no-constant-condition, no-await-in-loop -- Explicit break when no swap pending; serial by design.
 	while (true) {
 		swapPending = false;
+		fireLogSpawn(deps, sessionUuid, currentEnv);
 		const child = spawn(realBin, forwardedArgs, {
 			stdio: "inherit",
 			env: currentEnv,
@@ -336,6 +361,34 @@ async function computeSwappedEnv(deps: ShimDeps): Promise<Record<string, string>
 		subscriptionType: account.subscriptionType,
 		rateLimitTier: account.rateLimitTier,
 	});
+}
+
+/**
+ * Fire the optional `logSpawn` audit hook. Any exception is swallowed —
+ * logging must never block a spawn or crash the shim. The token digest
+ * is the first 16 hex chars of sha256 over the OAuth token, matching the
+ * runtime log format; an empty token hashes to a stable empty-string
+ * digest so pass-through spawns are still distinguishable in the log.
+ *
+ * @param {ShimDeps} deps - Injected orchestration surface.
+ * @param {string | undefined} sessionUuid - Session uuid parsed from argv.
+ * @param {Record<string, string>} envForChild - Env that will be passed to `claude.real`.
+ */
+function fireLogSpawn(
+	deps: ShimDeps,
+	sessionUuid: string | undefined,
+	envForChild: Record<string, string>,
+): void {
+	if (deps.logSpawn === undefined) {
+		return;
+	}
+	try {
+		const token = envForChild.CLAUDE_CODE_OAUTH_TOKEN ?? "";
+		const tokenHash = createHash("sha256").update(token).digest("hex").slice(0, 16);
+		deps.logSpawn(sessionUuid, tokenHash);
+	} catch {
+		// audit-only sink; never propagate
+	}
 }
 
 /**

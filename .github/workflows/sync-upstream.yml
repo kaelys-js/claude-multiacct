@@ -87,6 +87,11 @@ on:
   schedule:
     - cron: "0 10 * * *" # every day 10:00 UTC (03:00 America/Los_Angeles under PT)
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Skip remote mutations (ref PATCH, branch push, PR create/merge, label/comment). Local merge still runs. Used by kaelys-js-infra/scripts/audit-scheduled.sh via `act workflow_dispatch --input dry_run=true`."
+        type: boolean
+        default: false
 
 concurrency:
   group: sync-upstream
@@ -95,6 +100,12 @@ concurrency:
 permissions:
   contents: write
   pull-requests: write
+
+env:
+  # `inputs.dry_run` is only populated on workflow_dispatch; the scheduled
+  # cron path leaves it empty and behaves as before. Explicit string compare
+  # against 'true' downstream so schedule stays on the mutating branch.
+  DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
 
 jobs:
   sync:
@@ -116,7 +127,7 @@ jobs:
       # The template stays as-is for the cross-account case it was designed
       # around; this file is the fork-local deviation.
       - name: Checkout fork main
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           token: ${{ secrets.GH_TOKEN }}
@@ -130,7 +141,7 @@ jobs:
       # markdownlint-cli2, oxfmt, oxlint) before node's binary lands on
       # PATH, and each fails with `exit code 127`.
       - name: Warm mise toolchain
-        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
+        uses: jdx/mise-action@v3
         with:
           install: true
 
@@ -159,8 +170,12 @@ jobs:
           if git merge --ff-only upstream/main; then
             echo "result=ff" >>"$GITHUB_OUTPUT"
             UPSTREAM_HEAD=$(git rev-parse HEAD)
-            gh api -X PATCH /repos/${{ github.repository }}/git/refs/heads/main \
-              -f sha="$UPSTREAM_HEAD"
+            if [[ "${DRY_RUN}" == "true" ]]; then
+              echo "[DRY_RUN] would PATCH refs/heads/main -> ${UPSTREAM_HEAD}"
+            else
+              gh api -X PATCH /repos/${{ github.repository }}/git/refs/heads/main \
+                -f sha="$UPSTREAM_HEAD"
+            fi
           else
             echo "result=conflict" >>"$GITHUB_OUTPUT"
           fi
@@ -182,30 +197,64 @@ jobs:
           git merge --no-ff --no-commit upstream/main
           set -e
 
-          for p in packages/shared .schemas mise.toml turbo.json; do
+          # Upstream-wins (upstream is authoritative). packages/shared and
+          # .schemas are the shared library surface; mise.toml/turbo.json track
+          # upstream toolchain baseline; doc surfaces (README/CONTRIBUTING/
+          # SECURITY/ISSUE_TEMPLATE) track upstream governance.
+          for p in \
+            packages/shared \
+            .schemas \
+            mise.toml \
+            turbo.json \
+            .github/ISSUE_TEMPLATE \
+            README.md \
+            CONTRIBUTING.md \
+            SECURITY.md \
+          ; do
             if [ -e "$p" ] || git ls-files -u "$p" | grep -q .; then
               git checkout --theirs -- "$p" 2>/dev/null || true
               git add -A "$p" 2>/dev/null || true
             fi
           done
 
-          # Fork-wins allowlist — narrowed to files that legitimately diverge
-          # per fork today. Fork-only paths (`packages/products/cole-30-60-90`,
-          # `refresh.yml`, `reminders.yml`, `sync-upstream.yml`) can't conflict
-          # because upstream doesn't carry them, so listing them is dead weight.
-          # `renovate.yml` is now byte-identical between fork and upstream
-          # (parametrised on `${{ github.repository }}`), so it also doesn't
-          # need protection here.
+          # Fork-wins allowlist — generic Option A surface: everything under
+          # `packages/products/**` and `apps/**` belongs to the fork (upstream
+          # registry doesn't carry product/app code), the fork's `pnpm-lock.yaml`
+          # covers those extra products, and both the sync-upstream generated
+          # workflow AND its generator template are fork-wins so a future
+          # upstream template change cannot silently revert this Option A
+          # strategy. Fork-specific divergences beyond this list stay in the
+          # concrete `.github/workflows/sync-upstream.yml` fork-wins block.
           for p in \
-            .github/workflows/catalog-notify.yml \
-            .github/workflows/ci.yml \
+            packages/products \
+            apps \
             pnpm-lock.yaml \
+            .github/workflows/sync-upstream.yml \
+            packages/shared/config/workflows/sync-upstream.same-owner.template.yml \
           ; do
             if [ -e "$p" ] || git ls-files -u "$p" | grep -q .; then
-              git checkout --ours -- "$p" 2>/dev/null || true
+              # `git checkout --ours` silently no-ops on cleanly-merged files
+              # (no merge-stage entry). Use `git checkout HEAD -- <p>` instead:
+              # during a merge, HEAD still points at the fork's pre-merge tip,
+              # so this restores the fork's version whether the merge was
+              # conflicted OR clean (the auto-merged-to-upstream case that
+              # PRs #45 + #46 hit on packages/shared/utils/qa/src/schema-check.ts).
+              git checkout HEAD -- "$p" 2>/dev/null || true
               git add -A "$p" 2>/dev/null || true
             fi
           done
+
+          # Fallback for remaining unmerged paths — accept upstream (Q2=accept).
+          # Also captures `added by them` / `both added` conflicts: any brand-
+          # new file upstream introduces lands automatically in the fork,
+          # rather than blocking the sync on a hand review.
+          while read -r line; do
+            [ -z "$line" ] && continue
+            p=$(printf '%s' "$line" | awk '{print $NF}')
+            [ -z "$p" ] && continue
+            git checkout --theirs -- "$p" 2>/dev/null || true
+            git add -A "$p" 2>/dev/null || true
+          done < <(git ls-files -u | awk '{print $NF}' | sort -u)
 
           # Gate `./bin/mise install` behind an unresolved-paths check. If the
           # rule-based checkouts above left ANY path unmerged, `./bin/mise
@@ -262,6 +311,10 @@ jobs:
           # against overwriting a push from a concurrent run. This uploads
           # the local merge commit and its tree so the API call below has
           # server-side objects to reference before it replaces the head.
+          if [[ "${DRY_RUN}" == "true" ]]; then
+            echo "[DRY_RUN] would push --force-with-lease origin ${{ steps.branch.outputs.branch }}"
+            exit 0
+          fi
           git push --force-with-lease origin "${{ steps.branch.outputs.branch }}"
 
       - name: Replace merge commit with API-signed variant
@@ -285,6 +338,10 @@ jobs:
           # `verified: true` without any per-runner key setup. Same tree,
           # same parents, same message → identical content, different
           # signature layer.
+          if [[ "${DRY_RUN}" == "true" ]]; then
+            echo "[DRY_RUN] would POST /git/commits (tree/parents/message) + PATCH ref ${{ steps.branch.outputs.branch }}"
+            exit 0
+          fi
           TREE=$(git rev-parse HEAD^{tree})
           P1=$(git rev-parse HEAD^1)
           P2=$(git rev-parse HEAD^2)
@@ -352,6 +409,10 @@ jobs:
           if [ "${{ steps.guard.outputs.conflict_markers }}" = "true" ]; then
             TITLE="[NEEDS HUMAN REVIEW - DO NOT AUTO-MERGE] ${TITLE}"
           fi
+          if [[ "${DRY_RUN}" == "true" ]]; then
+            echo "[DRY_RUN] would gh pr create --title \"${TITLE}\" --head ${{ steps.branch.outputs.branch }}"
+            exit 0
+          fi
           gh pr create \
             --base main \
             --head "${{ steps.branch.outputs.branch }}" \
@@ -373,6 +434,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
+          if [[ "${DRY_RUN}" == "true" ]]; then
+            echo "[DRY_RUN] would gh pr merge --auto (or squash fallback) ${{ steps.branch.outputs.branch }}"
+            exit 0
+          fi
           if ! gh pr merge \
               "${{ steps.branch.outputs.branch }}" \
               --auto --squash --delete-branch; then
@@ -391,6 +456,10 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
+          if [[ "${DRY_RUN}" == "true" ]]; then
+            echo "[DRY_RUN] would label + comment for conflict markers in: ${{ steps.guard.outputs.marked_files }}"
+            exit 0
+          fi
           gh label create sync-upstream-conflict \
             --description "sync-upstream produced conflict markers; needs human review" \
             --color d73a4a --force || true
@@ -400,5 +469,4 @@ jobs:
           gh pr comment \
             "${{ steps.branch.outputs.branch }}" \
             --body "Conflict markers detected in the merged tree: \`${{ steps.guard.outputs.marked_files }}\`. Auto-merge intentionally disabled — resolve conflicts manually before merging."
-          echo "::error::Sync branch has conflict markers; leaving PR ${{ steps.branch.outputs.branch }} open for hand review."
-          exit 1
+          echo "::warning::Sync branch has conflict markers; PR ${{ steps.branch.outputs.branch }} left open for hand review. Not exiting nonzero — a marker-carrying PR is a design outcome, not a workflow failure (reserve exit 1 for actual pipeline errors like network / git / missing-token)."

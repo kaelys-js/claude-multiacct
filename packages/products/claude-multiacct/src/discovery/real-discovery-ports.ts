@@ -147,14 +147,14 @@ export function makeRealDiscoveryPorts(deps: RealPortDeps): DiscoveryPorts {
 				const match = /^Claude Account (.+)\.app$/u.exec(name);
 				if (match !== null && match[1] !== undefined) {
 					const label = match[1].trim().toLowerCase().replaceAll(/\s+/gu, "-");
-				const bundlePath = join(appsDir, name);
-				const storeDir = join(
-					homedir(),
-					"Library",
-					"Application Support",
-					`Claude-${label.charAt(0).toUpperCase() + label.slice(1)}`,
-				);
-				out.push({ bundlePath, label, storeDir });
+					const bundlePath = join(appsDir, name);
+					const storeDir = join(
+						homedir(),
+						"Library",
+						"Application Support",
+						`Claude-${label.charAt(0).toUpperCase() + label.slice(1)}`,
+					);
+					out.push({ bundlePath, label, storeDir });
 				}
 			}
 			return out;
@@ -221,15 +221,15 @@ async function* iterateLevelDbFiles(
 				logger.warn(`iterateLevelDb: read ${file} failed: ${String(error)}`);
 			}
 			if (raw !== undefined) {
-			// Scan the raw bytes for `v10`-prefixed values embedded anywhere in
-			// the file. This is a lossy heuristic — LevelDB's on-disk format
-			// interleaves records with block trailers + CRCs — but Chromium's
-			// encrypted values (starting `v10`) are distinct enough to locate
-			// via byte-scanning. Each candidate hit yields the plain-scan slice
-			// starting at `v10` up to a plausible cipher-length boundary.
-			for (const { key, value } of scanV10Values(raw)) {
-				yield { key, value };
-			}
+				// Scan the raw bytes for `v10`-prefixed values embedded anywhere in
+				// the file. This is a lossy heuristic — LevelDB's on-disk format
+				// interleaves records with block trailers + CRCs — but Chromium's
+				// encrypted values (starting `v10`) are distinct enough to locate
+				// via byte-scanning. Each candidate hit yields the plain-scan slice
+				// starting at `v10` up to a plausible cipher-length boundary.
+				for (const { key, value } of scanV10Values(raw)) {
+					yield { key, value };
+				}
 			}
 		}
 	}
