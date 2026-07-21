@@ -12,7 +12,7 @@ minimumReleaseAge: 0
 # the git hooks (same as `pnpm prepare`); allow it so `pnpm install` doesn't fail
 # the ignored-builds gate.
 allowBuilds:
-  esbuild: set this to true or false
+  esbuild: true
   lefthook: true
 # pnpm 11 made .npmrc auth/registry-only — non-registry settings are read from
 # HERE (or ~/.config/pnpm/config.yaml), NOT .npmrc. So the exact-pin + engine
