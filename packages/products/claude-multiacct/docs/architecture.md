@@ -1,84 +1,67 @@
 # Architecture
 
-The **single, unmodified `/Applications/Claude.app`** principle is
-non-negotiable. Every subsystem here is either read-only against the
-app bundle, or targets a per-user filesystem location outside of it.
-Getting this wrong is why the old bash tool needed constant repair.
+`claude-multiacct` is four cooperating subsystems inside a single, unmodified `/Applications/Claude.app`. No bundle patching, no re-signing, no clone apps.
 
-## Layer diagram
+```mermaid
+flowchart LR
+  subgraph claude_desktop["/Applications/Claude.app"]
+    renderer["Renderer webContents (https://claude.ai)"]
+    ext["Chrome extension (picker + user-menu injection)"]
+    shim["CLI shim: claude → runShim → claude.real"]
+  end
+  daemon["Bridge daemon 127.0.0.1:PORT (Bearer-secured)"]
+  registry[/"~/.config/claude-multiacct/registry.json"/]
+  keystore[("Keychain OR file-based AES-256-GCM")]
 
-```text
-┌───────────────────────────────────────────────────────────────────┐
-│ /Applications/Claude.app  (pristine, Apple-signed, auto-updates)  │
-└──┬──────────────────────────┬─────────────────────────────────────┘
-   │                          │
-   │ Chrome extension         │ spawns CLI:
-   │ loaded via RDT anchor    │   ~/Library/Application Support/
-   │ (electron-devtools       │     Claude/claude-code/<v>/claude.app/
-   │  -installer fallback)    │       Contents/MacOS/claude
-   │                          │           ↓
-   ▼                          ▼        [PR2 shim]
-[PR5b extension]         [claude.real]  swaps CLAUDE_CODE_OAUTH_TOKEN
-   │                                    per session, then execs claude.real
-   │
-   │ shadow-DOM picker + usage widget
-   ▼
-[PR5a bridge daemon]  ← launchctl-managed at ~/Library/LaunchAgents/
-   │                    com.claude-multiacct.bridge-daemon.plist
-   │
-   │ shared-secret channel (bridge.json)
-   ▼
-[PR3 watcher]  ← WatchPaths on ~/Library/Application Support/Claude/
-                 claude-code/, re-applies PR2 shim on every version bump
+  renderer --loads--> ext
+  ext --GET /accounts, POST /choice/:uuid--> daemon
+  shim --reads choice + token--> daemon
+  daemon --> registry
+  shim --resolves token--> keystore
+  daemon --SIGHUP on choice change--> shim
+  shim --exec with CLAUDE_CODE_OAUTH_TOKEN--> claude_real["claude.real (Anthropic CLI)"]
 ```
 
-## Per-PR contribution
+## Subsystems
 
-| PR   | Layer                   | What it lands                                                     |
-| ---- | ----------------------- | ----------------------------------------------------------------- |
-| PR0  | Fork                    | Move code into `packages/products/claude-multiacct/`; toolchain   |
-| PR1  | Domain models           | `AccountRegistry`, `Account`, verify-token schema, ports          |
-| PR2  | CLI shim                | Swaps `claude` → `claude.real` + tiny shim; flag-gated            |
-| PR3  | Watcher                 | Launchd `WatchPaths` agent that re-applies PR2 on version bumps   |
-| PR4  | OAuth provisioning      | `provisionAccount`, `refreshAccount`, Keychain-backed token store |
-| PR5a | Bridge daemon           | Long-lived HTTP daemon + `launchClaude` wrapper                   |
-| PR5b | Code-tab extension      | Picker + usage widget in shadow DOM; loaded via RDT anchor        |
-| PR6a | `cma` CLI foundation    | `init`, `account`, `status`, `doctor` (read-only + config only)   |
-| PR6b | Orchestration + migrate | `install`, `uninstall`, `launch`, `migrate` + docs (this PR)      |
+### 1. CLI shim (`packages/products/claude-multiacct/src/cli-shim/`)
 
-## Invariants
+Installed at `/Applications/Claude.app/Contents/Resources/app.asar.unpacked/claude-code/claude/claude.app/Contents/MacOS/claude`. The original binary is renamed to `claude.real` in the same directory. Every spawn of `claude` from Claude Desktop runs the shim first:
 
-1. `/Applications/Claude.app` is **never modified**. Every mutating
-   subsystem writes under `~/`.
-2. Every installer is **flag-gated**. Default off. `cma install` is the
-   sole opt-in that flips the flag on.
-3. Every mutating op **snapshots first** into
-   `~/.claude-multiacct-backups/<iso-timestamp>/`, so any change is
-   reversible from that dir.
-4. Ports are **injected** everywhere. Tests never touch the real fs,
-   real `launchctl`, or the real network.
+1. Parses `--resume=<sessionUuid>` from argv.
+2. Reads the session's account choice from the sidecar store.
+3. Fetches that account's OAuth token from the layered token store (Keychain → file fallback).
+4. Applies `CLAUDE_CODE_OAUTH_TOKEN` to the env.
+5. Writes the shim's PID to `~/.claude-multiacct/sessions/<sessionUuid>.pid` (for the daemon's hot-swap signal).
+6. Registers `SIGHUP` → kill child, respawn with fresh token.
+7. Spawns `claude.real` with the swapped env; forwards its exit code.
 
-## What lives on disk after `cma install`
+Every failure path falls through to the original env — the user's primary-account behavior is never made worse by the shim being installed.
 
-```text
-~/.config/claude-multiacct/
-    config.json                 # enable flag + paths
-    registry.json               # pooled accounts, primary marker
-    bridge.json                 # daemon's shared-secret snapshot (symlinked
-                                # into the extension's install dir)
+### 2. Bridge daemon (`packages/products/claude-multiacct/src/http-bridge/`)
 
-~/Library/LaunchAgents/
-    com.claude-multiacct.watcher.plist         # PR3
-    com.claude-multiacct.bridge-daemon.plist   # PR5a
+A tiny loopback HTTP server bound to `127.0.0.1:<ephemeral>`, launched by launchd (`com.claude-multiacct.bridge-daemon`). Bearer-token auth (`x-cma-bridge-secret`) with strict allowlisted origins (`https://claude.ai`, `chrome-extension://<id>`). Chrome Private Network Access preflight header set so extension → 127.0.0.1 fetches aren't blocked.
 
-~/Library/Application Support/Google/Chrome/Default/Extensions/
-    fmkadmapgofadopljbjfkapdkoienihi/<version>/
-        manifest.json                          # PR5b
-        content.js
-        bridge.json → ~/.config/claude-multiacct/bridge.json
+Routes:
 
-~/Library/Application Support/Claude/claude-code/<version>/claude.app/
-    Contents/MacOS/
-        claude                                 # PR2 shim
-        claude.real                            # original binary preserved
-```
+- `GET /health` — liveness; no auth.
+- `GET /accounts` — the pool.
+- `GET /usage/:accountUuid` — real Anthropic usage for one account.
+- `POST /choice/:sessionUuid` — persist the picker's choice AND fire `SIGHUP` to the owning shim (mid-session hot-swap).
+
+On boot, the daemon runs `discoverAccounts()` — scans main Claude.app + clone bundles + `claude` CLI keychain slots — and auto-registers every unique OAuth token it finds.
+
+### 3. Extension (`packages/products/claude-multiacct/src/extension/`)
+
+Loaded via Claude's own React DevTools loader path (`electron-devtools-installer` cached CRX at `~/Library/Application Support/Claude/Extensions/`). Content script fires on `https://claude.ai/*`, finds the model-selector button via text-content fallback (`Opus|Sonnet|Haiku …`), and mounts a picker next to it. Per-account usage rows are injected into Claude's own user-menu popup.
+
+### 4. Registry + token stores
+
+- `registry.json` at `~/.config/claude-multiacct/` — validated by valibot: exactly one primary, unique uuids, unique labels.
+- Keychain-primary token store (`com.claude-multiacct.tokens`), with an AES-256-GCM file-based fallback at `~/.config/claude-multiacct/tokens/<uuid>` for sessions where Keychain writes are refused (SSH, launchd, daemon context).
+
+## Non-goals
+
+- Editing Claude Desktop's bundle or asar contents.
+- Cloning Claude.app.
+- Persistent modifications to macOS state outside `~/.config/claude-multiacct/`, `~/.claude-multiacct/`, and the shim install at `/Applications/Claude.app/…/claude`.

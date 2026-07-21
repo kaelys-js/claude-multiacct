@@ -42,6 +42,8 @@ import type { Account, AccountUuid } from "../domain/account.ts";
 import { type AccountRegistry, byUuid } from "../domain/registry.ts";
 import { applyTokenSwap, parseResumeUuid } from "./env.ts";
 import type { ChoiceStore, TokenStore } from "../ports.ts";
+// session-pid helpers (writeSessionPid/removeSessionPid) are used at the
+// entry-point in `entry.ts` to bind the injected ports; not imported here.
 
 /**
  * Injected orchestration surface. Real deps are wired in `./entry.ts`; tests
@@ -62,8 +64,36 @@ export type ShimDeps = {
 		args: readonly string[],
 		opts: childProcess.SpawnSyncOptions,
 	) => { status: number | null; error?: Error };
+	/**
+	 * `child_process.spawn`-shaped, async. Only used by the SIGHUP hot-swap
+	 * path — the normal (no-signal) invocation still goes through `spawnSync`
+	 * for zero behavioural drift from the pre-hot-swap runtime. When present
+	 * AND `sessionUuid` resolves AND `writePidFile` succeeds, `runShim` uses
+	 * the async path and registers a SIGHUP handler that kills the child +
+	 * respawns with a freshly-computed swapped env.
+	 */
+	spawn?: (
+		file: string,
+		args: readonly string[],
+		opts: childProcess.SpawnOptions,
+	) => childProcess.ChildProcess;
 	/** Warn sink; runtime binds stderr, tests inject a spy. */
 	warn: (message: string) => void;
+	/**
+	 * Register a SIGHUP handler; return an off() that unregisters. Injected
+	 * so tests exercise the swap path without touching the real signal
+	 * table. Runtime binds `process.on("SIGHUP", h)` / `process.off(...)`.
+	 */
+	onSighup?: (handler: () => void) => () => void;
+	/**
+	 * Write the shim's PID as owner of this session, so the daemon's
+	 * `POST /choice/:sessionUuid` handler can `signalSwap(sessionUuid)` to
+	 * find us. Injected so tests never touch the real disk. Runtime binds
+	 * `writeSessionPid` from `./session-pid.ts`.
+	 */
+	writePidFile?: (sessionUuid: string) => Promise<void>;
+	/** Remove the PID file on graceful exit. Injected — runtime binds `removeSessionPid`. */
+	removePidFile?: (sessionUuid: string) => Promise<void>;
 };
 
 /** Result of one shim invocation. `swapped` tells the caller which path won. */
@@ -89,6 +119,23 @@ export async function runShim(deps: ShimDeps): Promise<ShimResult> {
 	})) as Record<string, string> | undefined;
 
 	const envForChild = swappedEnv ?? deps.env;
+
+	// Hot-swap path: only when we have a session uuid + all injected
+	// pieces (spawn + onSighup + writePidFile + removePidFile). Absence of
+	// ANY piece falls back to the classic spawnSync path — that's how the
+	// tests + prior behavior stay intact.
+	const sessionUuid = parseResumeUuid(deps.argv);
+	const canHotSwap =
+		sessionUuid !== undefined &&
+		deps.spawn !== undefined &&
+		deps.onSighup !== undefined &&
+		deps.writePidFile !== undefined &&
+		deps.removePidFile !== undefined;
+
+	if (canHotSwap && sessionUuid !== undefined) {
+		return await runShimHotSwappable(deps, realBin, forwardedArgs, envForChild, sessionUuid, swappedEnv !== undefined);
+	}
+
 	const spawnResult = deps.spawnSync(realBin, forwardedArgs, {
 		stdio: "inherit",
 		env: envForChild,
@@ -98,6 +145,152 @@ export async function runShim(deps: ShimDeps): Promise<ShimResult> {
 		return { exitCode: 127, swapped: swappedEnv !== undefined };
 	}
 	return { exitCode: spawnResult.status ?? 0, swapped: swappedEnv !== undefined };
+}
+
+/**
+ * Async spawn path with SIGHUP-driven kill+respawn. Registers a SIGHUP
+ * handler that kills the current child (SIGTERM, 3s grace, then SIGKILL),
+ * waits for it, then respawns `claude.real` with a freshly-computed
+ * swapped env. Loops until a child exits without a pending swap signal.
+ *
+ * @param {ShimDeps} deps - Injected orchestration surface.
+ * @param {string} realBin - Absolute path of `claude.real`.
+ * @param {readonly string[]} forwardedArgs - argv[2..] to pass to the child.
+ * @param {Record<string, string>} initialEnv - Env for the first child spawn.
+ * @param {string} sessionUuid - Session uuid; PID file is keyed on this.
+ * @param {boolean} initialSwapped - Whether the first env is a swap or pass-through.
+ * @returns {Promise<ShimResult>} `{exitCode, swapped}` from the final child.
+ */
+async function runShimHotSwappable(
+	deps: ShimDeps,
+	realBin: string,
+	forwardedArgs: readonly string[],
+	initialEnv: Record<string, string>,
+	sessionUuid: string,
+	initialSwapped: boolean,
+): Promise<ShimResult> {
+	// Non-null after the canHotSwap check.
+	const spawn = deps.spawn as NonNullable<ShimDeps["spawn"]>;
+	const onSighup = deps.onSighup as NonNullable<ShimDeps["onSighup"]>;
+	const writePidFile = deps.writePidFile as NonNullable<ShimDeps["writePidFile"]>;
+	const removePidFile = deps.removePidFile as NonNullable<ShimDeps["removePidFile"]>;
+
+	try {
+		await writePidFile(sessionUuid);
+	} catch (error) {
+		deps.warn(`cma-shim: writePidFile failed (${describe(error)}); hot-swap disabled for this session`);
+		// Fall back to spawnSync single-shot path.
+		const spawnResult = deps.spawnSync(realBin, forwardedArgs, { stdio: "inherit", env: initialEnv });
+		if (spawnResult.error !== undefined) {
+			deps.warn(`cma-shim: exec of ${realBin} failed: ${describe(spawnResult.error)}`);
+			return { exitCode: 127, swapped: initialSwapped };
+		}
+		return { exitCode: spawnResult.status ?? 0, swapped: initialSwapped };
+	}
+
+	let currentEnv = initialEnv;
+	let currentSwapped = initialSwapped;
+	let swapPending = false;
+
+	// Register SIGHUP handler that sets a flag; the loop honours it after
+	// the current child exits (or kills it early on a subsequent signal).
+	let currentChild: childProcess.ChildProcess | undefined;
+	const offSighup = onSighup(() => {
+		swapPending = true;
+		const child = currentChild;
+		if (child !== undefined && child.exitCode === null && child.signalCode === null) {
+			// SIGTERM the child; if it doesn't exit within 3s, SIGKILL.
+			try {
+				child.kill("SIGTERM");
+			} catch {
+				// child may have already exited between the check + kill; ignore
+			}
+			setTimeout(() => {
+				const c = currentChild;
+				if (c !== undefined && c.exitCode === null && c.signalCode === null) {
+					try {
+						c.kill("SIGKILL");
+					} catch {
+						// child already gone; ignore
+					}
+				}
+			}, 3000).unref();
+		}
+	});
+
+	let lastExitCode = 0;
+	// Serial by design: each child must exit before the next spawn — otherwise
+	// two live children would be racing over the same session's stdio.
+	// eslint-disable-next-line no-constant-condition, no-await-in-loop -- Explicit break when no swap pending; serial by design.
+	while (true) {
+		swapPending = false;
+		const child = spawn(realBin, forwardedArgs, {
+			stdio: "inherit",
+			env: currentEnv,
+		});
+		currentChild = child;
+		// eslint-disable-next-line no-await-in-loop, no-loop-func -- Serial by design; child is captured immutably per iteration.
+		const exitCode = await waitForChildExit(child, realBin, deps);
+		lastExitCode = exitCode;
+
+		if (!swapPending) {
+			break;
+		}
+
+		// Recompute the swap. If it now fails, pass through with the
+		// original env (matches the fallback contract at the top level).
+		// eslint-disable-next-line no-await-in-loop -- Serial by design.
+		const nextEnv = (await computeSwappedEnv(deps).catch((error: unknown) => {
+			deps.warn(`cma-shim: swap-on-SIGHUP recompute failed (${describe(error)}); passing through`);
+		})) as Record<string, string> | undefined;
+		currentEnv = nextEnv ?? deps.env;
+		currentSwapped = nextEnv !== undefined;
+	}
+
+	offSighup();
+	try {
+		await removePidFile(sessionUuid);
+	} catch {
+		// idempotent
+	}
+	return { exitCode: lastExitCode, swapped: currentSwapped };
+}
+
+/**
+ * Wait for a spawned child to exit; resolves to the exit code (or 128+sig
+ * for signal-death). Never rejects — pass-through errors resolve to 127.
+ *
+ * @param {childProcess.ChildProcess} child - Spawned child.
+ * @param {string} realBin - Absolute path of the child binary (for error text).
+ * @param {ShimDeps} deps - For the warn sink on spawn-error.
+ * @returns {Promise<number>} Exit code.
+ */
+function waitForChildExit(
+	child: childProcess.ChildProcess,
+	realBin: string,
+	deps: ShimDeps,
+): Promise<number> {
+	return new Promise((resolve) => {
+		child.once("exit", (code, signal) => {
+			resolve(code ?? (signal === null ? 0 : 128 + signalNumber(signal)));
+		});
+		child.once("error", (error) => {
+			deps.warn(`cma-shim: exec of ${realBin} failed: ${describe(error)}`);
+			resolve(127);
+		});
+	});
+}
+
+function signalNumber(signal: NodeJS.Signals): number {
+	// POSIX signal numbers we might encounter on macOS.
+	const table: Record<string, number> = {
+		SIGHUP: 1,
+		SIGINT: 2,
+		SIGQUIT: 3,
+		SIGKILL: 9,
+		SIGTERM: 15,
+	};
+	return table[signal] ?? 0;
 }
 
 /**

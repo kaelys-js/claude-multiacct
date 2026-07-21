@@ -30,10 +30,15 @@ const pkgRoot = resolve(import.meta.dirname, "..");
 const outfile = resolve(pkgRoot, "dist/shim.js");
 
 const entryContents = `
-import { spawnSync } from "node:child_process";
-import { dirname, join } from "node:path";
+import { spawn, spawnSync } from "node:child_process";
+import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PACKAGE_VERSION } from "./src/index.ts";
+import { runShim } from "./src/cli-shim/shim.ts";
+import { removeSessionPid, writeSessionPid } from "./src/cli-shim/session-pid.ts";
+import { readRegistry } from "./src/cli-shim/registry-store.ts";
+import { FsChoiceStore, defaultChoiceStoreDir } from "./src/cli-shim/choice-store.ts";
+import { SecurityCliTokenStore } from "./src/cli-shim/token-store.ts";
 
 if (process.env.CMA_SHIM_SELFTEST === "1") {
 	process.stdout.write(\`cma-shim selftest OK \${PACKAGE_VERSION}\\n\`);
@@ -41,12 +46,27 @@ if (process.env.CMA_SHIM_SELFTEST === "1") {
 }
 
 const binDir = dirname(fileURLToPath(import.meta.url));
-const realBin = join(binDir, "claude.real");
-const result = spawnSync(realBin, process.argv.slice(2), {
-	stdio: "inherit",
+const choiceStore = new FsChoiceStore(defaultChoiceStoreDir());
+const tokenStore = new SecurityCliTokenStore();
+
+const result = await runShim({
+	argv: process.argv,
 	env: process.env,
+	binDir,
+	choiceStore,
+	readRegistry: () => readRegistry(),
+	tokenStore,
+	spawnSync,
+	spawn,
+	onSighup: (handler) => {
+		process.on("SIGHUP", handler);
+		return () => process.off("SIGHUP", handler);
+	},
+	writePidFile: (uuid) => writeSessionPid(uuid, process.pid),
+	removePidFile: (uuid) => removeSessionPid(uuid),
+	warn: (m) => { process.stderr.write("[cma-shim] " + m + "\\n"); },
 });
-process.exit(result.status ?? 0);
+process.exit(result.exitCode);
 `;
 
 mkdirSync(dirname(outfile), { recursive: true });

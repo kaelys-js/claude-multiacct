@@ -237,6 +237,12 @@ const COVERAGE_EXCLUDED_EXACT = new Set([
 	// everywhere else without fighting a loop with the sync workflow.
 	".github/ISSUE_TEMPLATE/config.yml",
 	".github/dependabot.yml",
+	// Chrome extension manifest template consumed by
+	// `packages/products/claude-multiacct/scripts/build-extension.mjs` —
+	// no public $schema for Chrome MV3 manifests that supports every
+	// field we use, and the build script's valibot-shaped parse catches
+	// shape errors at build time.
+	"packages/products/claude-multiacct/src/extension/manifest.tmpl.json",
 ]);
 
 // Whether a tracked config file is exempt from the schema-coverage requirement.

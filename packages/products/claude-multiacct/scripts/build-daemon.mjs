@@ -117,6 +117,32 @@ const listAccounts = async () => {
 
 const flag = flagOn(process.env);
 
+// Auto-detect accounts BEFORE start() so the daemon serves a populated
+// registry from request 1. Best-effort: any discovery failure is logged
+// + swallowed — the daemon still starts and serves whatever's already
+// in the registry.
+try {
+	bootLog("discover-run");
+	const { discoverAccounts } = await import("./src/discovery/discover-accounts.ts");
+	const { makeRealDiscoveryPorts } = await import("./src/discovery/real-discovery-ports.ts");
+	const ports = makeRealDiscoveryPorts({ tokenStore, readRegistry, logger: {
+		log: (m) => { try { process.stderr.write("[discovery] " + m + "\\n"); } catch {} },
+		warn: (m) => { try { process.stderr.write("[discovery] " + m + "\\n"); } catch {} },
+	}});
+	const outcome = await discoverAccounts(ports);
+	try {
+		process.stderr.write("[discovery] scanned mainApp=" + outcome.scanned.mainApp
+			+ " cloneApps=" + outcome.scanned.cloneApps
+			+ " cliCredentials=" + outcome.scanned.cliCredentials
+			+ " registered=" + outcome.registered.length
+			+ " skipped=" + outcome.skippedAlreadyRegistered
+			+ " failed=" + outcome.failed.length + "\\n");
+	} catch {}
+	bootLog("discover-done");
+} catch (error) {
+	try { process.stderr.write("[discovery] failed: " + String(error) + "\\n"); } catch {}
+}
+
 try {
 	bootLog("start-listen");
 	const { port } = await start({
