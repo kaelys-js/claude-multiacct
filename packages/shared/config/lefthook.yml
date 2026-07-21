@@ -9,28 +9,54 @@
 #   stage_fixed  — auto-stages files modified by the command
 #
 # Override locally via lefthook-local.yml (not committed).
-# Skip all hooks: LEFTHOOK=0 git commit ...
+#
+# GATES ARE UNSKIPPABLE. Do NOT set LEFTHOOK=0, LEFTHOOK_EXCLUDE=<hook>, or
+# push with --no-verify. The `no-bypass` guard at priority 0 of every stage
+# below inspects the environment and hard-fails if a bypass attempt is
+# detected. If a gate fails, the correct response is to fix the failing
+# check, not to skip it. See MEMORY: feedback_coverage_gate_bypass.md.
 
 # ─── Commit Message ──────────────────────────────────────────────────────────
 
 commit-msg:
   commands:
+    no-bypass:
+      priority: 0
+      run: |
+        if [ -n "$LEFTHOOK_EXCLUDE" ] || [ "$LEFTHOOK" = "0" ]; then
+          echo "BLOCKED: lefthook gates are unskippable (LEFTHOOK/LEFTHOOK_EXCLUDE set)." >&2
+          echo "Fix the failing check; do not bypass. See feedback_coverage_gate_bypass.md." >&2
+          exit 1
+        fi
+      fail_text: "Gate bypass attempted. Fix the failing check, do not skip."
     validate:
+      priority: 1
       run: pnpm lint:commit --edit {1}
       fail_text: "Commit message does not follow conventional commits. See https://www.conventionalcommits.org"
 
 # ─── Pre-Commit ──────────────────────────────────────────────────────────────
 # Runs on every commit. Keep this fast — lint and format only, no tests or builds.
-# Pipeline: format (p1) → lint (p2).
+# Pipeline: no-bypass (p0) → format (p1) → lint (p2).
 #
-# Both are SINGLE commands covering every file type: the TypeScript QA runner
-# (packages/shared/utils/qa/src, driven by the valibot-validated tool registry) fans
-# out to each formatter/linter via mise, filtering the staged file list per tool.
-# Adding a tool = one entry in packages/shared/utils/qa/src/registry.ts, not a change here.
+# Both real steps are SINGLE commands covering every file type: the TypeScript
+# QA runner (packages/shared/utils/qa/src, driven by the valibot-validated tool
+# registry) fans out to each formatter/linter via mise, filtering the staged
+# file list per tool. Adding a tool = one entry in
+# packages/shared/utils/qa/src/registry.ts, not a change here.
 
 pre-commit:
   piped: true
   commands:
+    # p0 — Bypass guard: hard-fail if the invocation is trying to skip gates.
+    no-bypass:
+      priority: 0
+      run: |
+        if [ -n "$LEFTHOOK_EXCLUDE" ] || [ "$LEFTHOOK" = "0" ]; then
+          echo "BLOCKED: lefthook gates are unskippable (LEFTHOOK/LEFTHOOK_EXCLUDE set)." >&2
+          echo "Fix the failing check; do not bypass. See feedback_coverage_gate_bypass.md." >&2
+          exit 1
+        fi
+      fail_text: "Gate bypass attempted. Fix the failing check, do not skip."
     # p1 — Format staged files, then re-stage what changed.
     format:
       priority: 1
@@ -47,8 +73,8 @@ pre-commit:
 # Thorough, whole-project validation before code leaves the machine. Pre-commit
 # handles fast staged-file format+lint; pre-push runs the rest of the pipeline
 # that needs the full project graph, not just the staged diff.
-# Pipeline: sync-drift (p0) → lint (p1) → format-check (p2) → test-unit (p3) →
-# test-coverage (p4)
+# Pipeline: no-bypass (p0) → sync-drift (p1) → lint (p2) → format-check (p3) →
+# test-unit (p4) → test-coverage (p5)
 # Whole-project typecheck (tsc), REUSE license compliance, AND schema instance
 # validation are members of the `qa:lint` pipeline now (schema-check runs as the
 # `wholeRepoOnly` `schema` tool), so the p1 lint step covers them — no separate
@@ -57,38 +83,50 @@ pre-commit:
 pre-push:
   piped: true
   commands:
-    # p0 — Drift gate: the same generated-file drift checks CI's `sync` job runs
+    # p0 — Bypass guard (see top-of-file note). Runs before every other gate so a
+    # LEFTHOOK_EXCLUDE / LEFTHOOK=0 attempt fails immediately instead of skipping
+    # the drift/lint/test/coverage steps below.
+    no-bypass:
+      priority: 0
+      run: |
+        if [ -n "$LEFTHOOK_EXCLUDE" ] || [ "$LEFTHOOK" = "0" ]; then
+          echo "BLOCKED: lefthook gates are unskippable (LEFTHOOK/LEFTHOOK_EXCLUDE set)." >&2
+          echo "Fix the failing check; do not bypass. See feedback_coverage_gate_bypass.md." >&2
+          exit 1
+        fi
+      fail_text: "Gate bypass attempted. Fix the failing check, do not skip."
+    # p1 — Drift gate: the same generated-file drift checks CI's `sync` job runs
     # (versions/turbo/schemas --check). Catches a forgotten regen LOCALLY so CI
-    # never reds unexpectedly. Cheap and fail-fast, so it runs first.
+    # never reds unexpectedly. Cheap and fail-fast, so it runs early.
     # `sync:schemas` is network-resilient (an unreachable upstream warns + passes,
     # it can't fail an offline push — only a reachable content diff is drift).
     sync-drift:
-      priority: 0
+      priority: 1
       run: pnpm sync:check
       fail_text: "Generated-file drift. Run 'pnpm sync' to regenerate (versions/turbo/schemas)."
-    # p1 — Whole-repo lint (every tool over every tracked file). This includes
+    # p2 — Whole-repo lint (every tool over every tracked file). This includes
     # the whole-project typecheck (tsc --noEmit), REUSE license compliance
     # (reuse lint), and schema instance validation (the `wholeRepoOnly` `schema`
     # tool) — all members of the qa:lint pipeline.
     lint:
-      priority: 1
+      priority: 2
       run: pnpm qa:lint
       fail_text: "Linting failed. Run 'pnpm qa:lint' to see failures."
-    # p2 — Whole-repo format check (non-zero if anything is unformatted).
+    # p3 — Whole-repo format check (non-zero if anything is unformatted).
     format-check:
-      priority: 2
+      priority: 3
       run: pnpm qa:format:check
       fail_text: "Formatting drift. Run 'pnpm qa:format' to fix."
-    # p3 — Unit tests (vitest, no coverage). Fast fail on a broken test before the
+    # p4 — Unit tests (vitest, no coverage). Fast fail on a broken test before the
     # heavier coverage pass.
     test-unit:
-      priority: 3
+      priority: 4
       run: pnpm qa:test
       fail_text: "Tests failed. Run 'pnpm test' to see failures."
-    # p4 — Coverage gate: `vitest run --coverage` exits non-zero below the per-file
+    # p5 — Coverage gate: `vitest run --coverage` exits non-zero below the per-file
     # thresholds in vitest.config.ts, blocking the push on undertested code.
     test-coverage:
-      priority: 4
+      priority: 5
       run: pnpm qa:test:coverage
       fail_text: "Coverage below threshold. Run 'pnpm test:coverage' to see the gap."
 
