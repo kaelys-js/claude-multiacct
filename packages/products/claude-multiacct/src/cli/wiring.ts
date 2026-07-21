@@ -82,6 +82,8 @@ import {
 	read as readConfig,
 	write as writeConfig,
 } from "./config-store.ts";
+import type { LegacyArtifacts, LegacyCleanupPorts } from "./legacy-cleanup.ts";
+import { makeLegacyCleanupStep } from "./legacy-cleanup-step.ts";
 import {
 	type DeployFs,
 	deployAgentScripts,
@@ -145,6 +147,9 @@ async function scanCliDirs(): Promise<string[]> {
  */
 function buildSteps(deps: WiringDeps): readonly OrchestrationStep[] {
 	const uid = process.getuid?.() ?? 0;
+	const stepLegacyCleanup = makeLegacyCleanupStep(realLegacyCleanupPorts(deps), {
+		assumeYes: (deps.env ?? process.env).CMA_YES === "1",
+	});
 	const stepShim: OrchestrationStep = {
 		name: "shim",
 		install: async (flag) => {
@@ -273,7 +278,145 @@ function buildSteps(deps: WiringDeps): readonly OrchestrationStep[] {
 		},
 	};
 
-	return [stepShim, stepWatcher, stepDaemon, stepExtension];
+	return [stepLegacyCleanup, stepShim, stepWatcher, stepDaemon, stepExtension];
+}
+
+/**
+ * Real fs / launchctl / stdin ports for the legacy-cleanup step.
+ *
+ * Detection scans:
+ *   - `~/Applications/Claude Account *.app`
+ *   - `~/Library/LaunchAgents/com.user.claude-*.plist`
+ *   - `~/.local/bin/claude-multiacct` (the bash tool's install path)
+ *   - `~/Library/Application Support/Claude-*` (mirror stores; excludes our
+ *     own `Claude/` dir, which is the primary CLI's home)
+ *   - `~/.claude-multiacct/` (only when it lacks the TS system's `daemon.js`
+ *     marker — the current TS layout writes daemon.js/watcher.js there, so
+ *     we only nuke the dir when it looks pre-TS)
+ *
+ * Removal: `launchctl unload -w` before `rm` for plists; `rm -rf` elsewhere.
+ * `promptConfirm` reads y/n from stdin after writing the summary to stderr.
+ *
+ * @param {WiringDeps} deps - Logger.
+ * @returns {LegacyCleanupPorts} Real port bundle.
+ */
+function realLegacyCleanupPorts(deps: WiringDeps): LegacyCleanupPorts {
+	const home = homedir();
+	const appsDir = join(home, "Applications");
+	const launchAgentsDir = join(home, "Library", "LaunchAgents");
+	const appSupportDir = join(home, "Library", "Application Support");
+	const legacyDataDir = join(home, ".claude-multiacct");
+	const legacyCliCandidates = [
+		join(home, ".local", "bin", "claude-multiacct"),
+		"/usr/local/bin/claude-multiacct",
+	];
+	const knownLaunchdLabels = new Set([
+		"com.user.claude-sessions-sync.plist",
+		"com.user.claude-clone-refresh.plist",
+		"com.user.claude-primary-patch-refresh.plist",
+		"com.user.claude-metadata-symlink.plist",
+	]);
+
+	return {
+		detect: async (): Promise<LegacyArtifacts> => {
+			const cloneApps: string[] = [];
+			try {
+				const entries = await readdir(appsDir);
+				for (const e of entries) {
+					if (/^Claude Account .+\.app$/u.test(e)) {
+						cloneApps.push(join(appsDir, e));
+					}
+				}
+			} catch {
+				// no ~/Applications/ or unreadable → nothing to clean
+			}
+			const launchdPlists: string[] = [];
+			try {
+				const entries = await readdir(launchAgentsDir);
+				for (const e of entries) {
+					if (knownLaunchdLabels.has(e)) {
+						launchdPlists.push(join(launchAgentsDir, e));
+					}
+				}
+			} catch {
+				// no ~/Library/LaunchAgents → nothing to clean
+			}
+			let legacyCli: string | undefined;
+			for (const p of legacyCliCandidates) {
+				// eslint-disable-next-line no-await-in-loop -- fixed 2-entry list, sequential probe
+				const found = await stat(p).catch(() => null);
+				if (found !== null && found.isFile()) {
+					legacyCli = p;
+					break;
+				}
+			}
+			const mirrorStores: string[] = [];
+			try {
+				const entries = await readdir(appSupportDir);
+				for (const e of entries) {
+					// The bash tool creates `Claude-<label>/` dirs; our primary CLI's
+					// dir is exactly `Claude/`. Match the hyphenated form only.
+					if (/^Claude-.+/u.test(e)) {
+						mirrorStores.push(join(appSupportDir, e));
+					}
+				}
+			} catch {
+				// no ~/Library/Application Support → nothing to clean
+			}
+			let legacyDataDirDetected: string | undefined;
+			const legacyDataDirStat = await stat(legacyDataDir).catch(() => null);
+			if (legacyDataDirStat !== null && legacyDataDirStat.isDirectory()) {
+				// Only nuke `~/.claude-multiacct/` when it lacks `daemon.js` — the
+				// TS system deploys daemon.js/watcher.js there, so the marker's
+				// presence means the dir is the CURRENT TS-system data dir, not
+				// a pre-TS bash-tool remnant.
+				const marker = await stat(join(legacyDataDir, "daemon.js")).catch(() => null);
+				if (marker === null) {
+					legacyDataDirDetected = legacyDataDir;
+				}
+			}
+			return {
+				cloneApps,
+				launchdPlists,
+				legacyCli,
+				mirrorStores,
+				legacyDataDir: legacyDataDirDetected,
+			};
+		},
+		promptConfirm: (summary) => {
+			process.stderr.write(`${summary}\n`);
+			return new Promise<boolean>((resolve) => {
+				const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
+				rl.question("", (answer) => {
+					rl.close();
+					resolve(/^y(es)?$/iu.test(answer.trim()));
+				});
+			});
+		},
+		removeCloneApp: async (path) => {
+			await rm(path, { recursive: true, force: true });
+		},
+		removeLaunchdPlist: async (path) => {
+			// launchctl unload is best-effort: an already-unloaded plist yields a
+			// non-zero exit that we swallow so `rm` still runs.
+			await execFileAsync("launchctl", ["unload", "-w", path]).catch((error: unknown) => {
+				deps.logger.warn(
+					`legacy-cleanup: launchctl unload ${path} failed (already unloaded?): ${error instanceof Error ? error.message : String(error)}`,
+				);
+			});
+			await rm(path, { force: true });
+		},
+		removeLegacyCli: async (path) => {
+			await rm(path, { force: true });
+		},
+		removeMirrorStore: async (path) => {
+			await rm(path, { recursive: true, force: true });
+		},
+		removeLegacyDataDir: async (path) => {
+			await rm(path, { recursive: true, force: true });
+		},
+		logger: deps.logger,
+	};
 }
 
 /**
