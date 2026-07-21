@@ -215,4 +215,157 @@ describe("mountPicker", () => {
 		await Promise.resolve();
 		expect(client.post).not.toHaveBeenCalled();
 	});
+
+	it("repositions the open menu on scroll/resize, but stays inert while hidden", () => {
+		mountPicker({
+			host: body,
+			client: mockClient(),
+			sessionUuid: SESSION,
+			doc,
+			accounts: ACCOUNTS,
+		});
+		const win = doc.defaultView!;
+		const menu = getMenu(doc);
+
+		// Menu hidden → a scroll must NOT reposition (reposition early-returns).
+		menu.style.top = "";
+		win.dispatchEvent(new win.Event("scroll"));
+		expect(menu.style.top).toBe("");
+
+		// Open it, clear the top it set, then scroll → reposition recomputes top.
+		getButton(doc).click();
+		expect(menu.hidden).toBe(false);
+		menu.style.top = "";
+		win.dispatchEvent(new win.Event("scroll"));
+		expect(menu.style.top).not.toBe("");
+
+		// Resize path is wired the same way.
+		menu.style.top = "";
+		win.dispatchEvent(new win.Event("resize"));
+		expect(menu.style.top).not.toBe("");
+	});
+
+	it("swallows a /accounts GET that THROWS (rejects) with a warning", async () => {
+		const throwing: BridgeClient = {
+			get: vi.fn<GetFn>(() => Promise.reject(new Error("bridge offline"))),
+			post: vi.fn<PostFn>(),
+		} as unknown as BridgeClient;
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			mountPicker({ host: body, client: throwing, sessionUuid: SESSION, doc });
+			await new Promise<void>((resolve) => {
+				setTimeout(resolve, 0);
+			});
+			expect(warn).toHaveBeenCalledWith(
+				expect.stringContaining("/accounts threw"),
+				expect.anything(),
+			);
+		} finally {
+			warn.mockRestore();
+		}
+	});
+
+	it("rerender() rebuilds the button label + menu rows from current state", () => {
+		const handle = mountPicker({
+			host: body,
+			client: mockClient(),
+			sessionUuid: SESSION,
+			doc,
+			accounts: ACCOUNTS,
+		});
+		expect(getItems(doc)).toHaveLength(2);
+		// Blow away the rendered rows + button label to prove rerender restores them.
+		for (const item of getItems(doc)) {
+			item.remove();
+		}
+		getButton(doc).textContent = "wiped";
+		expect(getItems(doc)).toHaveLength(0);
+		handle.rerender();
+		expect(getItems(doc)).toHaveLength(2);
+		expect(getButton(doc).textContent).toBe("Alice");
+	});
+
+	it("highlights a non-selected row on hover and leaves the selected row's highlight alone", () => {
+		mountPicker({
+			host: body,
+			client: mockClient(),
+			sessionUuid: SESSION,
+			doc,
+			accounts: ACCOUNTS,
+		});
+		const [selected, other] = getItems(doc); // Alice is primary → selected
+		other!.dispatchEvent(new doc.defaultView!.Event("mouseenter"));
+		expect(other!.style.background).toBe("rgba(255, 255, 255, 0.08)");
+		other!.dispatchEvent(new doc.defaultView!.Event("mouseleave"));
+		expect(other!.style.background).toBe("transparent");
+		// Hovering the selected row must not overwrite its highlight.
+		selected!.dispatchEvent(new doc.defaultView!.Event("mouseenter"));
+		expect(selected!.style.background).toBe("rgba(255, 255, 255, 0.06)");
+	});
+
+	it("keeps the menu open when a click lands inside the menu or on the button", () => {
+		mountPicker({
+			host: body,
+			client: mockClient(),
+			sessionUuid: SESSION,
+			doc,
+			accounts: ACCOUNTS,
+		});
+		getButton(doc).click();
+		expect(getMenu(doc).hidden).toBe(false);
+		// A capture-phase document click whose target is inside the menu → no close.
+		const inside = new doc.defaultView!.Event("click", { bubbles: true });
+		getMenu(doc).dispatchEvent(inside);
+		expect(getMenu(doc).hidden).toBe(false);
+	});
+
+	it("logs a warning when the choice POST throws (not just when it returns !ok)", async () => {
+		const throwing: BridgeClient = {
+			get: vi.fn<GetFn>(() =>
+				Promise.resolve({ ok: true, data: { ok: true, accounts: ACCOUNTS } }),
+			),
+			post: vi.fn<PostFn>(() => Promise.reject(new Error("post exploded"))),
+		} as unknown as BridgeClient;
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			mountPicker({ host: body, client: throwing, sessionUuid: SESSION, doc, accounts: ACCOUNTS });
+			getButton(doc).click();
+			getItems(doc)[1]?.click();
+			await new Promise<void>((resolve) => {
+				setTimeout(resolve, 0);
+			});
+			expect(warn).toHaveBeenCalledWith(
+				expect.stringContaining("choose failed"),
+				expect.anything(),
+			);
+		} finally {
+			warn.mockRestore();
+		}
+	});
+
+	it("reverts to an empty label (previous ?? '') when the POST fails and there was no prior pick", async () => {
+		// No primary in the account list → currentUuid starts undefined. A failed
+		// POST must revert to `previous ?? ""`, exercising the undefined-previous side.
+		const noPrimary: PickerAccount[] = [
+			{ uuid: "cccccccc-cccc-4ccc-cccc-cccccccccccc", label: "Carol", isPrimary: false },
+		];
+		const onChoice = vi.fn<(uuid: string) => void>();
+		mountPicker({
+			host: body,
+			client: mockClient({ ok: false, kind: "network" }),
+			sessionUuid: SESSION,
+			doc,
+			accounts: noPrimary,
+			onChoice,
+		});
+		expect(getButton(doc).textContent).toBe("…");
+		getButton(doc).click();
+		getItems(doc)[0]?.click();
+		await new Promise<void>((resolve) => {
+			setTimeout(resolve, 0);
+		});
+		// Reverted: label back to the "…" fallback and onChoice called with "".
+		expect(getButton(doc).textContent).toBe("…");
+		expect(onChoice).toHaveBeenLastCalledWith("");
+	});
 });

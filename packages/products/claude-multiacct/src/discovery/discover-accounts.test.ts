@@ -384,6 +384,163 @@ describe("discoverAccounts", () => {
 		expect(outcome.skippedAlreadyRegistered).toBe(1);
 	});
 
+	it("skips the clone scan entirely when the shared safe-storage key is missing", async () => {
+		// Clones decrypt with the SAME `Claude Safe Storage` key as the main app.
+		// If that key never materialized (keychain read refused), the clone loop
+		// must break immediately rather than call deriveChromiumKey(undefined) and
+		// crash. A clone is present + its LevelDB would yield a token, but with no
+		// key nothing is scanned or registered.
+		const cloneIterated = vi.fn<() => void>();
+		const outcome = await discoverAccounts(
+			mkPorts({
+				readKeychainPassword: () => Promise.resolve(undefined),
+				listCloneApps: () =>
+					Promise.resolve([
+						{
+							bundlePath: "/Applications/Claude Account Gmail.app",
+							label: "gmail",
+							storeDir: "/tmp/claude-gmail",
+						},
+					]),
+				iterateLevelDb: async function* (dir) {
+					// eslint-disable-next-line vitest/no-conditional-in-test
+					if (dir.startsWith("/tmp/claude-gmail")) {
+						cloneIterated();
+						yield {
+							key: Buffer.from("k"),
+							value: encryptForTest('{"access_token":"T-gmail","email":"me@gmail.com"}'),
+						};
+					}
+				},
+			}),
+		);
+		expect(outcome.registered).toHaveLength(0);
+		expect(outcome.scanned.cloneApps).toBe(0);
+		// The break fires before iterateLevelDb is ever consulted for the clone.
+		expect(cloneIterated).not.toHaveBeenCalled();
+	});
+
+	it("counts but does not register a clone LevelDB value that is not a token", async () => {
+		// The `found === undefined` side of the clone LevelDB loop: a v10 blob that
+		// decrypts to non-OAuth JSON is scanned + skipped, not registered.
+		const outcome = await discoverAccounts(
+			mkPorts({
+				listCloneApps: () =>
+					Promise.resolve([
+						{
+							bundlePath: "/Applications/Claude Account Gmail.app",
+							label: "gmail",
+							storeDir: "/tmp/claude-gmail",
+						},
+					]),
+				iterateLevelDb: async function* (dir) {
+					// eslint-disable-next-line vitest/no-conditional-in-test
+					if (dir.startsWith("/tmp/claude-gmail") && dir.endsWith("leveldb")) {
+						yield { key: Buffer.from("k"), value: encryptForTest('{"unrelated":"x"}') };
+					}
+				},
+			}),
+		);
+		expect(outcome.registered).toHaveLength(0);
+		expect(outcome.scanned.cloneApps).toBe(1);
+	});
+
+	it("counts but does not register a clone config.json value that is not a token", async () => {
+		const outcome = await discoverAccounts(
+			mkPorts({
+				listCloneApps: () =>
+					Promise.resolve([
+						{
+							bundlePath: "/Applications/Claude Account Work.app",
+							label: "work",
+							storeDir: "/tmp/claude-work",
+						},
+					]),
+				iterateAppConfigJson: async function* (path) {
+					// eslint-disable-next-line vitest/no-conditional-in-test
+					if (path.startsWith("/tmp/claude-work")) {
+						yield { key: Buffer.from("dxt:cache"), value: encryptForTest('{"unrelated":"x"}') };
+					}
+				},
+			}),
+		);
+		expect(outcome.registered).toHaveLength(0);
+		expect(outcome.scanned.cloneApps).toBe(1);
+	});
+
+	it("skips a v10 blob whose decrypt throws on a length-bearing (but corrupt) cipher", async () => {
+		// tryDecryptAndExtract's catch (return undefined): a value that passes the
+		// isEncrypted length check (>3 bytes) but whose ciphertext is not
+		// block-aligned makes decryptV10 throw. Must be swallowed, not surfaced.
+		const outcome = await discoverAccounts(
+			mkPorts({
+				iterateLevelDb: async function* (dir) {
+					// eslint-disable-next-line vitest/no-conditional-in-test
+					if (dir.endsWith("Local Storage/leveldb")) {
+						yield {
+							key: Buffer.from("k"),
+							value: Buffer.concat([Buffer.from("v10"), Buffer.from([1, 2, 3])]),
+						};
+					}
+				},
+			}),
+		);
+		expect(outcome.registered).toHaveLength(0);
+		expect(outcome.scanned.mainApp).toBe(1);
+	});
+
+	it("scans a CLI slot that reads empty (undefined) and one whose JSON isn't a token, registering neither", async () => {
+		// raw === undefined → not counted (readClaudeCliCredential miss). raw
+		// present but extractOauthFromPlaintext === undefined → counted, not
+		// registered. Covers both false branches in the CLI loop.
+		const outcome = await discoverAccounts(
+			mkPorts({
+				listClaudeCliServices: () =>
+					Promise.resolve(["Claude Code-credentials-empty", "Claude Code-credentials-junk"]),
+				readClaudeCliCredential: (service) =>
+					service.endsWith("empty")
+						? Promise.resolve(undefined)
+						: Promise.resolve('{"unrelated":"not-a-token"}'),
+			}),
+		);
+		expect(outcome.registered).toHaveLength(0);
+		// Only the slot that returned a value is counted as scanned.
+		expect(outcome.scanned.cliCredentials).toBe(1);
+	});
+
+	it("ignores a registry account whose stored token cannot be read (dedup hash skipped)", async () => {
+		// hashExistingRegistry: tokenStore.get returns undefined (not a string) →
+		// no hash added, so a fresh scan of the same account still registers.
+		const registered: AccountUuid = "dddddddd-1111-4111-8111-dddddddddddd" as AccountUuid;
+		const existingRegistry: AccountRegistry = {
+			accounts: [
+				{
+					uuid: registered,
+					label: "icloud",
+					isPrimary: true,
+					subscriptionType: "unknown",
+					rateLimitTier: "unknown",
+					encryptedTokenRef: registered,
+				},
+			],
+		} as AccountRegistry;
+		const outcome = await discoverAccounts(
+			mkPorts({
+				readRegistry: () => Promise.resolve(existingRegistry),
+				// token store returns undefined for the registry account → no hash.
+				tokenStore: mkTokenStore(),
+				iterateLevelDb: async function* (dir) {
+					// eslint-disable-next-line vitest/no-conditional-in-test
+					if (dir.endsWith("Local Storage/leveldb")) {
+						yield { key: Buffer.from("k"), value: encryptForTest('{"access_token":"T-fresh"}') };
+					}
+				},
+			}),
+		);
+		expect(outcome.registered).toHaveLength(1);
+		expect(outcome.skippedAlreadyRegistered).toBe(0);
+	});
+
 	it("registers tokens from clone apps sharing the parent's keychain key", async () => {
 		const outcome = await discoverAccounts(
 			mkPorts({
@@ -426,5 +583,16 @@ describe("deriveLabel", () => {
 	});
 	it("falls back to account-N for main source without email", () => {
 		expect(deriveLabel(undefined, "main:dir", 2)).toBe("account-2");
+	});
+
+	it("falls back to the source label when the email has no @ (no domain to derive)", () => {
+		// email present but malformed (no "@") → the domain branch is skipped and
+		// the source-derived fallback wins.
+		expect(deriveLabel("notanemail", "cli:x", 4)).toBe("cli-4");
+	});
+
+	it("falls back to the source label when the email domain's first segment is empty", () => {
+		// "a@" → domain "" → first segment "" (length 0) → source fallback.
+		expect(deriveLabel("a@", "main:dir", 7)).toBe("account-7");
 	});
 });

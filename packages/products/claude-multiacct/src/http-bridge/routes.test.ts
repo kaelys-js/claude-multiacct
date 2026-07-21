@@ -124,6 +124,20 @@ describe("handleUsage", () => {
 		expect(r.status).toBe(404);
 		expect((r.body as { reason: string }).reason).toBe("not_found");
 	});
+
+	it("a bare {ok:false} (no reason/detail) → 404 with the not_found/empty fallbacks", async () => {
+		// verifyAccount may fail without populating reason/detail. The handler must
+		// still yield a well-formed body rather than leaking `undefined` onto the
+		// wire — so the `?? "not_found"` / `?? ""` fallbacks matter. Drop them and
+		// the response body carries undefined fields, which the extension can't
+		// render.
+		const deps = makeDeps({
+			verifyAccount: vi.fn<VerifyAccountFn>(() => Promise.resolve({ ok: false })),
+		});
+		const r = await handleUsage(deps, acctUuid);
+		expect(r.status).toBe(404);
+		expect(r.body).toEqual({ ok: false, reason: "not_found", detail: "" });
+	});
 });
 
 describe("handleSetChoice (flag gate + validation)", () => {
@@ -183,6 +197,23 @@ describe("handleSetChoice (flag gate + validation)", () => {
 		expect(r.status).toBe(200);
 		expect(write).toHaveBeenCalledOnce();
 		expect(warn).toHaveBeenCalledOnce();
+	});
+
+	it("signalSwap rejecting a NON-Error value is still swallowed + stringified into the warn", async () => {
+		// The catch stringifies non-Error throws via `String(error)`. A rejected
+		// string (or anything not an Error) must not crash the request nor bypass
+		// the warn — the choice still persists and returns 200.
+		const warn = vi.fn<(m: string) => void>();
+		// oxlint-disable-next-line prefer-promise-reject-errors -- exercising the non-Error branch of the catch
+		const signalSwap = vi.fn<SignalSwapFn>(() => Promise.reject("ESRCH-string"));
+		const deps = makeDeps({
+			signalSwap,
+			logger: { log: vi.fn<(m: string) => void>(), warn },
+		});
+		const r = await handleSetChoice(deps, sessUuid, { accountUuid: acctUuid });
+		expect(r.status).toBe(200);
+		expect(warn).toHaveBeenCalledOnce();
+		expect(warn.mock.calls[0]![0]).toContain("ESRCH-string");
 	});
 
 	it("flag-off short-circuit does not fire signalSwap", async () => {

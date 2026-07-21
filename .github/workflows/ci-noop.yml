@@ -79,3 +79,9 @@ jobs:
     timeout-minutes: 2
     steps:
       - run: echo "docs-only change - real CI skipped (see ci.yml paths-ignore)"
+  gates:
+    name: gates
+    runs-on: ${{ vars.SELF_HOSTED_ENABLED == 'true' && fromJSON('["self-hosted","kaelys-mac-mini"]') || 'ubuntu-latest' }}
+    timeout-minutes: 2
+    steps:
+      - run: echo "docs-only change - real CI skipped (see ci.yml paths-ignore)"

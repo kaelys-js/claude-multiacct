@@ -118,6 +118,51 @@ describe("runLegacyCleanup", () => {
 		expect(removeClone).toHaveBeenCalledWith("/x/A.app");
 	});
 
+	it("classifies a failure in EVERY non-clone artifact class without aborting", async () => {
+		// The clone-app failure path is covered above. This pins the same
+		// fail-soft contract for the other four removers (launchd, legacy CLI,
+		// mirror store, data dir): each rejection is recorded in `failed` with the
+		// error message and a warn, and the run still reaches the end. Drop any one
+		// try/catch and the corresponding path count in `failed` drops — RED.
+		const detected: LegacyArtifacts = {
+			cloneApps: [],
+			launchdPlists: ["/Users/x/Library/LaunchAgents/com.user.claude-clone-refresh.plist"],
+			legacyCli: "/Users/x/.local/bin/claude-multiacct",
+			mirrorStores: ["/Users/x/Library/Application Support/Claude-Work"],
+			legacyDataDir: "/Users/x/.claude-multiacct",
+		};
+		const warn = vi.fn<(m: string) => void>();
+		const outcome = await runLegacyCleanup(
+			mkPorts(detected, {
+				removeLaunchdPlist: () => Promise.reject(new Error("plist EACCES")),
+				removeLegacyCli: () => Promise.reject(new Error("cli EPERM")),
+				removeMirrorStore: () => Promise.reject(new Error("mirror EBUSY")),
+				removeLegacyDataDir: () => Promise.reject(new Error("data ENOTEMPTY")),
+				logger: { log: vi.fn<(m: string) => void>(), warn },
+			}),
+			{ assumeYes: true },
+		);
+		const failedPaths = outcome.failed.map((f) => f.path);
+		expect(failedPaths).toEqual([
+			detected.launchdPlists[0],
+			detected.legacyCli,
+			detected.mirrorStores[0],
+			detected.legacyDataDir,
+		]);
+		expect(outcome.failed.map((f) => f.reason)).toEqual([
+			"plist EACCES",
+			"cli EPERM",
+			"mirror EBUSY",
+			"data ENOTEMPTY",
+		]);
+		// Nothing was recorded as removed, and each failure warned.
+		expect(outcome.removed.launchdPlists).toEqual([]);
+		expect(outcome.removed.legacyCli).toBeUndefined();
+		expect(outcome.removed.mirrorStores).toEqual([]);
+		expect(outcome.removed.legacyDataDir).toBeUndefined();
+		expect(warn).toHaveBeenCalledTimes(4);
+	});
+
 	it("classifies per-artifact failures without aborting the whole run", async () => {
 		const detected: LegacyArtifacts = {
 			...EMPTY,

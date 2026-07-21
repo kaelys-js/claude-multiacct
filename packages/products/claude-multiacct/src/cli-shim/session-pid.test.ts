@@ -10,16 +10,23 @@
  */
 
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
+	defaultSessionDir,
+	isPidAlive,
 	readSessionPid,
 	removeSessionPid,
 	sessionPidPath,
 	signalSwap,
 	writeSessionPid,
 } from "./session-pid.ts";
+
+// A pid that cannot correspond to a live process. process.kill(_, 0) throws
+// ESRCH for it, which is exactly the "reaped / impossible" path isPidAlive and
+// the default signal arrow must treat as dead rather than as a live target.
+const DEAD_PID = 2_147_483_647;
 
 const UUID = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa";
 
@@ -104,5 +111,43 @@ describe("signalSwap", () => {
 		});
 		expect(await signalSwap(UUID, () => true, signal, dir)).toBe("stale");
 		expect(await readSessionPid(UUID, dir)).toBeUndefined();
+	});
+
+	it("uses the default liveness check (isPidAlive) when no override is given", async () => {
+		// Exercises the default `alive` param bound to isPidAlive: our own pid is
+		// live, so signalSwap proceeds to the (spied) signal step rather than
+		// treating the owner as stale.
+		const dir = await mkDir();
+		await writeSessionPid(UUID, process.pid, dir);
+		const signal = vi.fn<(pid: number, sig: "SIGHUP") => void>();
+		expect(await signalSwap(UUID, undefined, signal, dir)).toBe("signalled");
+		expect(signal).toHaveBeenCalledWith(process.pid, "SIGHUP");
+	});
+
+	it("uses the default signal (process.kill) when no override is given", async () => {
+		// Force `alive` true but leave the default signal in place, pointed at a pid
+		// that cannot exist. The real process.kill throws ESRCH, which the catch
+		// turns into "stale" + cleanup — proving the default arrow actually calls
+		// process.kill rather than a no-op.
+		const dir = await mkDir();
+		await writeSessionPid(UUID, DEAD_PID, dir);
+		expect(await signalSwap(UUID, () => true, undefined, dir)).toBe("stale");
+		expect(await readSessionPid(UUID, dir)).toBeUndefined();
+	});
+});
+
+describe("isPidAlive", () => {
+	it("returns true for the current process", () => {
+		expect(isPidAlive(process.pid)).toBe(true);
+	});
+
+	it("returns false for a pid that cannot exist (kill throws → caught)", () => {
+		expect(isPidAlive(DEAD_PID)).toBe(false);
+	});
+});
+
+describe("defaultSessionDir", () => {
+	it("resolves to ~/.claude-multiacct/sessions", () => {
+		expect(defaultSessionDir()).toBe(join(homedir(), ".claude-multiacct", "sessions"));
 	});
 });

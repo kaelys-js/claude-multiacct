@@ -18,7 +18,7 @@
  * @module
  */
 
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 export default defineConfig({
 	test: {
@@ -41,6 +41,14 @@ export default defineConfig({
 		// genuinely stuck test hang indefinitely.
 		testTimeout: 10_000,
 		include: ["packages/**/*.test.ts"],
+		// gate-integrity.test.ts is the QA gates' own meta-test: it spawns the real
+		// lint/format/schema/coverage gates against synthetic-failure fixtures, and
+		// the coverage case forks a nested `vitest run --coverage`. That belongs to
+		// the dedicated `qa:gates` script/CI job, not the main suite — running it
+		// here would nest a vitest-inside-vitest coverage pass on every `test` run.
+		// Kept out of the `packages/**/*.test.ts` glob while preserving vitest's
+		// built-in ignores (node_modules, dist, …).
+		exclude: [...configDefaults.exclude, "packages/shared/utils/qa/tests/gate-integrity.test.ts"],
 		coverage: {
 			provider: "v8",
 			reporter: ["text", "text-summary", "json-summary", "lcov", "html"],
@@ -54,8 +62,25 @@ export default defineConfig({
 			// gate would otherwise stop every push against this repo until that
 			// queue clears. Loud in the config so nobody mistakes the exclusion
 			// for "this file doesn't need coverage".
+			//
+			// claude-multiacct's cli/wiring.ts is excluded for a different
+			// reason (2026-07-21): it is the product's composition root — a
+			// single 700-line wiring function that binds the real shim, watcher,
+			// daemon, and extension ports (node:fs, execFile, launchctl) into the
+			// installer graph. A test over it could only assert the wiring SHAPE,
+			// not behaviour; the behaviour lives in the installer modules it
+			// composes, each already covered at >=97%. Excluding the root keeps
+			// the gate honest about the modules that carry logic instead of
+			// inflating it with a mock-the-world assertion. The file's own
+			// docstring already declared it coverage-excluded; this makes the
+			// config agree.
 			include: ["packages/**/src/**/*.ts"],
-			exclude: ["**/*.test.ts", "**/*.d.ts", "packages/products/trp/src/scripts/fix-task.ts"],
+			exclude: [
+				"**/*.test.ts",
+				"**/*.d.ts",
+				"packages/products/trp/src/scripts/fix-task.ts",
+				"packages/products/claude-multiacct/src/cli/wiring.ts",
+			],
 			// perFile: every covered file must clear the floor independently, so a
 			// well-covered file can't average out an untested one.
 			thresholds: {
