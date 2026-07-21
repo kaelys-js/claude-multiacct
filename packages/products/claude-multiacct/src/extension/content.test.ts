@@ -197,6 +197,50 @@ describe("bootContent", () => {
 		handle?.destroy();
 	});
 
+	it("mounts when Claude hydrates the anchor in place (attribute added to existing node)", async () => {
+		// Intent: Claude's SPA hydrates its top-bar model selector by SETTING
+		// data-testid / aria-label on an already-mounted placeholder rather than
+		// by inserting a fresh node. A childList-only observer never fires on
+		// that mutation, so the picker never appears — exactly the observed
+		// prod symptom. Adversarial: revert the observer to
+		// `{ childList: true, subtree: true }` and this test goes red.
+		const container = env.doc.createElement("div");
+		const anchor = env.doc.createElement("button");
+		// Element exists at boot but doesn't yet match any findAnchor selector.
+		container.append(anchor);
+		env.doc.body.append(container);
+		const handle = await bootContent({
+			doc: env.doc,
+			win: env.win,
+			fetchImpl: makeFetch() as any,
+			extensionUrl: (p) => `chrome-extension://x/${p}`,
+		});
+		expect(env.doc.querySelector("[data-cma-picker]")).toBeNull();
+		// SPA hydration: attribute mutation on the existing node.
+		anchor.setAttribute("data-testid", "model-selector");
+		await new Promise<void>((resolve) => {
+			setTimeout(resolve, 0);
+		});
+		expect(env.doc.querySelector("[data-cma-picker]")).not.toBeNull();
+		handle?.destroy();
+	});
+
+	it("sets the [data-cma-content] diagnostic marker on execution", async () => {
+		// Intent: the marker is the operator's single signal that content.js
+		// reached execution — without it a matches / injection failure is
+		// indistinguishable from a picker-render failure. Adversarial: drop
+		// the setAttribute at the top of bootContent and this goes red.
+		expect(env.doc.documentElement.getAttribute("data-cma-content")).toBeNull();
+		const handle = await bootContent({
+			doc: env.doc,
+			win: env.win,
+			fetchImpl: makeFetch() as any,
+			extensionUrl: (p) => `chrome-extension://x/${p}`,
+		});
+		expect(env.doc.documentElement.getAttribute("data-cma-content")).toBe("loaded");
+		handle?.destroy();
+	});
+
 	it("no-ops the re-mount if a picker is already attached to the anchor", async () => {
 		const container = env.doc.createElement("div");
 		const anchor = env.doc.createElement("button");

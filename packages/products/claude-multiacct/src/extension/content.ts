@@ -57,6 +57,17 @@ export type ContentDeps = {
  *   `undefined` when the bridge is unavailable (deployment without daemon).
  */
 export async function bootContent(deps: ContentDeps): Promise<{ destroy(): void } | undefined> {
+	// Inert diagnostic marker — lets an operator confirm from devtools that the
+	// script actually reached execution (vs a matches / injection failure that
+	// looks identical from the picker-missing symptom).
+	deps.doc.documentElement.setAttribute("data-cma-content", "loaded");
+	// eslint-disable-next-line no-console
+	console.log(
+		"[cma-content] executed at",
+		deps.win.location.href,
+		"readyState=",
+		deps.doc.readyState,
+	);
 	const config = await readBridgeConfig(deps.fetchImpl as unknown as FetchLike, deps.extensionUrl);
 	if (config === undefined) {
 		return undefined;
@@ -132,7 +143,19 @@ export async function bootContent(deps: ContentDeps): Promise<{ destroy(): void 
 		tearDown();
 		mountAt(anchor);
 	});
-	observer.observe(deps.doc.body, { childList: true, subtree: true });
+	// `attributes` on the observer is load-bearing: Claude's top-bar hydrates
+	// its model-selector attributes onto an already-mounted node rather than
+	// swapping the node itself, so a childList-only observer never re-fires
+	// and the picker stays absent (Rule 12: silent no-mount is the exact
+	// failure this guards against). Filter to the three attributes findAnchor
+	// keys off so an active SPA doesn't wake the callback on every unrelated
+	// aria-toggle.
+	observer.observe(deps.doc.body, {
+		childList: true,
+		subtree: true,
+		attributes: true,
+		attributeFilter: ["data-testid", "aria-label", "role"],
+	});
 
 	// Initial pass in case the anchor already exists at boot.
 	const anchor = findAnchor(deps.doc);
