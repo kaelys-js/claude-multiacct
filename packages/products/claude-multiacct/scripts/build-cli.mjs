@@ -34,25 +34,37 @@ const outfile = resolve(pkgRoot, "dist/cma.js");
 const entryContents = `
 import { PACKAGE_VERSION } from "./src/index.ts";
 import { dispatchCli } from "./src/cli/dispatch.ts";
+import { makeRealInstallPorts, makeRealUninstallPorts, makeRealLaunchPorts, makeRealMigratePorts, makeRealInstallerStatusPort } from "./src/cli/wiring.ts";
 
 if (process.env.CMA_CLI_SELFTEST === "1") {
 	process.stdout.write(\`cma-cli selftest OK \${PACKAGE_VERSION}\\n\`);
 	process.exit(0);
 }
 
+const logger = {
+	log: (m) => { process.stdout.write(m + "\\n"); },
+	warn: (m) => { process.stderr.write(m + "\\n"); },
+	error: (m) => { process.stderr.write(m + "\\n"); },
+};
+
 const io = {
-	logger: {
-		log: (m) => { process.stdout.write(m + "\\n"); },
-		warn: (m) => { process.stderr.write(m + "\\n"); },
-		error: (m) => { process.stderr.write(m + "\\n"); },
-	},
+	logger,
 	env: process.env,
 	stdinIsTty: process.stdin.isTTY === true,
 	makeCliPorts: async () => {
 		throw new Error(
-			"cma account <sub>: real port wiring (Keychain token store, verifyToken pipeline) lands in PR6b. This PR6a build ships init/status/doctor and read-only helpers only.",
+			"cma account <sub>: real port wiring (Keychain token store, verifyToken pipeline) lands in a later PR.",
 		);
 	},
+	makeInstallPorts: () => makeRealInstallPorts({ logger, env: process.env }),
+	makeUninstallPorts: () => makeRealUninstallPorts({ logger, env: process.env }),
+	makeLaunchPorts: () => makeRealLaunchPorts({ logger }),
+	makeMigratePorts: () => makeRealMigratePorts({ logger }),
+	// Bug 7 (PR6b live retry): real per-subsystem installer status for
+	// cma status / cma doctor. Was a placeholder string before this PR
+	// landed; wired now so operators see live shim/watcher/daemon/
+	// extension state instead of 'see PR6b for installer status wiring'.
+	makeInstallerStatusPort: () => makeRealInstallerStatusPort(),
 };
 
 const code = await dispatchCli(process.argv.slice(2), io);

@@ -29,6 +29,7 @@ import {
 	FLAG_ENABLED_VALUE,
 	FLAG_ENV_VAR,
 	install,
+	resolveShimSourcePathFrom,
 	silentInstallerLogger,
 	status,
 	uninstall,
@@ -332,6 +333,30 @@ describe("install — default shim source (bundled dist/shim.js resolution)", ()
 		expect(bundledPath).toMatch(/packages\/products\/claude-multiacct\/dist\/shim\.js$/u);
 	});
 
+	// Adversarial pin against Bug 1: the ORIGINAL code used
+	// `new URL("../../dist/shim.js", import.meta.url)`. From the bundled
+	// `dist/cma.js` context that resolved to `packages/products/dist/shim.js`
+	// (one level too high), so every real install would fail with "shim not
+	// found" — silently unless the operator was watching the log.
+	//
+	// The fix is a resolver that treats the shim as a SIBLING of the entry
+	// when the entry lives in a dir named `dist/`, and only falls back to
+	// the up-two-levels form when the caller is in src. These two cases pin
+	// the sibling-in-dist behavior; if the fix is reverted to the old form,
+	// the "dist context" case flips red (it would resolve to /pkg/dist/shim.js
+	// with the OLD form starting from /pkg/dist/cma.js — wait, actually the
+	// old form from /pkg/dist/cma.js would go up two to / and give
+	// /dist/shim.js — either way NOT the expected /pkg/dist/shim.js sibling).
+	it("resolveShimSourcePathFrom: from a bundled dist/cma.js URL → sibling dist/shim.js (Bug 1 adversarial: revert to '../../dist/shim.js' → red)", () => {
+		const resolved = resolveShimSourcePathFrom("file:///opt/pkg/dist/cma.js");
+		expect(resolved).toBe("/opt/pkg/dist/shim.js");
+	});
+
+	it("resolveShimSourcePathFrom: from a src/cli-shim/installer.ts URL → up-two-levels dist/shim.js (dev/test context)", () => {
+		const resolved = resolveShimSourcePathFrom("file:///opt/pkg/src/cli-shim/installer.ts");
+		expect(resolved).toBe("/opt/pkg/dist/shim.js");
+	});
+
 	it("install with NO shimSourcePath and default file present → copies the bundled shim", async () => {
 		const ctx = await makeCtx(true);
 		await withDefaultStub("#!/usr/bin/env node\nconsole.log('bundled-stub')\n", async () => {
@@ -352,6 +377,46 @@ describe("install — default shim source (bundled dist/shim.js resolution)", ()
 			const files = await readdir(ctx.cliDir);
 			expect(files.toSorted()).toStrictEqual([".verified-1.2.3", "claude"].toSorted());
 		});
+	});
+});
+
+describe("install / uninstall — CLI-authoritative {flag} param (PR6b contract)", () => {
+	// Intent: PR6b's `cma install` needs to pass its own truth value
+	// (isEnabled({env, config})) so config.enabled=true works without
+	// requiring the env var in the caller's shell. Adversarial: drop
+	// the flag branch and either of these tests goes red — flag:true
+	// would fall through to env (which is empty) and skip, and flag:false
+	// with the env ON would proceed instead of skipping.
+	it("install with {flag: true} runs even with the env var UNSET", async () => {
+		const ctx = await makeCtx(false); // env is empty
+		const result = await install(
+			ctx.cliDir,
+			{ shimSourcePath: ctx.shimSource, flag: true },
+			ctx.deps,
+		);
+		expect(result).toMatchObject({ skipped: false, installed: true });
+	});
+	it("install with {flag: false} SKIPS even with the env var SET", async () => {
+		const ctx = await makeCtx(true); // env has FLAG=1
+		const before = await readdir(ctx.cliDir);
+		const result = await install(
+			ctx.cliDir,
+			{ shimSourcePath: ctx.shimSource, flag: false },
+			ctx.deps,
+		);
+		expect(result).toMatchObject({ skipped: true });
+		expect(await readdir(ctx.cliDir)).toStrictEqual(before);
+	});
+	it("uninstall with {flag: true} runs even with env UNSET; {flag:false} skips with env SET", async () => {
+		const ctx = await makeCtx(true);
+		await install(ctx.cliDir, { shimSourcePath: ctx.shimSource, overrideFlag: true }, ctx.deps);
+		const envOff = { ...ctx.deps, env: {} };
+		const ok = await uninstall(ctx.cliDir, { flag: true }, envOff);
+		expect(ok).toMatchObject({ skipped: false, uninstalled: true });
+		// re-install then try flag:false to prove precedence
+		await install(ctx.cliDir, { shimSourcePath: ctx.shimSource, overrideFlag: true }, ctx.deps);
+		const skipped = await uninstall(ctx.cliDir, { flag: false }, ctx.deps);
+		expect(skipped).toMatchObject({ skipped: true });
 	});
 });
 

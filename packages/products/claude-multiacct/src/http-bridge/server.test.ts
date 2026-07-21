@@ -29,6 +29,23 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { defaultBridgeJsonPath, defaultIsPidAlive, start } from "./server.ts";
 
+function findBridgeLog(spy: { mock: { calls: unknown[][] } }): string | undefined {
+	for (const call of spy.mock.calls) {
+		const [first] = call;
+		if (typeof first === "string" && first.startsWith("[bridge] ")) {
+			return first;
+		}
+	}
+	return undefined;
+}
+
+function bridgeLogsContain(spy: { mock: { calls: unknown[][] } }, needle: string): boolean {
+	return spy.mock.calls.some((call) => {
+		const [first] = call;
+		return typeof first === "string" && first.startsWith("[bridge] ") && first.includes(needle);
+	});
+}
+
 async function scratchPath(): Promise<string> {
 	const dir = await mkdtemp(join(tmpdir(), "cma-server-"));
 	return join(dir, "bridge.json");
@@ -372,5 +389,81 @@ describe("start", () => {
 			headers: { origin: "https://claude.ai", "x-cma-bridge-secret": s.secret },
 		});
 		expect(res.status).toBe(404);
+	});
+
+	// Intent: without a per-request log line, PR6b's daemon has zero
+	// observability into whether the content_script is actually hitting
+	// /accounts. These tests pin that every request emits a single
+	// greppable `[bridge] <METHOD> <path> origin=<...> → <status>` line
+	// so `tail -f daemon.out.log | grep '\[bridge\]'` shows flow.
+	// Adversarial: remove the `res.on("finish", ...)` block in server.ts →
+	// all three assertions RED because no such console.log call is ever made.
+	describe("per-request access log (observability)", () => {
+		it("GET /health → logs `[bridge] GET /health ... → 200`", async () => {
+			const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+			try {
+				const path = await scratchPath();
+				const s = await start({ ...noopDeps, bridgeJsonPath: path });
+				alive.push(s);
+				const res = await fetch(`http://127.0.0.1:${String(s.port)}/health`);
+				expect(res.status).toBe(200);
+				// `res.on("finish")` fires from `res.end()` synchronously in
+				// practice, but yield a tick for slow CI.
+				await new Promise((resolve) => {
+					setImmediate(resolve);
+				});
+				const line = findBridgeLog(spy);
+				expect(line).toBeDefined();
+				expect(line).toMatch(/\[bridge\] GET \/health .*→ 200/u);
+			} finally {
+				spy.mockRestore();
+			}
+		});
+
+		it("GET /accounts with foreign Origin → logs `→ 403`", async () => {
+			const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+			try {
+				const path = await scratchPath();
+				const s = await start({ ...noopDeps, bridgeJsonPath: path });
+				alive.push(s);
+				const res = await fetch(`http://127.0.0.1:${String(s.port)}/accounts`, {
+					headers: { origin: "https://evil.example.com", "x-cma-bridge-secret": s.secret },
+				});
+				expect(res.status).toBe(403);
+				await new Promise((resolve) => {
+					setImmediate(resolve);
+				});
+				const line = findBridgeLog(spy);
+				expect(line).toBeDefined();
+				expect(line).toMatch(
+					/\[bridge\] GET \/accounts .*origin=https:\/\/evil\.example\.com.*→ 403/u,
+				);
+			} finally {
+				spy.mockRestore();
+			}
+		});
+
+		it("GET /accounts with allowed Origin + secret → logs `→ 200` and never leaks the secret", async () => {
+			const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+			try {
+				const path = await scratchPath();
+				const s = await start({ ...noopDeps, bridgeJsonPath: path });
+				alive.push(s);
+				const res = await fetch(`http://127.0.0.1:${String(s.port)}/accounts`, {
+					headers: { origin: "https://claude.ai", "x-cma-bridge-secret": s.secret },
+				});
+				expect(res.status).toBe(200);
+				await new Promise((resolve) => {
+					setImmediate(resolve);
+				});
+				const line = findBridgeLog(spy);
+				expect(line).toBeDefined();
+				expect(line).toMatch(/\[bridge\] GET \/accounts .*origin=https:\/\/claude\.ai.*→ 200/u);
+				// Privacy: never log the secret header value.
+				expect(bridgeLogsContain(spy, s.secret)).toBe(false);
+			} finally {
+				spy.mockRestore();
+			}
+		});
 	});
 });

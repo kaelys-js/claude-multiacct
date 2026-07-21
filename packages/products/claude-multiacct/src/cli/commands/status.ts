@@ -29,6 +29,45 @@ import type { CmaConfig } from "../config-store.ts";
 export type ExecFileResult = { stdout: string; stderr: string; code: number };
 export type ExecFileFn = (file: string, args: readonly string[]) => Promise<ExecFileResult>;
 
+/**
+ * Per-subsystem installer status collected by `cma status`. Each field is
+ * a self-classified summary — the doctor uses `ok`/`warn`/`error` markers
+ * as-is. Bug 7 in PR6b live retry: this section used to hold a placeholder
+ * ("see PR6b for installer status wiring"); the real installers ship in
+ * PR2/PR3/PR5a/PR5b and their `status()` fns are what we invoke here.
+ */
+export type InstallerStatusReport = {
+	shim: {
+		/** Per-CLI-dir shim install state (one entry per detected version). */
+		perCliDir: ReadonlyArray<{
+			cliDir: string;
+			installed: boolean;
+			hasShim: boolean;
+			hasReal: boolean;
+		}>;
+	};
+	watcher: {
+		plistPath: string;
+		plistExists: boolean;
+		loaded: boolean;
+	};
+	daemon: {
+		plistPath: string;
+		plistExists: boolean;
+		loaded: boolean;
+		bridgeJsonExists: boolean;
+		bridgeJsonPidAlive: boolean | undefined;
+	};
+	extension: {
+		installed: boolean;
+		files: readonly string[];
+		symlinkValid: boolean;
+	};
+};
+
+/** Injected port that returns real installer status. See `InstallerStatusReport`. */
+export type InstallerStatusFn = () => Promise<InstallerStatusReport>;
+
 /** Injected ports every read-only field takes. */
 export type StatusPorts = {
 	configPath: string;
@@ -37,6 +76,8 @@ export type StatusPorts = {
 	registry: AccountRegistry | undefined;
 	appPath: string;
 	execFile: ExecFileFn;
+	/** Bug 7 (PR6b live retry): required. Was a placeholder note; wired now. */
+	installerStatus: InstallerStatusFn;
 };
 
 /** Structured section carrying every field the human printer renders. */
@@ -62,9 +103,7 @@ export type StatusReport = {
 		injectedMarkers: number;
 		notes: readonly string[];
 	};
-	installer: {
-		note: string;
-	};
+	installer: InstallerStatusReport;
 };
 
 /**
@@ -117,7 +156,12 @@ export async function collectStatus(ports: StatusPorts): Promise<StatusReport> {
 	// tolerated: on machines without Claude installed, both probes exit
 	// non-zero; the resulting undefined shows up as a warning in doctor.
 	const notes: string[] = [];
-	const codesign = await ports.execFile("codesign", ["-dv", ports.appPath]);
+	// `-dvv` (NOT `-dv`) — `-dv` prints Executable/Identifier/Format/… but no
+	// `Authority=` lines. The Authority chain only appears at verbosity level
+	// 2+. This was Bug 6 in the PR6b live retry: shell showed the info, but
+	// the doctor reported `could not read code signature` because the parser
+	// looked for a line codesign never emits at `-dv`.
+	const codesign = await ports.execFile("codesign", ["-dvv", ports.appPath]);
 	const authority = extractAuthority(codesign.stderr) ?? extractAuthority(codesign.stdout);
 	if (codesign.code !== 0 && authority === undefined) {
 		notes.push(`codesign probe returned ${String(codesign.code)}: ${codesign.stderr.trim()}`);
@@ -137,9 +181,12 @@ export async function collectStatus(ports: StatusPorts): Promise<StatusReport> {
 		notes,
 	};
 
-	const installerSection: StatusReport["installer"] = {
-		note: "installer/agent status: see PR6b for installer status wiring",
-	};
+	// Real installer statuses from PR2 (shim) + PR3 (watcher) + PR5a
+	// (daemon) + PR5b (extension). Bug 7 (PR6b live retry) fix: was a
+	// placeholder string; the installers' status() fns are what this
+	// section carries. dispatch.ts wires the concrete port; tests inject
+	// a fake so every subsystem is invocation-covered.
+	const installerSection: StatusReport["installer"] = await ports.installerStatus();
 
 	return {
 		config: configSection,
@@ -185,8 +232,52 @@ export function renderStatus(report: StatusReport): string {
 		`  injected markers:   ${String(app.injectedMarkers)}`,
 		...app.notes.map((note) => `  ! ${note}`),
 	];
-	const installerLines = ["", "=== Installer ===", `  ${report.installer.note}`];
-	return [...configLines, ...registryLines, ...claudeLines, ...installerLines].join("\n");
+	const inst = report.installer;
+	const shimLines = [
+		"",
+		"=== Installer: shim (PR2) ===",
+		`  cli dirs: ${String(inst.shim.perCliDir.length)}`,
+		...inst.shim.perCliDir.map(
+			(d) =>
+				`   - ${d.cliDir}: installed=${String(d.installed)} hasShim=${String(d.hasShim)} hasReal=${String(d.hasReal)}`,
+		),
+	];
+	const watcherLines = [
+		"",
+		"=== Installer: watcher (PR3) ===",
+		`  plistPath:    ${inst.watcher.plistPath}`,
+		`  plistExists:  ${String(inst.watcher.plistExists)}`,
+		`  loaded:       ${String(inst.watcher.loaded)}`,
+	];
+	const daemonLines = [
+		"",
+		"=== Installer: bridge daemon (PR5a) ===",
+		`  plistPath:         ${inst.daemon.plistPath}`,
+		`  plistExists:       ${String(inst.daemon.plistExists)}`,
+		`  loaded:            ${String(inst.daemon.loaded)}`,
+		`  bridgeJsonExists:  ${String(inst.daemon.bridgeJsonExists)}`,
+		`  bridgeJsonPidAlive: ${
+			inst.daemon.bridgeJsonPidAlive === undefined
+				? "(unknown)"
+				: String(inst.daemon.bridgeJsonPidAlive)
+		}`,
+	];
+	const extensionLines = [
+		"",
+		"=== Installer: extension (PR5b) ===",
+		`  installed:     ${String(inst.extension.installed)}`,
+		`  symlinkValid:  ${String(inst.extension.symlinkValid)}`,
+		...inst.extension.files.map((f) => `   - ${f}`),
+	];
+	return [
+		...configLines,
+		...registryLines,
+		...claudeLines,
+		...shimLines,
+		...watcherLines,
+		...daemonLines,
+		...extensionLines,
+	].join("\n");
 }
 
 /**

@@ -266,6 +266,34 @@ describe("installer: install with flag on", () => {
 		expect(log).toHaveBeenCalledWith(expect.stringContaining("snapshot"));
 	});
 
+	it("heals a BROKEN bridge.json symlink (Bug 8 regression) — a rollback left dangling → install succeeds, symlink retargeted", async () => {
+		// Bug 8: a prior rollback left a symlink at <installDir>/bridge.json whose
+		// target no longer exists. access/stat follow symlinks and report ENOENT
+		// for broken links, so the rm-before-symlink probe was skipped and the
+		// next install threw EEXIST. Fixed by probing with lstat. Adversarial:
+		// revert to access-based probe → this test throws EEXIST → red.
+		const { distDir, installDir, bridge, backup } = await mkFixture();
+		const fs = await realFs();
+		const p = await import("node:fs/promises");
+		await p.mkdir(installDir, { recursive: true });
+		await p.symlink(
+			join(installDir, "does-not-exist-bridge.json"),
+			join(installDir, "bridge.json"),
+		);
+		const result = await install({
+			distDir,
+			installDir,
+			bridgeJsonPath: bridge,
+			fs,
+			flag: true,
+			backupDir: backup,
+		});
+		expect(result).toMatchObject({ installed: true });
+		const st = await p.lstat(join(installDir, "bridge.json"));
+		expect(st.isSymbolicLink()).toBe(true);
+		expect(await p.readlink(join(installDir, "bridge.json"))).toBe(bridge);
+	});
+
 	it("heals a missing bridge.json symlink on a byte-identical rerun", async () => {
 		const { distDir, installDir, bridge, backup } = await mkFixture();
 		const fs = await realFs();
@@ -428,5 +456,111 @@ describe("installer: hash utility branches", () => {
 		const a = createHash("sha256").update("x").digest("hex");
 		const b = createHash("sha256").update("y").digest("hex");
 		expect(a).not.toBe(b);
+	});
+});
+
+describe("install / uninstall — flag param + env-var fallback (PR6b)", () => {
+	// Making `flag` optional was the PR6b shape change. Existing callers that
+	// pass `flag: true|false` explicitly keep the exact prior semantics; the
+	// new omitted-arg path resolves through CLAUDE_MULTIACCT_ENABLE_SHIM.
+	// Adversarial: drop the env-fallback branch → the "no flag + env=1 runs"
+	// test flips red because it would fall back to false and skip.
+	it("install with {flag: true} runs (existing shape)", async () => {
+		const fx = await mkFixture();
+		const fs = await realFs();
+		const result = await install({
+			installDir: fx.installDir,
+			distDir: fx.distDir,
+			bridgeJsonPath: fx.bridge,
+			fs,
+			flag: true,
+			backupDir: fx.backup,
+		});
+		expect(result).toMatchObject({ installed: true });
+	});
+	it("install with {flag: false} SKIPS with zero writes (existing shape)", async () => {
+		const result = await install({
+			installDir: "/never",
+			distDir: "/never",
+			bridgeJsonPath: "/never",
+			fs: throwing,
+			flag: false,
+		});
+		expect(result).toStrictEqual({ skipped: true, reason: "flag-off" });
+	});
+	it("install without {flag} + env FLAG=1 → runs (env-var fallback branch)", async () => {
+		const fx = await mkFixture();
+		const fs = await realFs();
+		const result = await install({
+			installDir: fx.installDir,
+			distDir: fx.distDir,
+			bridgeJsonPath: fx.bridge,
+			fs,
+			backupDir: fx.backup,
+			env: { CLAUDE_MULTIACCT_ENABLE_SHIM: "1" },
+		});
+		expect(result).toMatchObject({ installed: true });
+	});
+	it("install without {flag} + env unset → skipped, zero writes (adversarial: drop fallback → red)", async () => {
+		const result = await install({
+			installDir: "/never",
+			distDir: "/never",
+			bridgeJsonPath: "/never",
+			fs: throwing,
+			env: {},
+		});
+		expect(result).toStrictEqual({ skipped: true, reason: "flag-off" });
+	});
+	it("install without {flag} and without {env} → falls back to process.env (default arg branch)", async () => {
+		// No env passed → `env ?? process.env`. In CI process.env has no FLAG,
+		// so this resolves to skipped. Exercises the `??` fallback path so it
+		// counts against coverage.
+		const prev = process.env.CLAUDE_MULTIACCT_ENABLE_SHIM;
+		delete process.env.CLAUDE_MULTIACCT_ENABLE_SHIM;
+		try {
+			const r = await install({
+				installDir: "/never",
+				distDir: "/never",
+				bridgeJsonPath: "/never",
+				fs: throwing,
+			});
+			expect(r).toStrictEqual({ skipped: true, reason: "flag-off" });
+		} finally {
+			// eslint-disable-next-line vitest/no-conditional-in-test -- restore prior env only if it was set
+			if (prev !== undefined) {
+				process.env.CLAUDE_MULTIACCT_ENABLE_SHIM = prev;
+			}
+		}
+	});
+
+	it("uninstall respects same precedence: {flag:true} runs, env-fallback works when flag omitted", async () => {
+		const fx = await mkFixture();
+		const fs = await realFs();
+		await install({
+			installDir: fx.installDir,
+			distDir: fx.distDir,
+			bridgeJsonPath: fx.bridge,
+			fs,
+			flag: true,
+			backupDir: fx.backup,
+		});
+		const r1 = await uninstall({ installDir: fx.installDir, fs, flag: true });
+		assertRemoved(r1);
+		expect(r1.files.length).toBeGreaterThan(0);
+		// re-install then uninstall via env fallback
+		await install({
+			installDir: fx.installDir,
+			distDir: fx.distDir,
+			bridgeJsonPath: fx.bridge,
+			fs,
+			flag: true,
+			backupDir: fx.backup,
+		});
+		const r2 = await uninstall({
+			installDir: fx.installDir,
+			fs,
+			env: { CLAUDE_MULTIACCT_ENABLE_SHIM: "1" },
+		});
+		assertRemoved(r2);
 	});
 });

@@ -49,7 +49,7 @@
 import { execFile } from "node:child_process";
 import { chmod, copyFile, mkdir, rename, stat, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
@@ -90,6 +90,16 @@ export type MutateOptions = {
 	force?: boolean;
 	/** Bypass the feature-flag gate. Test-only knob; do not set from prod. */
 	overrideFlag?: boolean;
+	/**
+	 * Authoritative enable flag from the CLI's `isEnabled({env, config})`
+	 * decision. When set, this OVERRIDES the env-var/overrideFlag path:
+	 *   - `flag: true` → proceed with the mutation.
+	 *   - `flag: false` → skip with reason (behaves exactly like flag-off env).
+	 *   - `flag: undefined` (default) → legacy env-var + overrideFlag path.
+	 * This lets `cma install` propagate `config.enabled` without requiring
+	 * the env var to be set in the calling shell.
+	 */
+	flag?: boolean;
 };
 
 /** Skipped-because-flag-off result — every mutating op can return this. */
@@ -117,6 +127,44 @@ function flagOn(env: Record<string, string | undefined>): boolean {
 }
 
 /**
+ * Decide whether a mutating op is gated. Returns `undefined` when it may
+ * proceed, or a `SkippedResult` shape when it must skip.
+ *
+ * Priority (see `MutateOptions.flag` docstring):
+ *   1. `opts.flag !== undefined` → the CLI's authoritative decision wins.
+ *   2. otherwise → legacy `overrideFlag || env` gate.
+ *
+ * @param {"install" | "uninstall"} verb - Verb used in the reason string.
+ * @param {MutateOptions} opts - Caller's options.
+ * @param {Record<string,string|undefined>} env - Env dict (already resolved).
+ * @param {string} cliDir - Target dir, for the reason string.
+ * @returns {SkippedResult | undefined} Skip decision, or undefined to proceed.
+ */
+function resolveGate(
+	verb: "install" | "uninstall",
+	opts: MutateOptions,
+	env: Record<string, string | undefined>,
+	cliDir: string,
+): SkippedResult | undefined {
+	if (opts.flag === true) {
+		return undefined;
+	}
+	if (opts.flag === false) {
+		return {
+			skipped: true,
+			reason: `${verb}: {flag:false} from CLI; refusing to modify ${cliDir}`,
+		};
+	}
+	if (opts.overrideFlag === true || flagOn(env)) {
+		return undefined;
+	}
+	return {
+		skipped: true,
+		reason: `${verb}: ${FLAG_ENV_VAR} is not "${FLAG_ENABLED_VALUE}"; refusing to modify ${cliDir}`,
+	};
+}
+
+/**
  * Default snapshot root — `~/.claude-multiacct-backups/`. Exported for tests.
  *
  * @returns {string} Absolute path to the default snapshot root.
@@ -126,18 +174,42 @@ export function defaultBackupRoot(): string {
 }
 
 /**
+ * Resolve the bundled shim path given the URL of the module doing the
+ * resolving. Two call contexts, one function:
+ *
+ *   - **Bundled** — from `dist/cma.js`, `shim.js` sits alongside as a sibling
+ *     in the same `dist/` dir (the build emits both there). Return the sibling.
+ *   - **Src / dev / tests** — from `src/cli-shim/installer.ts`, walk up two
+ *     levels to the package root and into `dist/shim.js`.
+ *
+ * The original single-literal form (`new URL("../../dist/shim.js", …)`) worked
+ * from src but resolved to `packages/products/dist/shim.js` from `dist/cma.js`
+ * (one level too high), silently breaking every prod install. Splitting on
+ * the caller's parent-dir basename keeps both contexts honest and makes the
+ * rule directly testable with a synthesised URL.
+ *
+ * @param {string} callerUrl - `import.meta.url` of the caller.
+ * @returns {string} Absolute filesystem path to the bundled shim.
+ */
+export function resolveShimSourcePathFrom(callerUrl: string): string {
+	const callerPath = fileURLToPath(callerUrl);
+	const callerDir = dirname(callerPath);
+	if (basename(callerDir) === "dist") {
+		return join(callerDir, "shim.js");
+	}
+	return fileURLToPath(new URL("../../dist/shim.js", callerUrl));
+}
+
+/**
  * Absolute path to the bundled shim (`dist/shim.js`) shipped alongside this
  * package. `install()` falls back to this when the caller omits
  * `shimSourcePath`, so a downstream consumer never needs to know where the
  * built artifact lives. Exported so tests can pin the resolution rule.
  *
- * The URL literal is package-relative: from `src/cli-shim/installer.ts` up two
- * levels to the package root, then into `dist/`.
- *
  * @returns {string} Absolute filesystem path to `dist/shim.js`.
  */
 export function defaultShimSourcePath(): string {
-	return fileURLToPath(new URL("../../dist/shim.js", import.meta.url));
+	return resolveShimSourcePathFrom(import.meta.url);
 }
 
 /**
@@ -235,10 +307,10 @@ export async function install(
 ): Promise<InstallResult> {
 	const { env, log, exec, backupRoot } = resolveDeps(deps);
 
-	if (!opts.overrideFlag && !flagOn(env)) {
-		const reason = `install: ${FLAG_ENV_VAR} is not "${FLAG_ENABLED_VALUE}"; refusing to modify ${cliDir} (Rule 12 loud no-op)`;
-		log.warn(reason);
-		return { skipped: true, reason };
+	const gate = resolveGate("install", opts, env, cliDir);
+	if (gate !== undefined) {
+		log.warn(gate.reason);
+		return gate;
 	}
 
 	const shimSourcePath = opts.shimSourcePath ?? defaultShimSourcePath();
@@ -304,10 +376,10 @@ export async function uninstall(
 ): Promise<UninstallResult> {
 	const { env, log, backupRoot } = resolveDeps(deps);
 
-	if (!opts.overrideFlag && !flagOn(env)) {
-		const reason = `uninstall: ${FLAG_ENV_VAR} is not "${FLAG_ENABLED_VALUE}"; refusing to modify ${cliDir}`;
-		log.warn(reason);
-		return { skipped: true, reason };
+	const gate = resolveGate("uninstall", opts, env, cliDir);
+	if (gate !== undefined) {
+		log.warn(gate.reason);
+		return gate;
 	}
 
 	const claudePath = join(cliDir, "claude");

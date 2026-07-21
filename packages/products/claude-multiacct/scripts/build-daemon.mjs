@@ -42,6 +42,26 @@ if (process.env.CMA_DAEMON_SELFTEST === "1") {
 	process.exit(0);
 }
 
+// Bug 5 (PR6b live retry): the daemon hung silently under launchd with
+// 6 FDs and 0 network sockets. server.listen() never fired, nothing
+// printed. Two guards land here:
+//
+//   1. Stderr breadcrumbs before each boot step land in
+//      ~/.claude-multiacct/logs/daemon.err.log so the next failure has a
+//      diagnosable trace instead of a silent hang.
+//   2. try/catch wraps the whole boot: any throw is written to stderr +
+//      process.exit(1). Without this a rejected top-level await under
+//      launchd (KeepAlive=true) just respawns silently.
+//
+// The keychain-touching code (SecurityCliTokenStore.get) MUST stay lazy —
+// only invoked from a /verify request, never at boot. Under a non-GUI
+// launchd context the \`security\` CLI can block on an invisible auth
+// prompt, which is the leading hypothesis for the observed hang. The
+// construction below only stores the exec fn.
+function bootLog(step) {
+	try { process.stderr.write(\`[daemon-boot] step=\${step}\\n\`); } catch {}
+}
+
 const execFileAsync = promisify(execFile);
 
 // Bind a verify-shaped exec around child_process.execFile. Same shape as
@@ -65,9 +85,12 @@ const verifyExec = async (file, args, options) => {
 	}
 };
 
+bootLog("imports-loaded");
 const claudeRealPath = process.env.CMA_CLAUDE_REAL_PATH
 	?? "/Applications/Claude.app/Contents/Resources/app.asar.unpacked/claude-code/claude/claude.app/Contents/MacOS/claude.real";
 
+bootLog("construct-stores");
+// Neither constructor touches the keychain — see the block comment above.
 const tokenStore = new SecurityCliTokenStore();
 const choiceStore = new FsChoiceStore();
 
@@ -94,15 +117,27 @@ const listAccounts = async () => {
 
 const flag = flagOn(process.env);
 
-const { port } = await start({
-	listAccounts,
-	verifyAccount,
-	choiceStore,
-	flagOn: flag,
-	version: PACKAGE_VERSION,
-});
-
-process.stdout.write(JSON.stringify({ ready: true, port, pid: process.pid }) + "\\n");
+try {
+	bootLog("start-listen");
+	const { port } = await start({
+		listAccounts,
+		verifyAccount,
+		choiceStore,
+		flagOn: flag,
+		version: PACKAGE_VERSION,
+	});
+	bootLog("listening");
+	process.stdout.write(JSON.stringify({ ready: true, port, pid: process.pid }) + "\\n");
+	bootLog("ready");
+} catch (error) {
+	// Rule 12: fail loud. Under launchd KeepAlive=true a silent hang or
+	// unhandled rejection would just respawn forever; exiting non-zero with
+	// a stderr line lands in daemon.err.log and eventually trips launchd's
+	// throttling instead.
+	const detail = error && error.stack ? error.stack : String(error);
+	try { process.stderr.write(\`[daemon-boot] fatal: \${detail}\\n\`); } catch {}
+	process.exit(1);
+}
 `;
 
 mkdirSync(dirname(outfile), { recursive: true });

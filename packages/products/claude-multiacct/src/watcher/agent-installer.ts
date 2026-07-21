@@ -117,6 +117,13 @@ type BaseOpts = {
 	backups?: string;
 	env?: Record<string, string | undefined>;
 	overrideFlag?: boolean;
+	/**
+	 * Authoritative CLI enable flag (`isEnabled({env, config})`).
+	 * `true` → proceed; `false` → skip (like flag-off env); `undefined` →
+	 * fall back to `overrideFlag` / env-var. See `cli-shim/installer.ts`
+	 * MutateOptions for the shared contract.
+	 */
+	flag?: boolean;
 	log?: (m: string) => void;
 };
 
@@ -182,6 +189,39 @@ function flagOn(env: Record<string, string | undefined>): boolean {
 	return env[FLAG_ENV_VAR] === FLAG_ENABLED_VALUE;
 }
 
+/**
+ * Shared gate resolver. See `cli-shim/installer.ts` resolveGate for the
+ * precedence (`opts.flag` beats overrideFlag+env). Returns `undefined` to
+ * proceed, or a `{skipped:true, reason}` shape to short-circuit.
+ *
+ * @param {"installAgent" | "uninstallAgent"} verb - Verb for reason string.
+ * @param {BaseOpts} opts - Caller opts.
+ * @param {Record<string,string|undefined>} env - Env dict.
+ * @returns {{skipped:true, reason:string} | undefined} Skip decision.
+ */
+function resolveAgentGate(
+	verb: "installAgent" | "uninstallAgent",
+	opts: BaseOpts,
+	env: Record<string, string | undefined>,
+): { skipped: true; reason: string } | undefined {
+	if (opts.flag === true) {
+		return undefined;
+	}
+	if (opts.flag === false) {
+		return {
+			skipped: true,
+			reason: `${verb}: {flag:false} from CLI; refusing to modify LaunchAgents`,
+		};
+	}
+	if (opts.overrideFlag === true || flagOn(env)) {
+		return undefined;
+	}
+	return {
+		skipped: true,
+		reason: `${verb}: ${FLAG_ENV_VAR} is not "${FLAG_ENABLED_VALUE}"; refusing to modify LaunchAgents`,
+	};
+}
+
 function isoStamp(): string {
 	return new Date().toISOString().replaceAll(/[:.]/gu, "-");
 }
@@ -206,10 +246,10 @@ function plistPathFor(plistDir: string): string {
 export async function installAgent(opts: InstallAgentOpts): Promise<InstallAgentResult> {
 	const env = opts.env ?? (process.env as Record<string, string | undefined>);
 	const log = opts.log ?? silentLog;
-	if (!opts.overrideFlag && !flagOn(env)) {
-		const reason = `installAgent: ${FLAG_ENV_VAR} is not "${FLAG_ENABLED_VALUE}"; refusing to modify LaunchAgents`;
-		log(reason);
-		return { skipped: true, reason };
+	const gate = resolveAgentGate("installAgent", opts, env);
+	if (gate !== undefined) {
+		log(gate.reason);
+		return gate;
 	}
 	const plistDir = opts.plistDir ?? defaultPlistDir();
 	const backupsRoot = opts.backups ?? defaultBackupsRoot();
@@ -253,10 +293,10 @@ export async function installAgent(opts: InstallAgentOpts): Promise<InstallAgent
 export async function uninstallAgent(opts: UninstallAgentOpts): Promise<UninstallAgentResult> {
 	const env = opts.env ?? (process.env as Record<string, string | undefined>);
 	const log = opts.log ?? silentLog;
-	if (!opts.overrideFlag && !flagOn(env)) {
-		const reason = `uninstallAgent: ${FLAG_ENV_VAR} is not "${FLAG_ENABLED_VALUE}"; refusing to modify LaunchAgents`;
-		log(reason);
-		return { skipped: true, reason };
+	const gate = resolveAgentGate("uninstallAgent", opts, env);
+	if (gate !== undefined) {
+		log(gate.reason);
+		return gate;
 	}
 	const plistDir = opts.plistDir ?? defaultPlistDir();
 	const backupsRoot = opts.backups ?? defaultBackupsRoot();

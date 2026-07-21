@@ -86,15 +86,34 @@ describe("build-cli: bundled dist/cma.js is a runnable node script", () => {
 		expect(result.stdout.trim()).toBe(PACKAGE_VERSION);
 	});
 
-	it("--help → prints usage + names all four wired commands", () => {
+	it("--help → prints usage + names all wired commands (init/account/status/doctor + PR6b)", () => {
 		const result = spawnSync(process.execPath, [outfile, "--help"], { encoding: "utf8" });
-		// Bare --help with no command → dispatcher prints help and exits 1
-		// (usage error — user gave us nothing). Check the payload.
 		expect(result.stdout).toContain("Usage");
 		expect(result.stdout).toContain("init");
 		expect(result.stdout).toContain("account");
 		expect(result.stdout).toContain("status");
 		expect(result.stdout).toContain("doctor");
+		// PR6b names — dropping any of these from help would trip build-cli.mjs.
+		expect(result.stdout).toContain("install");
+		expect(result.stdout).toContain("uninstall");
+		expect(result.stdout).toContain("launch");
+		expect(result.stdout).toContain("migrate");
+	});
+
+	it("install --help → prints top-level help + exit 0", () => {
+		const result = spawnSync(process.execPath, [outfile, "install", "--help"], {
+			encoding: "utf8",
+		});
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain("Usage");
+	});
+
+	it("migrate --help → prints top-level help + exit 0", () => {
+		const result = spawnSync(process.execPath, [outfile, "migrate", "--help"], {
+			encoding: "utf8",
+		});
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain("Usage");
 	});
 
 	it("unknowncmd → exit 1", () => {

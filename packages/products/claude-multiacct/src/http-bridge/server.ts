@@ -185,6 +185,16 @@ function makeRequestHandler(
 		/* c8 ignore next -- req.url is always set by node:http for a real request. */
 		const { pathname } = new URL(req.url ?? "/", "http://loopback");
 
+		// Per-request access log — single greppable line so
+		// `tail -f daemon.out.log | grep '\[bridge\]'` shows request flow.
+		// Never log the secret header or request body (privacy).
+		res.on("finish", () => {
+			// eslint-disable-next-line no-console -- launchd routes stdout to daemon.out.log; access log is the observability channel
+			console.log(
+				`[bridge] ${method} ${pathname} origin=${origin ?? "-"} → ${String(res.statusCode)}`,
+			);
+		});
+
 		if (method === "OPTIONS") {
 			if (origin === undefined || !isAllowedOrigin(origin)) {
 				res.writeHead(403, { "content-type": "application/json" });

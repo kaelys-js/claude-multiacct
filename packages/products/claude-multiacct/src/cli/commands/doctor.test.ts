@@ -11,7 +11,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 /* oxlint-disable vitest/expect-expect */
-import type { ExecFileFn } from "./status.ts";
+import type { ExecFileFn, InstallerStatusFn, InstallerStatusReport } from "./status.ts";
 import { collectDoctor, renderDoctor } from "./doctor.ts";
 import { defaultConfig } from "../config-store.ts";
 
@@ -23,6 +23,20 @@ function makeExec(
 		return { stdout: r.stdout ?? "", stderr: r.stderr ?? "", code: r.code ?? 0 };
 	});
 }
+
+const EMPTY_INSTALLER: InstallerStatusReport = {
+	shim: { perCliDir: [] },
+	watcher: { plistPath: "/w", plistExists: false, loaded: false },
+	daemon: {
+		plistPath: "/d",
+		plistExists: false,
+		loaded: false,
+		bridgeJsonExists: false,
+		bridgeJsonPidAlive: undefined,
+	},
+	extension: { installed: false, files: [], symlinkValid: false },
+};
+const INSTALLER_STUB: InstallerStatusFn = async () => EMPTY_INSTALLER;
 
 const HAPPY_EXEC = makeExec({
 	codesign: { stderr: "Authority=Developer ID Application: Anthropic PBC\n", code: 0 },
@@ -49,6 +63,7 @@ describe("collectDoctor", () => {
 			},
 			appPath: "/Applications/Claude.app",
 			execFile: HAPPY_EXEC,
+			installerStatus: INSTALLER_STUB,
 		});
 		expect(findings.every((f) => f.tier === "ok")).toBe(true);
 	});
@@ -61,6 +76,7 @@ describe("collectDoctor", () => {
 			registry: undefined,
 			appPath: "/Applications/Claude.app",
 			execFile: HAPPY_EXEC,
+			installerStatus: INSTALLER_STUB,
 		});
 		const cfg = findings.find((f) => f.label === "config.json");
 		expect(cfg?.tier).toBe("warn");
@@ -75,6 +91,7 @@ describe("collectDoctor", () => {
 			registry: undefined,
 			appPath: "/Applications/Claude.app",
 			execFile: HAPPY_EXEC,
+			installerStatus: INSTALLER_STUB,
 		});
 		const reg = findings.find((f) => f.label === "registry");
 		expect(reg?.tier).toBe("warn");
@@ -100,6 +117,7 @@ describe("collectDoctor", () => {
 			},
 			appPath: "/Applications/Claude.app",
 			execFile: HAPPY_EXEC,
+			installerStatus: INSTALLER_STUB,
 		});
 		const reg = findings.find((f) => f.label === "registry");
 		expect(reg?.tier).toBe("error");
@@ -117,6 +135,7 @@ describe("collectDoctor", () => {
 				codesign: { stderr: "not found", code: 1 },
 				spctl: { stderr: "not found", code: 1 },
 			}),
+			installerStatus: INSTALLER_STUB,
 		});
 		const cs = findings.find((f) => f.label === "Claude.app codesign");
 		expect(cs?.tier).toBe("error");
@@ -136,6 +155,7 @@ describe("collectDoctor", () => {
 				// returns undefined via the "" fallback path.
 				spctl: { stdout: "", stderr: "", code: 3 },
 			}),
+			installerStatus: INSTALLER_STUB,
 		});
 		const gk = findings.find((f) => f.label === "Claude.app gatekeeper");
 		expect(gk?.tier).toBe("warn");

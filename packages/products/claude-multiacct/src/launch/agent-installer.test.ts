@@ -497,3 +497,83 @@ describe("real port factories", () => {
 		expect(typeof port.print).toBe("function");
 	});
 });
+
+describe("installAgent / uninstallAgent — CLI-authoritative {flag} param (PR6b)", () => {
+	it("installAgent {flag:true} runs with env UNSET", async () => {
+		const fs = makeAgentFs();
+		const lc = makeLaunchctl();
+		const result = await installAgent({
+			launchctl: lc,
+			fs: fs.port,
+			uid,
+			plistDir,
+			backups: backupsRoot,
+			plistBody: body,
+			env: {},
+			flag: true,
+		});
+		expect(result).toMatchObject({ skipped: false, wrote: true });
+	});
+	it("installAgent {flag:false} SKIPS even with env SET (adversarial: drop precedence → red)", async () => {
+		const fs = makeAgentFs();
+		const lc = makeLaunchctl();
+		const result = await installAgent({
+			launchctl: lc,
+			fs: fs.port,
+			uid,
+			plistDir,
+			backups: backupsRoot,
+			plistBody: body,
+			env: flagOnEnv,
+			flag: false,
+		});
+		expect(result).toStrictEqual({
+			skipped: true,
+			reason: expect.stringMatching(/\{flag:false\}/u),
+		});
+		expect(fs.files.size).toBe(0);
+		expect(lc.bootstrap).not.toHaveBeenCalled();
+	});
+	it("uninstallAgent {flag:true} runs, {flag:false} skips regardless of env", async () => {
+		const fs = makeAgentFs();
+		const lc = makeLaunchctl();
+		await installAgent({
+			launchctl: lc,
+			fs: fs.port,
+			uid,
+			plistDir,
+			backups: backupsRoot,
+			plistBody: body,
+			env: flagOnEnv,
+		});
+		const ok = await uninstallAgent({
+			launchctl: lc,
+			fs: fs.port,
+			uid,
+			plistDir,
+			backups: backupsRoot,
+			env: {},
+			flag: true,
+		});
+		expect(ok).toMatchObject({ skipped: false, removed: true });
+		await installAgent({
+			launchctl: lc,
+			fs: fs.port,
+			uid,
+			plistDir,
+			backups: backupsRoot,
+			plistBody: body,
+			env: flagOnEnv,
+		});
+		const skipped = await uninstallAgent({
+			launchctl: lc,
+			fs: fs.port,
+			uid,
+			plistDir,
+			backups: backupsRoot,
+			env: flagOnEnv,
+			flag: false,
+		});
+		expect(skipped).toMatchObject({ skipped: true });
+	});
+});

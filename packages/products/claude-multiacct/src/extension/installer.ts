@@ -22,7 +22,28 @@
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { FLAG_ENABLED_VALUE, FLAG_ENV_VAR } from "../cli-shim/installer.ts";
 import { PACKAGE_VERSION } from "../index.ts";
+
+/**
+ * Resolve the effective enable flag. Mirrors the precedence in
+ * `cli-shim/installer.ts` resolveGate: an explicit `flag` argument
+ * (true or false) always wins; otherwise fall back to the env var.
+ *
+ * @param {boolean | undefined} explicit - Caller-provided flag.
+ * @param {Record<string,string|undefined>} [env] - Env dict override for tests.
+ * @returns {boolean} Effective flag.
+ */
+function resolveFlag(
+	explicit: boolean | undefined,
+	env?: Record<string, string | undefined>,
+): boolean {
+	if (explicit !== undefined) {
+		return explicit;
+	}
+	const source = env ?? (process.env as Record<string, string | undefined>);
+	return source[FLAG_ENV_VAR] === FLAG_ENABLED_VALUE;
+}
 
 /** RDT-anchor extension id — matches electron-devtools-installer's fallback. */
 export const RDT_ANCHOR_ID = "fmkadmapgofadopljbjfkapdkoienihi";
@@ -66,8 +87,15 @@ export type InstallOptions = {
 	distDir: string;
 	bridgeJsonPath: string;
 	fs: InstallerFs;
-	/** Flag value. When false, install/uninstall no-op. */
-	flag: boolean;
+	/**
+	 * Authoritative CLI enable flag. When omitted, falls back to
+	 * `process.env.CLAUDE_MULTIACCT_ENABLE_SHIM === "1"` so existing
+	 * callers keep their behavior. When passed explicitly (true or false)
+	 * it wins over the env-var. Same contract as PR2/PR3/PR5a installers.
+	 */
+	flag?: boolean;
+	/** Env dict override for the `flag` fallback path (tests only). */
+	env?: Record<string, string | undefined>;
 	/** Backup root (defaults to `~/.claude-multiacct-backups/<ts>/extension`). */
 	backupDir?: string;
 	log?: (msg: string) => void;
@@ -106,7 +134,7 @@ async function exists(fs: InstallerFs, path: string): Promise<boolean> {
  *   or already-installed.
  */
 export async function install(opts: InstallOptions): Promise<InstallResult> {
-	if (!opts.flag) {
+	if (!resolveFlag(opts.flag, opts.env)) {
 		return { skipped: true, reason: "flag-off" };
 	}
 	const installDir = opts.installDir ?? defaultInstallDir();
@@ -174,8 +202,16 @@ async function ensureBridgeSymlink(
 	linkPath: string,
 	target: string,
 ): Promise<void> {
-	if (await exists(fs, linkPath)) {
+	// Probe with lstat, not access/stat: `access` follows symlinks, so a
+	// BROKEN symlink at linkPath (e.g. left by a prior rollback whose daemon
+	// bridge.json is now gone) reports ENOENT, the rm is skipped, and the
+	// subsequent `fs.symlink` fails EEXIST because a symlink entry still
+	// occupies the path. lstat sees the entry regardless of target validity.
+	try {
+		await fs.lstat(linkPath);
 		await fs.rm(linkPath, { force: true });
+	} catch {
+		// ENOENT (or any other lstat failure) → nothing to remove.
 	}
 	await fs.symlink(target, linkPath);
 }
@@ -183,7 +219,9 @@ async function ensureBridgeSymlink(
 export type UninstallOptions = {
 	installDir?: string;
 	fs: InstallerFs;
-	flag: boolean;
+	/** See `InstallOptions.flag`. Optional; env-var fallback when omitted. */
+	flag?: boolean;
+	env?: Record<string, string | undefined>;
 };
 
 export type UninstallResult =
@@ -198,7 +236,7 @@ export type UninstallResult =
  * @returns {Promise<UninstallResult>} Skipped or removed.
  */
 export async function uninstall(opts: UninstallOptions): Promise<UninstallResult> {
-	if (!opts.flag) {
+	if (!resolveFlag(opts.flag, opts.env)) {
 		return { skipped: true, reason: "flag-off" };
 	}
 	const installDir = opts.installDir ?? defaultInstallDir();

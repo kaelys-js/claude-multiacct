@@ -20,7 +20,7 @@ import { describe, expect, it, vi } from "vitest";
 import { PACKAGE_VERSION } from "../index.ts";
 import { InMemoryMutableTokenStore } from "../oauth/token-store-mut.ts";
 import type { CliPorts } from "./commands.ts";
-import { defaultConfig } from "./config-store.ts";
+import { type CmaConfig, defaultConfig } from "./config-store.ts";
 import { dispatchCli, topLevelHelp } from "./dispatch.ts";
 
 function makeIO(
@@ -158,11 +158,147 @@ describe("dispatchCli", () => {
 		expect(code).toBe(0);
 	});
 
-	it("PR6b command → 'not yet wired' error, exit 2", async () => {
+	it("PR6b command without a port factory → clear error, exit 2", async () => {
+		// makeIO() doesn't wire the PR6b make*Ports factories. The dispatcher
+		// falls back to the "no port factory wired" error rather than crashing.
 		const h = makeIO();
 		const code = await dispatchCli(["install"], h.io);
 		expect(code).toBe(2);
-		expect(h.errors.join("\n")).toContain("PR6b");
+		expect(h.errors.join("\n")).toContain("no port factory wired");
+	});
+
+	it("install with an injected port factory runs installCommand end-to-end", async () => {
+		const h = makeIO();
+		const trace: string[] = [];
+		let config: CmaConfig | undefined = { ...defaultConfig() };
+		h.io.makeInstallPorts = async () => ({
+			steps: [
+				{
+					name: "s1",
+					install: async () => {
+						trace.push("s1");
+						return { ok: true };
+					},
+					uninstall: async () => ({ ok: true }),
+				},
+			],
+			readConfig: async () => config,
+			writeConfig: async (c) => {
+				config = c;
+			},
+			ensureInit: async () => undefined,
+			logger: h.io.logger,
+		});
+		const code = await dispatchCli(["install"], h.io);
+		expect(code).toBe(0);
+		expect(trace).toStrictEqual(["s1"]);
+	});
+
+	it("uninstall with an injected port factory runs uninstallCommand", async () => {
+		const h = makeIO();
+		const trace: string[] = [];
+		h.io.makeUninstallPorts = async () => ({
+			steps: [
+				{
+					name: "s1",
+					install: async () => ({ ok: true }),
+					uninstall: async () => {
+						trace.push("u1");
+						return { ok: true };
+					},
+				},
+			],
+			readConfig: async () => undefined,
+			writeConfig: async () => undefined,
+			logger: h.io.logger,
+		});
+		const code = await dispatchCli(["uninstall"], h.io);
+		expect(code).toBe(0);
+		expect(trace).toStrictEqual(["u1"]);
+	});
+
+	it("launch with an injected port factory runs launchCommand", async () => {
+		const h = makeIO();
+		let launched = false;
+		h.io.makeLaunchPorts = async () => ({
+			readConfig: async () => defaultConfig(),
+			fs: {
+				stat: async () => ({ mtimeMs: 1000 }),
+				readFile: async () => JSON.stringify({ pid: 42 }),
+			},
+			pidIsAlive: () => true,
+			launchClaude: async () => {
+				launched = true;
+			},
+			appPath: "/x/Claude.app",
+			logger: h.io.logger,
+		});
+		const code = await dispatchCli(["launch"], h.io);
+		expect(code).toBe(0);
+		expect(launched).toBe(true);
+	});
+
+	it("migrate (no --apply) prints report, exit 0", async () => {
+		const h = makeIO();
+		h.io.makeMigratePorts = async () => ({
+			fs: {
+				exists: async () => false,
+				readDir: async () => [],
+				readFileBytes: async () => Buffer.from(""),
+				rm: async () => undefined,
+				rename: async () => undefined,
+				copyFile: async () => undefined,
+				mkdir: async () => undefined,
+			},
+			launchctl: { bootout: async () => undefined },
+			uid: 501,
+			homedir: "/home",
+			appPath: "/x",
+			backupsRoot: "/b",
+			confirm: async () => false,
+			now: () => new Date(0),
+			logger: h.io.logger,
+		});
+		const code = await dispatchCli(["migrate"], h.io);
+		expect(code).toBe(0);
+		expect(h.logs.join("\n")).toContain("no legacy artifacts");
+	});
+
+	it("uninstall / launch / migrate without their port factories → clear errors, exit 2", async () => {
+		const h1 = makeIO();
+		expect(await dispatchCli(["uninstall"], h1.io)).toBe(2);
+		expect(h1.errors.join("\n")).toContain("no port factory wired");
+		const h2 = makeIO();
+		expect(await dispatchCli(["launch"], h2.io)).toBe(2);
+		expect(h2.errors.join("\n")).toContain("no port factory wired");
+		const h3 = makeIO();
+		expect(await dispatchCli(["migrate"], h3.io)).toBe(2);
+		expect(h3.errors.join("\n")).toContain("no port factory wired");
+	});
+
+	it("migrate --apply --yes runs apply, exit 0 on clean machine", async () => {
+		const h = makeIO();
+		h.io.makeMigratePorts = async () => ({
+			fs: {
+				exists: async () => false,
+				readDir: async () => [],
+				readFileBytes: async () => Buffer.from(""),
+				rm: async () => undefined,
+				rename: async () => undefined,
+				copyFile: async () => undefined,
+				mkdir: async () => undefined,
+			},
+			launchctl: { bootout: async () => undefined },
+			uid: 501,
+			homedir: "/home",
+			appPath: "/x",
+			backupsRoot: "/b",
+			confirm: async () => true,
+			now: () => new Date(0),
+			logger: h.io.logger,
+		});
+		const code = await dispatchCli(["migrate", "--apply", "--yes"], h.io);
+		expect(code).toBe(0);
 	});
 
 	it("status runs against injected read-only state, exit 0", async () => {
