@@ -9,8 +9,16 @@
  * Bindings:
  *   - `readKeychainPassword(service, account)` → `security find-generic-
  *     password -w -s <s> -a <a>`.
- *   - `listClaudeCliServices()` → `security dump-keychain` grep
- *     `svce=... Claude Code-credentials-*`.
+ *   - `listClaudeCliServices()` → probe a bounded set of candidate
+ *     `Claude Code-credentials-<suffix>` service names with `security
+ *     find-generic-password`, returning only the ones that resolve.
+ *     Candidates come from labels already in `~/.config/claude-multiacct/
+ *     registry.json`, from the unsuffixed canonical `Claude Code-credentials`
+ *     service the stock CLI writes to, and from any label list a user has
+ *     dropped into `~/.claude/.credentials.json` or `~/.claude/settings.json`
+ *     (an `accounts` or `credentials` array of strings). We do NOT call
+ *     `security dump-keychain` — under launchd it triggers a per-item ACL
+ *     prompt that never returns, hanging the daemon at boot.
  *   - `readClaudeCliCredential(service)` → `security find-generic-password
  *     -w -s <service>`.
  *   - `iterateLevelDb(dir)` → best-effort scan via a small hand-rolled
@@ -48,6 +56,16 @@ import type { MutableTokenStore } from "../oauth/token-store-mut.ts";
 import type { DiscoveryPorts } from "./discover-accounts.ts";
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * Hard cap on every `security` invocation. Under launchd we have seen the
+ * command block indefinitely on keychain ACL prompts (which never render);
+ * a per-call timeout guarantees the daemon boot completes even if the
+ * keychain is uncooperative.
+ */
+const SECURITY_CALL_TIMEOUT_MS = 5000;
+
+const CLI_SERVICE_PREFIX = "Claude Code-credentials";
 
 export type RealPortDeps = {
 	tokenStore: MutableTokenStore;
@@ -87,46 +105,25 @@ export function makeRealDiscoveryPorts(deps: RealPortDeps): DiscoveryPorts {
 	return {
 		readKeychainPassword: async (service, account) => {
 			try {
-				const { stdout } = await execFileAsync("security", [
-					"find-generic-password",
-					"-w",
-					"-s",
-					service,
-					"-a",
-					account,
-				]);
+				const { stdout } = await execFileAsync(
+					"security",
+					["find-generic-password", "-w", "-s", service, "-a", account],
+					{ timeout: SECURITY_CALL_TIMEOUT_MS },
+				);
 				return stdout.replace(/\n$/u, "");
 			} catch {
 				// eslint-disable-next-line unicorn/no-useless-undefined -- Explicit undefined so the caller's `if (raw === undefined)` branch stays readable.
 				return undefined;
 			}
 		},
-		listClaudeCliServices: async () => {
-			try {
-				const { stdout } = await execFileAsync("security", ["dump-keychain"], {
-					maxBuffer: 32 * 1024 * 1024,
-				});
-				const matches = new Set<string>();
-				const re = /"svce"<blob>="(Claude Code-credentials-[^"]+)"/gu;
-				let m;
-				while ((m = re.exec(stdout)) !== null) {
-					if (m[1] !== undefined) {
-						matches.add(m[1]);
-					}
-				}
-				return [...matches];
-			} catch {
-				return [];
-			}
-		},
+		listClaudeCliServices: () => listClaudeCliServices(deps.readRegistry, deps.logger),
 		readClaudeCliCredential: async (service) => {
 			try {
-				const { stdout } = await execFileAsync("security", [
-					"find-generic-password",
-					"-w",
-					"-s",
-					service,
-				]);
+				const { stdout } = await execFileAsync(
+					"security",
+					["find-generic-password", "-w", "-s", service],
+					{ timeout: SECURITY_CALL_TIMEOUT_MS },
+				);
 				return stdout.replace(/\n$/u, "");
 			} catch {
 				// eslint-disable-next-line unicorn/no-useless-undefined -- Explicit undefined for readability.
@@ -259,4 +256,123 @@ function* scanV10Values(raw: Buffer): Iterable<{ key: Buffer; value: Buffer }> {
 		yield { key: Buffer.from([]), value };
 		idx = end;
 	}
+}
+
+/**
+ * Discover which `Claude Code-credentials-*` keychain services actually
+ * resolve on this box. `security find-generic-password` does not accept a
+ * glob, so we gather candidate service names from three known-safe sources
+ * and probe each one — a targeted probe cannot trigger the ACL-prompt hang
+ * that made `security dump-keychain` unusable under launchd.
+ *
+ * Sources, in order of trust:
+ *   1. Labels already recorded in `~/.config/claude-multiacct/registry.json`.
+ *      These have already been provisioned once; probing them lets discovery
+ *      re-associate a rotated token with the same slot.
+ *   2. The unsuffixed canonical `Claude Code-credentials` service the stock
+ *      Anthropic CLI writes to on a fresh login.
+ *   3. A string list a user has dropped into `~/.claude/.credentials.json`
+ *      or `~/.claude/settings.json`, either as the top-level array or as
+ *      an `accounts` / `credentials` array-of-strings field. This is the
+ *      escape hatch for the multi-slot case where the stock CLI has stored
+ *      several accounts under distinct suffixes. We accept only explicit
+ *      string arrays because settings.json in the wild carries unrelated
+ *      top-level keys we must not probe as service names.
+ *
+ * Each label is expanded to `Claude Code-credentials-<label>` if it does not
+ * already start with that prefix. Duplicates are collapsed. We probe with
+ * the same 5-second hard cap the other `security` calls use.
+ *
+ * @param {() => Promise<AccountRegistry | undefined>} readRegistry - Registry reader.
+ * @param {{warn: (m: string) => void}} logger - Warn sink.
+ * @returns {Promise<string[]>} Every candidate that resolved, deduplicated.
+ */
+async function listClaudeCliServices(
+	readRegistry: () => Promise<AccountRegistry | undefined>,
+	logger: { warn: (m: string) => void },
+): Promise<string[]> {
+	const candidates = new Set<string>([CLI_SERVICE_PREFIX]);
+	try {
+		const registry = await readRegistry();
+		if (registry !== undefined) {
+			for (const account of registry.accounts) {
+				candidates.add(toServiceName(account.label));
+			}
+		}
+	} catch (error) {
+		logger.warn(`listClaudeCliServices: registry read failed: ${String(error)}`);
+	}
+	for (const path of claudeLabelFiles()) {
+		// eslint-disable-next-line no-await-in-loop -- two files, serial
+		for (const label of await readLabelListFile(path, logger)) {
+			candidates.add(toServiceName(label));
+		}
+	}
+	const resolved: string[] = [];
+	for (const service of candidates) {
+		try {
+			// eslint-disable-next-line no-await-in-loop -- serial keychain probes
+			await execFileAsync("security", ["find-generic-password", "-s", service], {
+				timeout: SECURITY_CALL_TIMEOUT_MS,
+			});
+			resolved.push(service);
+		} catch {
+			// Not found (exit 44) or timed out — either way, skip.
+		}
+	}
+	return resolved;
+}
+
+function toServiceName(label: string): string {
+	return label.startsWith(`${CLI_SERVICE_PREFIX}-`) || label === CLI_SERVICE_PREFIX
+		? label
+		: `${CLI_SERVICE_PREFIX}-${label}`;
+}
+
+function claudeLabelFiles(): string[] {
+	const claudeDir = join(homedir(), ".claude");
+	return [join(claudeDir, ".credentials.json"), join(claudeDir, "settings.json")];
+}
+
+/**
+ * Read a JSON file and pull any string labels out of it. Accepts three
+ * shapes: a top-level array of strings, an object with an `accounts` or
+ * `credentials` array of strings, or an object whose own keys are labels
+ * (the natural shape for `{ "<label>": {...token...} }`). Missing file or
+ * malformed JSON returns empty and warns — the daemon must still boot.
+ *
+ * @param {string} path - Absolute path to the candidate label file.
+ * @param {{warn: (m: string) => void}} logger - Warn sink.
+ * @returns {Promise<string[]>} Extracted labels; empty if the file is absent or unreadable.
+ */
+async function readLabelListFile(
+	path: string,
+	logger: { warn: (m: string) => void },
+): Promise<string[]> {
+	let raw: string;
+	try {
+		raw = await readFile(path, "utf8");
+	} catch {
+		return [];
+	}
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch (error) {
+		logger.warn(`listClaudeCliServices: ${path} is not valid JSON: ${String(error)}`);
+		return [];
+	}
+	if (Array.isArray(parsed)) {
+		return parsed.filter((x): x is string => typeof x === "string");
+	}
+	if (parsed !== null && typeof parsed === "object") {
+		const obj = parsed as Record<string, unknown>;
+		for (const key of ["accounts", "credentials"] as const) {
+			const value = obj[key];
+			if (Array.isArray(value)) {
+				return value.filter((x): x is string => typeof x === "string");
+			}
+		}
+	}
+	return [];
 }

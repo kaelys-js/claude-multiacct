@@ -34,6 +34,10 @@ describe("renderDaemonPlist", () => {
 		expect(sample).toContain("<key>KeepAlive</key>\n\t<true/>");
 	});
 
+	it("sets SessionCreate=true so the daemon runs inside the user's aqua Security session (drop → keychain ACL prompts hang the process)", () => {
+		expect(sample).toContain("<key>SessionCreate</key>\n\t<true/>");
+	});
+
 	it("bakes in CLAUDE_MULTIACCT_ENABLE_SHIM=1 (drop → RED)", () => {
 		expect(sample).toContain("<key>CLAUDE_MULTIACCT_ENABLE_SHIM</key>");
 		expect(sample).toContain("<string>1</string>");

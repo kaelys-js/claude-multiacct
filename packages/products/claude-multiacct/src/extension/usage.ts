@@ -58,6 +58,7 @@ type UsageState = {
 };
 
 const SECTION_MARKER = "data-cma-user-menu-section";
+const OBSERVE_INIT: MutationObserverInit = { childList: true, subtree: true };
 const HEADER_CLASSES =
 	"compact:px-2 comfortable:px-2.5 py-1 text-footnote font-medium text-muted truncate";
 const ITEM_CLASSES =
@@ -272,8 +273,20 @@ export function mountUsage(opts: UsageMountOptions): UsageHandle {
 		if (menu === undefined) {
 			return;
 		}
-		const section = ensureSection(menu);
-		renderSection(section);
+		// renderSection mutates the observed subtree (clears + re-adds rows).
+		// Pause the observer around the write so its callback does not fire on
+		// our own mutations — otherwise every render schedules another render
+		// through the observer and JSDOM spins forever. `takeRecords()` drops
+		// the queued records from the write we just performed so re-attaching
+		// does not re-trigger us on the next microtask.
+		observer.disconnect();
+		try {
+			const section = ensureSection(menu);
+			renderSection(section);
+		} finally {
+			observer.takeRecords();
+			observer.observe(opts.doc.body, OBSERVE_INIT);
+		}
 	}
 
 	// Watch the document for the user menu appearing (Base UI mounts it via portal).
@@ -285,7 +298,7 @@ export function mountUsage(opts: UsageMountOptions): UsageHandle {
 	const observer = new MO(() => {
 		renderIfOpen();
 	});
-	observer.observe(opts.doc.body, { childList: true, subtree: true });
+	observer.observe(opts.doc.body, OBSERVE_INIT);
 
 	// Prime immediately in case the menu happens to already be open.
 	renderIfOpen();

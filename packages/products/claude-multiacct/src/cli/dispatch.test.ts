@@ -66,6 +66,13 @@ function makeIO(
 			readTty: vi.fn(async () => "TOKEN"),
 			readStdin: vi.fn(async () => "TOKEN"),
 		},
+		// Never let the real `codesign` / `spctl` binaries run in tests —
+		// each call takes ~1.5s on macOS and the suite fans out across every
+		// status/doctor case. The fake returns an empty result which the
+		// collector treats as "probe failed" (a note in the report), which
+		// these tests don't assert on.
+		makeStatusExecFile: () => async () =>
+			({ stdout: "", stderr: "", code: 1 }) as { stdout: string; stderr: string; code: number },
 	};
 	return { io, logs, warns, errors };
 }
