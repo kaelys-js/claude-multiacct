@@ -1,0 +1,28 @@
+{
+  "_comment": "emit-trp-failure writes a single side-effect JSON to $OUT_PATH. The fixture is fully synthesized (no client source, no timestamps, no absolute paths in log/bundle content). Both Python `json.dumps(indent=2)` and Node `JSON.stringify(null, 2)` produce byte-identical output for this payload shape. No sanitization needed; parity test compares byte-for-byte.",
+  "fixture": "emit-trp-failure",
+  "sanitize_impl": "none \u2014 byte-for-byte string equality between $OUT_PATH bytes and expected-side.json",
+  "shape": "d",
+  "shape_reason": "primary output is a filesystem-side-effect JSON file at $OUT_PATH consumed by the SRP-J / TRP-O revise loop; stdout carries a human log line but the driver never parses it",
+  "files": [
+    {
+      "name": "input.json",
+      "long_string_replacements": 0,
+      "path_leak_replacements": 0,
+      "total_replacements": 0
+    },
+    {
+      "name": "input.log",
+      "long_string_replacements": 0,
+      "path_leak_replacements": 0,
+      "total_replacements": 0
+    },
+    {
+      "name": "expected-side.json",
+      "long_string_replacements": 0,
+      "path_leak_replacements": 0,
+      "total_replacements": 0
+    }
+  ],
+  "total_replacements": 0
+}

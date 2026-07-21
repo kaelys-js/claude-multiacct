@@ -1,0 +1,24 @@
+{
+  "_comment": "tracker-fetch-task writes a single normalised task JSON to <out-dir>/task-<slug>.json. The fixture is a fully synthesized ClickUp mock payload (no client data, no timestamps, no absolute paths in content). Both Python `json.dumps(indent=2, sort_keys=False)` and Node `JSON.stringify(null, 2)` produce byte-identical output for this ASCII payload \u2014 no key sorting, matching separator conventions. No sanitization needed; parity test compares byte-for-byte.",
+  "fixture": "tracker-fetch-task",
+  "script": "tracker-fetch-task",
+  "sanitize_impl": "none \u2014 byte-for-byte string equality between <out-dir>/task-test-1.json bytes and expected.json",
+  "output_shape": "c",
+  "shape": "c",
+  "shape_reason": "primary output is a filesystem write at <out-dir>/task-<slug>.json consumed by downstream TRP stages (design, patch, verify); stdout carries the written path but the driver only reads the file",
+  "files": [
+    {
+      "name": "input.json",
+      "long_string_replacements": 0,
+      "path_leak_replacements": 0,
+      "total_replacements": 0
+    },
+    {
+      "name": "expected.json",
+      "long_string_replacements": 0,
+      "path_leak_replacements": 0,
+      "total_replacements": 0
+    }
+  ],
+  "total_replacements": 0
+}

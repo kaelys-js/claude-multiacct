@@ -1,0 +1,21 @@
+{
+	"$schema": "../../../.schemas/package.json",
+	"name": "@foundation/trp",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Task Resolution Protocol: runtime product. Handles any ClickUp ticket via six response modes (spike-writeup, spike-solve, spike-full, solve, reproduce, support) with adversarial refutation and CI-as-ground-truth verdicts.",
+	"license": "SEE LICENSE IN LICENSE",
+	"scripts": {
+		"test": "vitest run",
+		"test:coverage": "vitest run --coverage",
+		"test:watch": "vitest"
+	},
+	"dependencies": {
+		"@foundation/agents": "workspace:*",
+		"@foundation/shell": "workspace:*"
+	},
+	"devDependencies": {
+		"@foundation/config": "workspace:*"
+	}
+}

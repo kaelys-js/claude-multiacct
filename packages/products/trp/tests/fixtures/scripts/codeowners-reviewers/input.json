@@ -1,0 +1,17 @@
+{
+  "codeowners_relpath": ".github/CODEOWNERS",
+  "codeowners_text": "# Test CODEOWNERS\n* @default-user\napps/web/ @web-user @some/team\n/packages/lib/ @lib-owner\n",
+  "bundle": {
+    "files_to_modify": [
+      {
+        "path": "apps/web/src/page.tsx"
+      },
+      {
+        "path": "packages/lib/index.ts"
+      },
+      {
+        "path": "README.md"
+      }
+    ]
+  }
+}

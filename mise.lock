@@ -133,7 +133,7 @@ version = "0.7.0"
 backend = "npm:@taplo/cli"
 
 [[tools."npm:markdownlint-cli2"]]
-version = "0.23.0"
+version = "0.23.1"
 backend = "npm:markdownlint-cli2"
 
 [[tools."npm:oxfmt"]]

@@ -1,0 +1,16 @@
+{
+	"task_id": "TRP-REPRO-004",
+	"name": "Regression: replica connection dropped after failover",
+	"title": "Regression: replica connection dropped after failover",
+	"description": "Regression-shaped ticket. Reproduce outcome, a failing test that captures the regression is added on a branch. No PR is opened. Baseline exercises Stage [0]-[7] with a failing test as the terminal artefact; Stage 8 is skipped by mode branch.",
+	"text_content": "Regression-shaped ticket. Reproduce outcome, a failing test that captures the regression is added on a branch. No PR is opened. Baseline exercises Stage [0]-[7] with a failing test as the terminal artefact; Stage 8 is skipped by mode branch.",
+	"status": { "status": "in progress", "type": null },
+	"priority": { "priority": "normal" },
+	"assignees": [{ "id": 0, "username": "operator", "email": null }],
+	"custom_fields": [],
+	"comments": [],
+	"attachments": [],
+	"subtasks": [],
+	"updated_at": "2026-07-10T00:00:00Z",
+	"url": "https://app.clickup.com/t/TRP-REPRO-004"
+}

@@ -1,0 +1,22 @@
+
+== [0] bootstrap ==
+   tools ready
+
+== [1] load POC context ==
+   no POC dir for clickup:synthetic-spike-solve-01 — using task JSON at discovery/task-clickup_synthetic-spike-solve-01.json as context
+   spike-solve: skipping client-repo resolution (client_repo=<none>)
+   ClickUp task:   ()
+
+== [SW] spike-writeup emit (spike-solve) ==
+   TRP_ALLOW_INLINE_SPIKE=true — inline writeup -> discovery/proof/clickup_synthetic-spike-solve-01/inline-spike-solve-1783701292.md (canonical never written by driver)
+   wrote /tmp/trp-spike-input-clickup_synthetic-spike-solve-01.json (1773 bytes, 0 criterion(s))
+
+== NEXT (main-context step): ==
+  Workflow({ scriptPath: 'workflows/trp-fix-task.js',
+             args: <contents of /tmp/trp-spike-input-clickup_synthetic-spike-solve-01.json (already carries trp_task_mode='spike-writeup')> })
+  Then write the returned bundle to discovery/trp-bundle-clickup_synthetic-spike-solve-01.json and re-run this driver.
+   TRP_ALLOW_INLINE_SPIKE=true — synthesising self-contained writeup
+   wrote discovery/proof/clickup_synthetic-spike-solve-01/inline-spike-solve-1783701292.md (22902 bytes, 6 criterion(s))
+   wrote discovery/proof/clickup_synthetic-spike-solve-01/comment-payload.json (6266 bytes)
+   wrote stub bundle discovery/trp-bundle-clickup_synthetic-spike-solve-01.json (47030 bytes)
+== done (mode=spike-solve, inline) ==

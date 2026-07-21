@@ -10,23 +10,6 @@ __mise_bootstrap() {
     export MISE_STATE_DIR="$localized_dir/state"
     export MISE_INSTALL_PATH="$localized_dir/mise-2026.5.0"
     export MISE_TRUSTED_CONFIG_PATHS="$project_dir${MISE_TRUSTED_CONFIG_PATHS:+:$MISE_TRUSTED_CONFIG_PATHS}"
-    # When project_dir is a linked git worktree checked out under an outer repo
-    # (the .claude/worktrees/*/ layout agents run in), mise's config walk finds
-    # the outer repo's mise.toml on the way up. Without trusting that path too,
-    # the outer config surfaces as an untrusted-config error which mise reports
-    # as "error parsing config file". Detect the worktree via its .git pointer
-    # (a plain file "gitdir: <main_repo>/.git/worktrees/<name>") and add the
-    # main working tree to the trusted set.
-    if [ -f "$project_dir/.git" ]; then
-        __mise_gitdir=$(sed -n 's/^gitdir: //p' "$project_dir/.git" 2>/dev/null || true)
-        if [ -n "${__mise_gitdir:-}" ] && [ -d "$__mise_gitdir/../../.." ]; then
-            __mise_main_wt=$( cd -- "$__mise_gitdir/../../.." &> /dev/null && pwd )
-            if [ -n "${__mise_main_wt:-}" ] && [ "$__mise_main_wt" != "$project_dir" ]; then
-                export MISE_TRUSTED_CONFIG_PATHS="$__mise_main_wt:$MISE_TRUSTED_CONFIG_PATHS"
-            fi
-        fi
-        unset __mise_gitdir __mise_main_wt
-    fi
     export MISE_IGNORED_CONFIG_PATHS="$HOME/.config/mise${MISE_IGNORED_CONFIG_PATHS:+:$MISE_IGNORED_CONFIG_PATHS}"
     install() {
         local initial_working_dir="$PWD"

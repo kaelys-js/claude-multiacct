@@ -1,0 +1,57 @@
+{
+  "_comment": "Auto-repair fixture: stage 8b (push rejected) failure at attempt 2. Prior_failure carries the attempt-1 push rejection (e.g., 'GH006 protected branch hook declined' or a missing-signature error) so the REVISE workflow can shape attempt-2 (sign the commit, adjust branch name, drop the offending file). Auto-repair loop remains active — same STAGE_LABEL, attempt number ticks.",
+  "stage": "8b",
+  "attempt": 2,
+  "task_id": "clickup:AR-STAGE8B-A2",
+  "task_id_slug": "clickup_ar-stage8b-a2",
+  "argv": [
+    "clickup:AR-STAGE8B-A2",
+    "--mode=solve",
+    "--after-workflow=discovery/trp-bundle-clickup_ar-stage8b-a2.json",
+    "--attempt=2",
+    "--push"
+  ],
+  "env": {
+    "TRP_FIX_LOOP_ENABLED": "true",
+    "TRP_FIX_LOOP_MAX_ATTEMPTS": "5",
+    "TRP_ALLOW_REMOTE_MUTATE": "true"
+  },
+  "prior_bundle": {
+    "ready_to_ship": true,
+    "branch_name": "security/ar-stage8b-a1",
+    "commit_message": "fix(security): ar-stage8b attempt 1",
+    "files_to_modify": [
+      {
+        "path": "apps/api/src/auth/verify.ts",
+        "full_content": "// attempt 1 — unsigned commit rejected by protected-branch ruleset\n",
+        "rationale": "attempt 1 authored unsigned; ruleset requires signed"
+      }
+    ]
+  },
+  "prior_failure": {
+    "attempt_number": 1,
+    "stage_label": "TRP8 push rejected",
+    "bundle_missing": false,
+    "ci_failure": {
+      "command": "git push (branch=security/ar-stage8b-a1)",
+      "exit_code": 1,
+      "stage": "TRP8 push rejected",
+      "stderr_tail": "remote: error: GH006 Protected branch update failed: required signed commits"
+    },
+    "prior_bundle": {},
+    "style_recon": null
+  },
+  "emit_env": {
+    "STAGE_LABEL": "TRP8 push rejected",
+    "FAILING_CMD": "git push (branch=security/ar-stage8b-a2)",
+    "ATTEMPT": "2"
+  },
+  "expected": {
+    "exit_code": 66,
+    "stage_label": "TRP8 push rejected",
+    "attempt_number": 2,
+    "next_attempt_number": 3,
+    "next_bundle_path": "discovery/trp-bundle-clickup_ar-stage8b-a2.json",
+    "trp_fail_written_at": "discovery/trp-fail-clickup_ar-stage8b-a2-a2.json"
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "exit_code": 2,
+  "stdout_contains": [],
+  "stderr_contains": ["pass <TRACKER>:<TASK_ID>"],
+  "files_present": [],
+  "files_absent": []
+}

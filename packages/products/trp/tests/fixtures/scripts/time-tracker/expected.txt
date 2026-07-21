@@ -1,0 +1,21 @@
+{
+  "task": "PARITY-TASK-01",
+  "total_duration_ms": 579000,
+  "sum_hours": 0.1608,
+  "stages": [
+    {
+      "name": "A",
+      "duration_ms": 123000,
+      "note": "alpha",
+      "epoch_start_ms": 1700000000000,
+      "epoch_end_ms": 1700000123000
+    },
+    {
+      "name": "B",
+      "duration_ms": 456000,
+      "note": "",
+      "epoch_start_ms": 1700001000000,
+      "epoch_end_ms": 1700001456000
+    }
+  ]
+}

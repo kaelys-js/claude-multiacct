@@ -1,0 +1,21 @@
+{
+  "files_to_modify": [
+    {
+      "path": "src/lib/auth.ts",
+      "full_content": "export const secret = 'redacted';\nexport function verify(token: string): boolean {\n  return token === secret;\n}\n",
+      "rationale": "close the auth gap SEC-99 flagged"
+    },
+    {
+      "path": "README.md",
+      "full_content": "# fixture repo\n\nunit-tested by apply-bundle parity.\n",
+      "rationale": "keep the readme in sync"
+    }
+  ],
+  "test_additions": [
+    {
+      "path": "tests/auth.test.ts",
+      "full_content": "import { verify } from '../src/lib/auth.ts';\nimport { expect, test } from 'vitest';\ntest('verify rejects wrong secret', () => {\n  expect(verify('wrong')).toBe(false);\n});\n",
+      "fails_without_fix": "regression: verify() accepted any string before the fix"
+    }
+  ]
+}

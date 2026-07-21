@@ -1,0 +1,13 @@
+{
+  "_case": "pnpm-lock.yaml + docker-compose.yml, --with-docker SET — the `docker compose -f docker-compose.yml up -d` command is echoed (via run()'s `+ ` prefix) but not actually invoked (dry-run). Confirms the argv is emitted in the exact bash order.",
+  "tree": {
+    "pnpm-lock.yaml": "",
+    "docker-compose.yml": ""
+  },
+  "argv_extra": ["--dry-run", "--with-docker"],
+  "expected": {
+    "stdout": "PM: pnpm\n+ pnpm install --frozen-lockfile --ignore-scripts\nCOMPOSE: docker-compose.yml\n+ docker compose -f docker-compose.yml up -d\n",
+    "stderr": "",
+    "exit": 0
+  }
+}

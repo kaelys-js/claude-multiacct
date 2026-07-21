@@ -1,0 +1,16 @@
+{
+  "files_to_modify": [
+    {
+      "path": "src/auth/login.ts",
+      "full_content": "import { prisma } from '../db';\n\nexport async function login(entraOid: string) {\n  const user = await prisma.user.findFirst({ where: { entraOid: entraOid } });\n  return user;\n}\n"
+    },
+    {
+      "path": "src/audit/report.ts",
+      "full_content": "import { prisma } from '../db';\n\nexport async function report(id: string) {\n  return prisma.audit.findMany({ where: { id: id } });\n}\n"
+    },
+    {
+      "path": "src/session/get.ts",
+      "full_content": "import { prisma } from '../db';\n\nexport async function get(id: string) {\n  return prisma.session.findUnique({ where: { id: id } });\n}\n"
+    }
+  ]
+}

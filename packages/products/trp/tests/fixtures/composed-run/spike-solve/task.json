@@ -1,0 +1,20 @@
+{
+  "id": "synth_spike_solve_01",
+  "custom_id": "HAND_SYNTH-1003",
+  "name": "[SPIKE+FIX] Investigate JWT signing key rotation and implement zero-downtime rollover",
+  "text_content": "Spike + Fix Ticket\n\nContext\nlibs/azuread currently hardcodes a single JWKS URI and caches the signing key indefinitely. When Entra rotates its signing key, every issued token silently fails verification until the pod restarts. We need a design writeup for the rotation strategy AND the code patch that implements it — both ship in this ticket.\n\nScope\nPart A — Spike writeup (design.md at libs/azuread/docs/key-rotation.md):\n- Document how Entra advertises key rotation via the JWKS `kid` header\n- Compare pull-on-miss vs periodic-refresh vs hybrid strategies\n- Recommend one, justify the choice against our 30s p99 auth latency budget\n\nPart B — Code patch (libs/azuread/src/verifier.ts):\n- Implement the recommended strategy behind the existing verify() API (no caller changes)\n- Add JWKS cache with TTL and fallback to fresh fetch on unknown `kid`\n- Ensure zero-downtime: in-flight requests during rotation succeed\n\nAcceptance Criteria\n- libs/azuread/docs/key-rotation.md exists with the three-strategy comparison and a chosen recommendation\n- verifier.ts uses a JWKS cache keyed on `kid` with TTL configurable via AZUREAD_JWKS_TTL_MS (default 3600000)\n- Unknown-`kid` tokens trigger a single fresh JWKS fetch, not per-request\n- Unit test verifier.spec.ts covers: cached key hit, unknown kid triggers refetch, refetch failure fails closed\n- Existing verify() call sites in apps/itc and apps/dfoster require no changes\n- p99 verification latency in the benchmark stays under 30ms",
+  "description": "See text_content.",
+  "status": { "id": "c90116564034_open", "status": "todo", "color": "#8d8d8d", "orderindex": 0, "type": "open" },
+  "date_created": "1783000000000",
+  "date_updated": "1783000000000",
+  "creator": { "id": 26216448, "username": "Satchel Catral", "email": "satchel.catral@ttt.studio" },
+  "assignees": [{ "id": 87453279, "username": "Cole B", "email": "cole.beuker@ttt.studio" }],
+  "custom_fields": [
+    { "id": "task-class-hint", "name": "Task Class", "type": "drop_down", "value": "bugfix" },
+    { "id": "expected-mode-hint", "name": "Expected Mode", "type": "short_text", "value": "spike-solve" }
+  ],
+  "tags": [{ "name": "spike" }, { "name": "auth" }],
+  "team_id": "8593845",
+  "url": "https://app.clickup.com/t/synth_spike_solve_01",
+  "list": { "id": "901114071018", "name": "ITC Backlog (synthetic)" }
+}

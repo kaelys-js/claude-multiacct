@@ -1,0 +1,53 @@
+{
+	"_comment": "Held-out contract fixture for trp-proof-generate. Deliberately located OUTSIDE tests/fixtures/workflows/ so a workflow implementation that memoises the shipped recorded fixture cannot satisfy the contract test by lookup. The distinctive dest_dir marker below (`discovery/proof/holdout-42-c7f1a9e/`) and the terminal modality selection appear NOWHERE in tests/fixtures/workflows/trp-proof-generate/ and would not be produced by any recorded replay.",
+	"args": {
+		"task_id": "linear:HELDOUT-42",
+		"task_id_slug": "holdout-42-c7f1a9e",
+		"task_intent": {
+			"proof_modality": "terminal"
+		},
+		"client_repo": "heldout-org/proof-heldout-repo",
+		"client_slug": "proof-heldout",
+		"fix_src_dir": "discovery/fix-src/proof-heldout-holdout-42",
+		"bundle_diff": "diff --git a/svc/handler.sh b/svc/handler.sh\n--- a/svc/handler.sh\n+++ b/svc/handler.sh\n@@ -1 +1 @@\n-echo old\n+echo new\n"
+	},
+	"responses": {
+		"PlanScript:plan-repro-script": {
+			"repro_script_path": "discovery/proof/holdout-42-c7f1a9e/repro.sh",
+			"repro_script_body": "#!/usr/bin/env bash\nset -euo pipefail\n./svc/handler.sh | tee /tmp/holdout-42-out.log\n",
+			"interpreter": "bash",
+			"env_overrides": [{ "name": "HELDOUT_MARKER", "value": "c7f1a9e-terminal-marker" }],
+			"reasoning": "terminal modality: bash script that exercises the patched handler and tees output for the recorder."
+		},
+		"Record:invoke-proof-recorder": {
+			"exit_code": 0,
+			"stdout_tail": "new",
+			"stderr_tail": "",
+			"dest_dir": "discovery/proof/holdout-42-c7f1a9e/",
+			"wrote_script": true
+		},
+		"Manifest:collect-manifest": {
+			"artefacts": [
+				{
+					"path": "discovery/proof/holdout-42-c7f1a9e/session.log",
+					"sha256": "b7d1c9e2f4a63a5188a2f0e7c40a1e5b8e3a7c94d612508fbb44de11a90c73f2",
+					"timestamp": "2026-07-11T18:04:22Z",
+					"bytes": 214,
+					"kind": "log"
+				},
+				{
+					"path": "discovery/proof/holdout-42-c7f1a9e/repro.sh",
+					"sha256": "3a01f2acb7d5e64f19d80c6afe1b73c50b2c9a1e4f8e2071dd6b3e5ab19c2a08",
+					"timestamp": "2026-07-11T18:04:19Z",
+					"bytes": 88,
+					"kind": "sh"
+				}
+			]
+		}
+	},
+	"expected": {
+		"dest_dir": "discovery/proof/holdout-42-c7f1a9e/",
+		"modality": "terminal",
+		"artefacts_length": 2
+	}
+}

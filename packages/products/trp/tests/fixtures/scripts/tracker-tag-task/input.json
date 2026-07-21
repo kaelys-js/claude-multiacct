@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "--action=create",
+    "--space-id=90140000000",
+    "--tag-name=sec-02",
+    "--dry-run"
+  ],
+  "env": {
+    "CLICKUP_TEAM_ID": "8593845"
+  },
+  "notes": "Dry-run of --action=create exercises argparse, the deterministic sha256-index colour picker, and the stdout wording without needing a token file or the TRP_ALLOW_REMOTE_MUTATE gate. Tag name 'sec-02' hashes to palette slot 5 (bg=#0ea5e9 fg=#ffffff), so any drift in the palette table, the hash-index formula, or the DRY-RUN string moves the recorded bytes."
+}

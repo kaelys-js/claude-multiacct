@@ -1,0 +1,2 @@
+{"tool":"gh","ts":"2026-07-13T20:06:59Z","cwd":"/Users/Cole.Beuker/Documents/ttt-work/repos/trp","argv":["api","repos/tttstudios/handled-monorepo-poc/branches/main","--jq",".commit.sha"],"stdin":""}
+{"tool":"gh","ts":"2026-07-13T20:06:59Z","cwd":"/Users/Cole.Beuker/Documents/ttt-work/repos/trp","argv":["auth","token"],"stdin":""}

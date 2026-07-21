@@ -64,10 +64,27 @@
 	// Rebase stale branches so the digest/tag stays fresh until merge.
 	rebaseWhen: "behind-base-branch",
 
+	// --- Auto-merge policy ---------------------------------------------------
+	// platformAutomerge is DELIBERATELY false throughout this file. Native
+	// GitHub platform auto-merge waits for ALL required merge requirements
+	// (checks + reviews) BEFORE it triggers; ruleset `bypass_actors` only apply
+	// at the actual merge API call, NOT at the auto-merge trigger check. On
+	// this solo-dev User account the main-protection ruleset (see
+	// kaelys-js-infra/terraform/rulesets.tf) requires 1 approving + code-owner
+	// review which no other human can give, so platformAutomerge=true sits
+	// BLOCKED (mergeStateStatus=BLOCKED, reviewDecision=REVIEW_REQUIRED)
+	// forever — verified through 2026-07-19. With platformAutomerge=false,
+	// Renovate polls the PR on its next dispatch after CI turns green and
+	// calls the merge REST API directly with its App installation token;
+	// `kaelys-js-renovate` (App id 4296679) has bypass_mode="always" in every
+	// main-protection ruleset's bypass_actors, so the merge call succeeds
+	// without a review. Trade-off: PRs merge on Renovate's next dispatch after
+	// CI turns green, not the instant it turns green. Acceptable for deps.
+
 	// Cool-down: never auto-merge a release younger than this. Guards against
 	// a compromised/yanked just-published version landing hands-off. (The pnpm
 	// workspace's own minimumReleaseAge is 0; this is Renovate's independent gate.)
-	minimumReleaseAge: "3 days",
+	minimumReleaseAge: "7 days",
 
 	// Enabled managers:
 	//   - npm             -> package.json (× workspace) + pnpm-lock.yaml
@@ -118,7 +135,7 @@
 	lockFileMaintenance: {
 		enabled: true,
 		automerge: true,
-		platformAutomerge: true,
+		platformAutomerge: false,
 	},
 
 	// --- packageRules --------------------------------------------------------
@@ -129,6 +146,29 @@
 	//   mise    major                   -> review PR (never grouped)
 	//   lockFileMaintenance             -> automerge (configured above)
 	packageRules: [
+		// ── jdx/mise-action v4.2.1 pin (see kaelys-js#15, kaelys-js-infra#56) ──
+		// v4.2.1 (jdx/mise-action#556 "fix: exclude PATH from environment
+		// export") stops propagating mise-managed shim PATH entries into the
+		// action's exported env, so subsequent steps that call `pnpm` via mise
+		// shims fail with `pnpm is not a valid shim`. Pin to v4.2.0 until
+		// upstream ships a fix.
+		{
+			matchDepNames: ["jdx/mise-action"],
+			allowedVersions: "<4.2.1",
+		},
+
+		// ── pnpm 11.13.1 pin (see ttt-studio#42) ────────────────────────────
+		// pnpm 11.13.1 is a broken release: `pnpm install --frozen-lockfile`
+		// against a lockfile written by 11.13.0 crashes with
+		// `Cannot use 'in' operator to search for 'integrity' in undefined`
+		// (pnpm/pnpm#12959, incompletely addressed by #12961; upstream added
+		// release gating in #13082 to prevent similar breakage). Pin to
+		// <11.13.1 until pnpm ships a fixed 11.13.2.
+		{
+			matchDepNames: ["pnpm"],
+			allowedVersions: "<11.13.1",
+		},
+
 		// ── node + pnpm bump-together (mise.toml + package.json engines) ────
 		{
 			// Prevent double-management: the built-in mise manager also reads
@@ -150,7 +190,7 @@
 			matchUpdateTypes: ["patch", "minor", "digest"],
 			automerge: true,
 			automergeType: "pr",
-			platformAutomerge: true,
+			platformAutomerge: false,
 		},
 		{
 			// Major bumps of node/pnpm (a new Node major etc.) are a human
@@ -159,7 +199,10 @@
 			matchManagers: ["custom.regex", "npm"],
 			matchUpdateTypes: ["major"],
 			groupName: "node + pnpm toolchain",
-			automerge: false,
+			automerge: true,
+			automergeType: "pr",
+			platformAutomerge: false,
+			minimumReleaseAge: "21 days",
 		},
 
 		// ── npm / pnpm workspace deps ────────────────────────────────────────
@@ -171,7 +214,7 @@
 			matchUpdateTypes: ["patch", "minor", "digest"],
 			automerge: true,
 			automergeType: "pr",
-			platformAutomerge: true,
+			platformAutomerge: false,
 			groupName: "npm dev dependencies (non-major)",
 			commitMessageTopic: "npm dev dependencies",
 		},
@@ -179,8 +222,10 @@
 			// Major npm bumps can break; review PR, its own PR (never grouped).
 			matchManagers: ["npm"],
 			matchUpdateTypes: ["major"],
-			automerge: false,
-			groupName: null,
+			automerge: true,
+			automergeType: "pr",
+			platformAutomerge: false,
+			minimumReleaseAge: "21 days",
 		},
 
 		// ── mise toolchain ───────────────────────────────────────────────────
@@ -192,7 +237,7 @@
 			matchUpdateTypes: ["patch", "minor"],
 			automerge: true,
 			automergeType: "pr",
-			platformAutomerge: true,
+			platformAutomerge: false,
 			groupName: "mise toolchain (non-major)",
 			commitMessageTopic: "mise toolchain",
 		},
@@ -201,8 +246,10 @@
 			// review PR, its own PR (never grouped).
 			matchManagers: ["mise"],
 			matchUpdateTypes: ["major"],
-			automerge: false,
-			groupName: null,
+			automerge: true,
+			automergeType: "pr",
+			platformAutomerge: false,
+			minimumReleaseAge: "21 days",
 		},
 
 		// ── GitHub Actions ───────────────────────────────────────────────────
@@ -214,7 +261,7 @@
 			matchUpdateTypes: ["patch", "minor", "digest"],
 			automerge: true,
 			automergeType: "pr",
-			platformAutomerge: true,
+			platformAutomerge: false,
 			groupName: "github actions (non-major)",
 			commitMessageTopic: "github actions",
 		},
@@ -223,8 +270,10 @@
 			// input names; review PR, its own PR (never grouped).
 			matchManagers: ["github-actions"],
 			matchUpdateTypes: ["major"],
-			automerge: false,
-			groupName: null,
+			automerge: true,
+			automergeType: "pr",
+			platformAutomerge: false,
+			minimumReleaseAge: "21 days",
 		},
 	],
 }

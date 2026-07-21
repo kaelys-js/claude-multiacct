@@ -1,0 +1,32 @@
+{
+  "_comment": "Auto-repair fixture: stage 7 (POC verify layers) failure at attempt 1. Stage 7 overlays the patched files into the POC's evidence tree and runs run-poc.sh verify-all; any layer that STAYS at FAIL after the overlay means the fix didn't close the finding at the source-code layer. emitTrpJFailure is called with stage_label 'TRP8 POC verify' and the count of still-failing layers as the FAILING_CMD hint.",
+  "stage": 7,
+  "attempt": 1,
+  "task_id": "clickup:AR-STAGE7-A1",
+  "task_id_slug": "clickup_ar-stage7-a1",
+  "argv": [
+    "clickup:AR-STAGE7-A1",
+    "--mode=solve",
+    "--after-workflow=discovery/trp-bundle-clickup_ar-stage7-a1.json",
+    "--attempt=1"
+  ],
+  "env": {
+    "TRP_FIX_LOOP_ENABLED": "true",
+    "TRP_FIX_LOOP_MAX_ATTEMPTS": "5"
+  },
+  "prior_bundle": null,
+  "prior_failure": null,
+  "emit_env": {
+    "STAGE_LABEL": "TRP8 POC verify",
+    "FAILING_CMD": "2 POC layer(s) still FAIL",
+    "ATTEMPT": "1"
+  },
+  "expected": {
+    "exit_code": 66,
+    "stage_label": "TRP8 POC verify",
+    "attempt_number": 1,
+    "next_attempt_number": 2,
+    "next_bundle_path": "discovery/trp-bundle-clickup_ar-stage7-a1.json",
+    "trp_fail_written_at": "discovery/trp-fail-clickup_ar-stage7-a1-a1.json"
+  }
+}

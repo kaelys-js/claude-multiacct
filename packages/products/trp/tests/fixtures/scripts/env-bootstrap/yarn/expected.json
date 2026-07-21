@@ -1,0 +1,12 @@
+{
+  "_case": "yarn.lock — second-priority PM branch, install command differs from pnpm (`yarn install`, same flags)",
+  "tree": {
+    "yarn.lock": ""
+  },
+  "argv_extra": ["--dry-run"],
+  "expected": {
+    "stdout": "PM: yarn\n+ yarn install --frozen-lockfile --ignore-scripts\nCOMPOSE: none found.\n",
+    "stderr": "",
+    "exit": 0
+  }
+}

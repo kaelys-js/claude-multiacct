@@ -1,0 +1,8 @@
+[start] parity-fixture bootstrap
+[ci] running quality gates
+[ci] pnpm run test [attempt=2]
+    RUN  src/lib/verify.test.ts
+    FAIL src/lib/verify.test.ts > verify rejects wrong tokens
+    Expected: false
+    Received: true
+FAIL: pnpm run test exited with code 1

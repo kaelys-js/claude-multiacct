@@ -1,0 +1,5 @@
+{
+  "README.md": "# fixture repo\n\nunit-tested by apply-bundle parity.\n",
+  "src/lib/auth.ts": "export const secret = 'redacted';\nexport function verify(token: string): boolean {\n  return token === secret;\n}\n",
+  "tests/auth.test.ts": "import { verify } from '../src/lib/auth.ts';\nimport { expect, test } from 'vitest';\ntest('verify rejects wrong secret', () => {\n  expect(verify('wrong')).toBe(false);\n});\n"
+}

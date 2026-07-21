@@ -1,0 +1,32 @@
+{
+  "_comment": "Auto-repair fixture: stage 7b (docker end-to-end attack) failure at attempt 1. Stage 7b rebuilds the POC's API/db containers from patched source, seeds them, and re-runs the recorded attack. When the attack SUCCEEDS against the patched code the fix is inadequate and emitTrpJFailure is called with stage_label 'TRP8 docker attack' and FAILING_CMD 'attack SUCCEEDED against patched source'. Exit 66 → main context revises the bundle and retries.",
+  "stage": "7b",
+  "attempt": 1,
+  "task_id": "clickup:AR-STAGE7B-A1",
+  "task_id_slug": "clickup_ar-stage7b-a1",
+  "argv": [
+    "clickup:AR-STAGE7B-A1",
+    "--mode=solve",
+    "--after-workflow=discovery/trp-bundle-clickup_ar-stage7b-a1.json",
+    "--attempt=1"
+  ],
+  "env": {
+    "TRP_FIX_LOOP_ENABLED": "true",
+    "TRP_FIX_LOOP_MAX_ATTEMPTS": "5"
+  },
+  "prior_bundle": null,
+  "prior_failure": null,
+  "emit_env": {
+    "STAGE_LABEL": "TRP8 docker attack",
+    "FAILING_CMD": "attack SUCCEEDED against patched source",
+    "ATTEMPT": "1"
+  },
+  "expected": {
+    "exit_code": 66,
+    "stage_label": "TRP8 docker attack",
+    "attempt_number": 1,
+    "next_attempt_number": 2,
+    "next_bundle_path": "discovery/trp-bundle-clickup_ar-stage7b-a1.json",
+    "trp_fail_written_at": "discovery/trp-fail-clickup_ar-stage7b-a1-a1.json"
+  }
+}

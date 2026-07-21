@@ -1,0 +1,11 @@
+{
+  "_comment": "auto-repair stage=0-bootstrap attempt=1 with prior task JSON — support mode reads discovery/task-<slug>.json when present and embeds title + description excerpt in the payload. Guards the read path: a KeyError-shaped fall-through in stage 0 would leak an empty payload and the loop would silently 'succeed' with no context.",
+  "argv": ["clickup:SUPPORT-META", "--mode=support"],
+  "env": {},
+  "files": {
+    "sfp.env": "SFP_REPO_HAND=handled:tttstudios/handled-monorepo-poc:main\n",
+    "trp.env": "",
+    "discovery/task-clickup_support-meta.json": "{\"name\":\"Login redirect loops on Safari 17\",\"text_content\":\"Users on Safari 17.2 report the OAuth flow bouncing between the app and the IdP. Started after the June deploy.\"}"
+  },
+  "task_mode": "support"
+}

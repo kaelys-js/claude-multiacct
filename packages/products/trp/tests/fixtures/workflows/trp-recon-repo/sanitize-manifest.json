@@ -1,0 +1,18 @@
+{
+	"workflow": "trp-recon-repo",
+	"files": [
+		{
+			"name": "trp-repo-expected-output.json",
+			"long_string_replacements": 11,
+			"path_leak_replacements": 4,
+			"total_replacements": 15
+		},
+		{
+			"name": "trp-repo-input.json",
+			"long_string_replacements": 0,
+			"path_leak_replacements": 1,
+			"total_replacements": 1
+		}
+	],
+	"total_replacements": 16
+}

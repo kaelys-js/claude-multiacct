@@ -1,0 +1,34 @@
+{
+  "_comment": "Auto-repair fixture: stage 8 (pre-commit hook rejects) failure at attempt 1. Stage 8 runs `git commit` on the client repo; a husky pre-commit hook can reject on lint/format/typecheck issues the workflow's preflight missed. fix-task.ts stage8Commit greps the log tail for husky-flavoured error lines and calls emitTrpJFailure with stage_label 'TRP7 pre-commit hook' and the extracted line as the FAILING_CMD suffix.",
+  "stage": 8,
+  "attempt": 1,
+  "task_id": "clickup:AR-STAGE8-A1",
+  "task_id_slug": "clickup_ar-stage8-a1",
+  "argv": [
+    "clickup:AR-STAGE8-A1",
+    "--mode=solve",
+    "--after-workflow=discovery/trp-bundle-clickup_ar-stage8-a1.json",
+    "--attempt=1",
+    "--push"
+  ],
+  "env": {
+    "TRP_FIX_LOOP_ENABLED": "true",
+    "TRP_FIX_LOOP_MAX_ATTEMPTS": "5",
+    "TRP_ALLOW_REMOTE_MUTATE": "true"
+  },
+  "prior_bundle": null,
+  "prior_failure": null,
+  "emit_env": {
+    "STAGE_LABEL": "TRP7 pre-commit hook",
+    "FAILING_CMD": "git commit (husky): error Command \"prettier\" not found.",
+    "ATTEMPT": "1"
+  },
+  "expected": {
+    "exit_code": 66,
+    "stage_label": "TRP7 pre-commit hook",
+    "attempt_number": 1,
+    "next_attempt_number": 2,
+    "next_bundle_path": "discovery/trp-bundle-clickup_ar-stage8-a1.json",
+    "trp_fail_written_at": "discovery/trp-fail-clickup_ar-stage8-a1-a1.json"
+  }
+}

@@ -55,18 +55,7 @@ export default defineConfig({
 			// queue clears. Loud in the config so nobody mistakes the exclusion
 			// for "this file doesn't need coverage".
 			include: ["packages/**/src/**/*.ts"],
-			exclude: [
-				"**/*.test.ts",
-				"**/*.d.ts",
-				"packages/products/trp/src/scripts/fix-task.ts",
-				// PR6b real-port wiring for the bundled cma CLI. Every function
-				// binds a real-fs / real-launchctl / real-process surface that
-				// would need shelling out to test in isolation; the pure command
-				// modules it wraps (install/uninstall/launch/migrate) carry the
-				// coverage. Bundled-CLI happy paths are exercised in
-				// build-cli.test.ts against a spawned node process.
-				"packages/products/claude-multiacct/src/cli/wiring.ts",
-			],
+			exclude: ["**/*.test.ts", "**/*.d.ts", "packages/products/trp/src/scripts/fix-task.ts"],
 			// perFile: every covered file must clear the floor independently, so a
 			// well-covered file can't average out an untested one.
 			thresholds: {

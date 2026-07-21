@@ -1,0 +1,16 @@
+{
+	"task_id": "HAND_SYNTH-SUPPORT-01",
+	"name": "__PLACEHOLDER__",
+	"title": "__PLACEHOLDER__",
+	"description": "__PLACEHOLDER__ description",
+	"text_content": "__PLACEHOLDER__ description",
+	"status": { "status": "to do", "type": null },
+	"priority": { "priority": "normal" },
+	"assignees": [{ "id": 0, "username": "operator", "email": null }],
+	"custom_fields": [],
+	"comments": [],
+	"attachments": [],
+	"subtasks": [],
+	"updated_at": "2026-07-10T00:00:00Z",
+	"url": "https://app.clickup.com/t/HAND_SYNTH-SUPPORT-01"
+}

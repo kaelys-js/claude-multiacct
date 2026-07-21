@@ -1,0 +1,49 @@
+{
+	"_comment": "Held-out fixture for trp-intent-extract.contract.test.ts. NOT shipped under tests/fixtures/workflows/ so the parity fixture set stays independent of the contract test. Picks a distinctive task_class ('iac') that no shipped intent-extract fixture uses.",
+	"task_id": "clickup:HOLDOUT-01",
+	"task_id_slug": "holdout-01",
+	"task_json_path": "discovery/task-holdout-01.json",
+	"responses": {
+		"Extract:extract:intent": {
+			"what_changes": "Add a private endpoint on the storage account and retire the public-network access flag in the shared-services Terraform module.",
+			"acceptance_criteria": [
+				"storage_account.public_network_access is set to Disabled",
+				"a private endpoint resource is added in modules/shared/storage.tf",
+				"terraform plan reports zero drift after apply"
+			],
+			"target_repo": "example/holdout-infra",
+			"task_class": "iac",
+			"proof_modality": "iac",
+			"task_mode": "solve",
+			"ambiguity_score": 0.1,
+			"ambiguity_notes": "The target subscription is not named, but the module path is unambiguous.",
+			"is_spike": false,
+			"spike_writeup_content": null,
+			"suggested_follow_up_ticket": null
+		},
+		"Adversarial:adversarial:ambiguity": {
+			"lens": "ambiguity",
+			"holds": true,
+			"confidence": 0.85,
+			"reasoning": "The gaps named in ambiguity_notes are the only ones a human implementer would need to ask about.",
+			"counter_evidence": "",
+			"suggested_correction": ""
+		},
+		"Adversarial:adversarial:wrong_repo": {
+			"lens": "wrong_repo",
+			"holds": true,
+			"confidence": 0.9,
+			"reasoning": "The task explicitly names the shared-services Terraform module which lives in example/holdout-infra.",
+			"counter_evidence": "",
+			"suggested_correction": ""
+		},
+		"Adversarial:adversarial:misidentified_modality": {
+			"lens": "misidentified_modality",
+			"holds": true,
+			"confidence": 0.88,
+			"reasoning": "task_class=iac and proof_modality=iac match the acceptance criteria (Terraform plan/apply).",
+			"counter_evidence": "",
+			"suggested_correction": ""
+		}
+	}
+}

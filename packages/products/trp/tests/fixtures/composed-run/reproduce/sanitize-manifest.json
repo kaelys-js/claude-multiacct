@@ -1,0 +1,20 @@
+{
+	"scrub_rules": [
+		{
+			"pattern": "\\d+ bytes",
+			"replacement": "__BYTES__",
+			"reason": "byte counts vary as the input JSON layout edits"
+		},
+		{
+			"pattern": "\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z",
+			"replacement": "<ISO-TS>",
+			"reason": "timestamps in gh/curl invocation logs"
+		},
+		{
+			"pattern": "/tmp/[a-zA-Z0-9-]+",
+			"replacement": "<TMP>",
+			"reason": "ephemeral tmp paths"
+		}
+	],
+	"structural_shape_only": []
+}

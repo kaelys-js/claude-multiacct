@@ -58,6 +58,19 @@ importers:
         specifier: 29.1.1
         version: 29.1.1
 
+  packages/products/trp:
+    dependencies:
+      '@foundation/agents':
+        specifier: workspace:*
+        version: link:../../shared/utils/agents
+      '@foundation/shell':
+        specifier: workspace:*
+        version: link:../../shared/utils/shell
+    devDependencies:
+      '@foundation/config':
+        specifier: workspace:*
+        version: link:../../shared/config
+
   packages/shared/config: {}
 
   packages/shared/utils/agents:

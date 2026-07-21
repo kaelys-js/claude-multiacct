@@ -1,0 +1,49 @@
+=== exit ===
+66
+=== stdout ===
+=== TRP-EE loop wrapper for clickup:TRP-REPRO-004 (attempt=1) ===
+   TRP_TASK_MODE=reproduce (explicit --mode)
+
+== [0] bootstrap ==
+   tools ready
+
+== [1] load POC context ==
+   no POC dir for clickup:TRP-REPRO-004 — using task JSON at discovery/task-clickup_trp-repro-004.json as context
+   PINNED_SHA=5d47be3a593e (source: gh_api_remote_head)
+   clickup:TRP-REPRO-004 -> tttstudios/handled-monorepo-poc (slug=handled-monorepo-poc, branch=main) @ 5d47be3a593e
+   ClickUp task:   ()
+
+== [2] fetch client @ pinned SHA -> discovery/fix-src/handled-monorepo-poc-clickup_trp-repro-004/ ==
+   using existing clone; hard-reset + checkout 5d47be3a593effe56e35991476b5e0efe93f01eb
+   fetch failed but pinned SHA is local — proceeding (offline mode)
+   HEAD -> 5d47be3a
+
+== [3] prep workflow input -> discovery/trp-input-clickup_trp-repro-004.json ==
+   wrote __BYTES__
+
+== [4b] TRP-V cross-file bundle check (semantic consistency) ==
+
+   BLOCKER: TRP4 bundle absent failed at "no bundle at discovery/trp-bundle-clickup_trp-repro-004.json on attempt=1 — main-context Workflow() invocation required (mirrors SRP29)"
+   wrote discovery/trp-fail-clickup_trp-repro-004-a1.json (__BYTES__)
+   [trp-j] auto-repair loop (attempt 1 / 5)
+   [trp-j] main context re-invokes workflow with previous_attempt = @discovery/trp-fail-clickup_trp-repro-004-a1.json
+   [trp-j] then re-run: ./scripts/fix-task.sh clickup:TRP-REPRO-004 --after-workflow=discovery/trp-bundle-clickup_trp-repro-004.json --attempt=2
+
+=== TRP-EE: HALT (exit 66 — Stage 5-8) ===
+  Next step (main Claude session):
+
+  1. Prep REVISE args:
+     TASK_ID_SLUG=clickup_trp-repro-004 python3 scripts/prep-revise-input.py > <TMP>.json
+
+  2. Invoke workflow with those args:
+     Workflow({ scriptPath: 'workflows/trp-fix-task.js',
+                args: <parsed JSON contents of <TMP>.json> })
+
+  3. Write returned bundle:
+     python3 -c "import json,sys,pathlib; pathlib.Path('discovery/trp-bundle-clickup_trp-repro-004.json').write_text(json.dumps(<result>))"
+
+  4. Re-run this wrapper:
+     ./scripts/trp-run-loop.sh clickup:TRP-REPRO-004  --attempt=2
+
+=== stderr ===
+WARN: clickup:TRP-REPRO-004 has no client_repo in task JSON — falling back to tttstudios/handled-monorepo-poc

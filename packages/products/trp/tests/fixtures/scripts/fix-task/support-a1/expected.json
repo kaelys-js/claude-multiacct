@@ -1,0 +1,22 @@
+{
+  "exit_code": 0,
+  "stdout_contains": [
+    "[0] bootstrap",
+    "wrote discovery/proof/clickup_support-a1/comment-payload.json",
+    "done (mode=support"
+  ],
+  "stderr_contains": [],
+  "files_present": [
+    "discovery/proof/clickup_support-a1/comment-payload.json",
+    "discovery/fix-log-clickup_support-a1.txt"
+  ],
+  "files_absent": [],
+  "payload_shape": {
+    "path": "discovery/proof/clickup_support-a1/comment-payload.json",
+    "expect": {
+      "task_id": "clickup:SUPPORT-A1",
+      "task_id_slug": "clickup_support-a1",
+      "mode": "support"
+    }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "_comment": "auto-repair stage=0-bootstrap attempt=2 — same support short-circuit but the wrapper has already looped once (--attempt=2). Ensures --attempt increments don't leak into stage 0 output (the payload must be identical to attempt 1 modulo task_id).",
+  "argv": ["clickup:SUPPORT-A2", "--mode=support", "--attempt=2"],
+  "env": {},
+  "files": {
+    "sfp.env": "SFP_REPO_HAND=handled:tttstudios/handled-monorepo-poc:main\n",
+    "trp.env": ""
+  },
+  "task_mode": "support"
+}

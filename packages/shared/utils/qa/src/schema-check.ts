@@ -246,10 +246,7 @@ const COVERAGE_EXCLUDED_EXACT = new Set([
 // `*.template.yml` / `*.template.yaml` are pre-substitution workflow templates
 // (see `packages/shared/config/workflows/`); the CLI that consumes them writes
 // the schema-ref appropriate to the OUTPUT location, so the template itself is
-// intentionally schema-ref-less at rest. `*.tmpl.json` / `*.template.json`
-// extend the same semantic to JSON build-time templates (e.g. the extension
-// manifest in `packages/products/claude-multiacct/src/extension/`) which can't
-// validate against their real schema until build-time token substitution runs.
+// intentionally schema-ref-less at rest.
 function isCoverageExcluded(file: string): boolean {
 	if (
 		COVERAGE_EXCLUDED_EXACT.has(file) ||
@@ -257,8 +254,6 @@ function isCoverageExcluded(file: string): boolean {
 		file.endsWith(".schema.json") ||
 		file.endsWith(".template.yml") ||
 		file.endsWith(".template.yaml") ||
-		file.endsWith(".template.json") ||
-		file.endsWith(".tmpl.json") ||
 		file.includes("/tests/fixtures/")
 	) {
 		return true;

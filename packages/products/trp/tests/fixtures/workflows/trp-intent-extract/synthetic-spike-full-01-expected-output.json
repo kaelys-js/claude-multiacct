@@ -1,0 +1,5 @@
+{
+	"detected_mode": "spike-full",
+	"confidence": "high",
+	"rationale": "derived from ticket shape + filename convention"
+}

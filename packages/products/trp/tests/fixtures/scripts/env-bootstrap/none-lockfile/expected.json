@@ -1,0 +1,10 @@
+{
+  "_case": "no lockfile at all — installStage prints SKIP to stderr (not stdout — parity with bash's `>&2`) and returns without invoking a PM. Compose stage still runs and reports 'none found.' on stdout. The stderr line embeds the fix-src absolute path, which the sanitize pass collapses to <FIX_SRC>.",
+  "tree": {},
+  "argv_extra": ["--dry-run"],
+  "expected": {
+    "stdout": "COMPOSE: none found.\n",
+    "stderr": "SKIP: no lockfile in <FIX_SRC> — nothing to install.\n",
+    "exit": 0
+  }
+}

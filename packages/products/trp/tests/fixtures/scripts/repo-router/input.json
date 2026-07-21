@@ -1,0 +1,11 @@
+{
+  "_comment": "Synthetic input for the repo-router parity test. sfp_env_text is a three-row SFP_REPO_* registry; trp_env_text pins TRP_PARALLEL_SAFE=true so the task_id slug is folded into fix_src_path (single-worktree runs would drop it). argv passes an --intent-hint that matches the second row by exact slug (score 100) and a --task that carries a ClickUp task id containing a hyphen \u2014 exercises slugify() on the task suffix. Fixture carries no client source, no secrets, no absolute paths \u2014 sanitize-manifest.json records one path_leak replacement (the runtime REPO_ROOT prefix in fix_src_path) applied at compare time.",
+  "sfp_env_text": "# fixture registry\nSFP_REPO_alpha=alpha:acme/frontend:main\nSFP_REPO_beta=beta:acme/backend:develop\nSFP_REPO_gamma=gamma:acme/infra:trunk\n",
+  "trp_env_text": "TRP_PARALLEL_SAFE=true\n",
+  "argv": [
+    "--intent-hint",
+    "beta",
+    "--task",
+    "clickup:abc-123"
+  ]
+}

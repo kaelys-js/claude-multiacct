@@ -1,0 +1,28 @@
+{
+  "attempt_number": 2,
+  "stage_label": "stage-f-cheap",
+  "prior_bundle": {
+    "files_to_modify": [
+      {
+        "path": "src/lib/verify.ts",
+        "full_content": "export const verify = (t: string) => t === 'ok';\n",
+        "rationale": "close finding"
+      }
+    ],
+    "style_recon": {
+      "commit_convention": "conventional",
+      "test_runner": "vitest"
+    }
+  },
+  "bundle_missing": false,
+  "ci_failure": {
+    "command": "pnpm run test",
+    "exit_code": 1,
+    "stage": "stage-f-cheap",
+    "stderr_tail": "[start] parity-fixture bootstrap\n[ci] running quality gates\n[ci] pnpm run test [attempt=2]\n    RUN  src/lib/verify.test.ts\n    FAIL src/lib/verify.test.ts > verify rejects wrong tokens\n    Expected: false\n    Received: true\nFAIL: pnpm run test exited with code 1"
+  },
+  "style_recon": {
+    "commit_convention": "conventional",
+    "test_runner": "vitest"
+  }
+}

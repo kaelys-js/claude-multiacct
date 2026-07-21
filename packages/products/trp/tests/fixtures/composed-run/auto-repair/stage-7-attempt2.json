@@ -1,0 +1,55 @@
+{
+  "_comment": "Auto-repair fixture: stage 7 (POC verify) failure at attempt 2. Prior_failure records how many layers were still FAILing on attempt 1 so the REVISE workflow can shape the attempt-2 bundle. Auto-repair loop remains active — no per-attempt behavioral divergence at this stage other than the attempt_number field in the emitted fail JSON.",
+  "stage": 7,
+  "attempt": 2,
+  "task_id": "clickup:AR-STAGE7-A2",
+  "task_id_slug": "clickup_ar-stage7-a2",
+  "argv": [
+    "clickup:AR-STAGE7-A2",
+    "--mode=solve",
+    "--after-workflow=discovery/trp-bundle-clickup_ar-stage7-a2.json",
+    "--attempt=2"
+  ],
+  "env": {
+    "TRP_FIX_LOOP_ENABLED": "true",
+    "TRP_FIX_LOOP_MAX_ATTEMPTS": "5"
+  },
+  "prior_bundle": {
+    "ready_to_ship": true,
+    "branch_name": "security/ar-stage7-a1",
+    "commit_message": "fix(security): ar-stage7 attempt 1",
+    "files_to_modify": [
+      {
+        "path": "apps/api/src/auth/verify.ts",
+        "full_content": "// attempt 1 — added algorithm allow-list but missed audience pinning\n",
+        "rationale": "attempt 1 closed the algorithm confusion but left aud open"
+      }
+    ]
+  },
+  "prior_failure": {
+    "attempt_number": 1,
+    "stage_label": "TRP8 POC verify",
+    "bundle_missing": false,
+    "ci_failure": {
+      "command": "verify-all",
+      "exit_code": 1,
+      "stage": "TRP8 POC verify",
+      "stderr_tail": ">>> FAIL: audience-pinning-verifier still failing after attempt 1"
+    },
+    "prior_bundle": {},
+    "style_recon": null
+  },
+  "emit_env": {
+    "STAGE_LABEL": "TRP8 POC verify",
+    "FAILING_CMD": "1 POC layer(s) still FAIL",
+    "ATTEMPT": "2"
+  },
+  "expected": {
+    "exit_code": 66,
+    "stage_label": "TRP8 POC verify",
+    "attempt_number": 2,
+    "next_attempt_number": 3,
+    "next_bundle_path": "discovery/trp-bundle-clickup_ar-stage7-a2.json",
+    "trp_fail_written_at": "discovery/trp-fail-clickup_ar-stage7-a2-a2.json"
+  }
+}

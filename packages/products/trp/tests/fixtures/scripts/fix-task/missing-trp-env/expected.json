@@ -1,0 +1,7 @@
+{
+  "exit_code": 2,
+  "stdout_contains": [],
+  "stderr_contains": ["trp.env missing"],
+  "files_present": [],
+  "files_absent": []
+}

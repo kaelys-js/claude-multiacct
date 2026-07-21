@@ -1,0 +1,5 @@
+{
+	"detected_mode": "solve",
+	"confidence": "high",
+	"rationale": "derived from ticket shape + filename convention"
+}

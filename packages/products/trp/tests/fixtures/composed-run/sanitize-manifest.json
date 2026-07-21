@@ -1,0 +1,32 @@
+{
+	"fixture": "hand-itc-308-solve-expected.json",
+	"sanitize_impl": "packages/products/trp/src/workflows/sanitize.ts (threshold=40, fnv1a-64/UTF-16, abs-path collapse)",
+	"sources": [
+		{
+			"long_string_replacements": 1,
+			"path": "wrapper_stdout",
+			"path_leak_replacements": 0,
+			"total_replacements": 1
+		},
+		{
+			"long_string_replacements": 1,
+			"path": "discovery/fix-log-clickup_hand_itc-308.txt",
+			"path_leak_replacements": 0,
+			"total_replacements": 1
+		},
+		{
+			"long_string_replacements": 1,
+			"path": "discovery/trp-input-clickup_hand_itc-308.json",
+			"path_leak_replacements": 0,
+			"total_replacements": 1
+		},
+		{
+			"long_string_replacements": 2,
+			"path": "discovery/trp-fail-clickup_hand_itc-308-a1.json",
+			"path_leak_replacements": 0,
+			"total_replacements": 2
+		}
+	],
+	"total_replacements": 5,
+	"workflow": "composed-run"
+}

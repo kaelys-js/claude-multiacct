@@ -1,0 +1,13 @@
+{
+  "_case": "pnpm-lock.yaml + docker-compose.yml, --with-docker NOT set — reports the compose file it found and the reason it's not being started. The operator sees the compose file exists but stays in charge of `up -d`.",
+  "tree": {
+    "pnpm-lock.yaml": "",
+    "docker-compose.yml": ""
+  },
+  "argv_extra": ["--dry-run"],
+  "expected": {
+    "stdout": "PM: pnpm\n+ pnpm install --frozen-lockfile --ignore-scripts\nCOMPOSE: docker-compose.yml\nCOMPOSE: --with-docker not set; skipping 'up -d'.\n",
+    "stderr": "",
+    "exit": 0
+  }
+}
