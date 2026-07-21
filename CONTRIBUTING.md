@@ -1,4 +1,4 @@
-# Contributing to claude-multiacct
+# Contributing to foundation-registry
 
 Thanks for your interest. This document covers the local setup, expected
 workflow, and quality bar for changes to this repo.
@@ -6,24 +6,23 @@ workflow, and quality bar for changes to this repo.
 ## Prerequisites
 
 - macOS or Linux (Windows-via-WSL untested)
-- Bash + bats + shellcheck + gitleaks + yamllint + shfmt +
-  markdownlint-cli2 — all pinned via `mise.toml` (auto-installs via
-  `mise install`)
+- Node 26.5.0 — pinned via `mise.toml` (auto-installs via `mise install`)
+- pnpm 11.12.0
 - `git` with SSH signing configured (see [AGENTS.md](AGENTS.md))
 
 ## Setup
 
 ```sh
-git clone https://github.com/kaelys-js/claude-multiacct ~/wherever/claude-multiacct
-cd ~/wherever/claude-multiacct
+git clone https://github.com/kaelys-js/foundation-registry ~/wherever/foundation-registry
+cd ~/wherever/foundation-registry
 mise install          # pins toolchain from mise.toml
-# no deps beyond mise-managed tools
+pnpm install --frozen-lockfile
 ```
 
 ## Local gates (must pass before pushing)
 
 ```sh
-bin/claude-multiacct qa lint && bin/claude-multiacct qa test
+pnpm qa:lint && pnpm qa:format:check && pnpm qa:test
 ```
 
 CI runs the same gates — locally-green + pushed = CI-green.
@@ -47,8 +46,6 @@ Every PR must satisfy:
 - [ ] No forbidden vocabulary — see the Rule 13 list below
 - [ ] Every approved item shipped in full — no scope narrowed silently
 - [ ] Tests verify INTENT (Rule 9), not just behaviour
-- [ ] Runtime changes describe what was actually clicked / run + include
-  `claude-multiacct doctor` output before + after when a mirror is involved
 
 ## Rule 13 — no forbidden vocabulary
 
@@ -71,8 +68,8 @@ blocker + ask; do not narrow scope silently.
 
 ## Getting help
 
-- Bug reports: [Issues](https://github.com/kaelys-js/claude-multiacct/issues)
-- Questions / ideas: [Discussions](https://github.com/kaelys-js/claude-multiacct/discussions)
+- Bug reports: [Issues](https://github.com/kaelys-js/foundation-registry/issues)
+- Questions / ideas: [Discussions](https://github.com/kaelys-js/foundation-registry/discussions)
 - Security: see [SECURITY.md](SECURITY.md) — do NOT file security bugs as public issues
 - Conduct: see [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
 
@@ -83,7 +80,8 @@ Security reports: 24-48 hours via GitHub's private vulnerability reporting.
 
 ## License
 
-Contributions are licensed under the repo's existing LICENSE ([MIT](LICENSE)).
+Contributions are licensed under the repo's existing LICENSE
+(proprietary — see [LICENSE](LICENSE)).
 
 ## The 13 rules
 

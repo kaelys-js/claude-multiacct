@@ -1,0 +1,19 @@
+{
+	"$schema": "../../../../.schemas/package.json",
+	"name": "@foundation/qa",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Foundation QA toolchain: the lint/format dispatch registry and per-tool wrappers.",
+	"license": "SEE LICENSE IN LICENSE",
+	"dependencies": {
+		"@foundation/core": "workspace:*",
+		"valibot": "1.4.2"
+	},
+	"devDependencies": {
+		"@foundation/config": "workspace:*"
+	},
+	"exports": {
+		"./registry": "./src/registry.ts"
+	}
+}

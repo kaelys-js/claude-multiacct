@@ -1,0 +1,13 @@
+# yaml-language-server: $schema=./.schemas/lefthook.json
+#
+# Thin stub — the authoritative lefthook config lives in
+# packages/shared/config/lefthook.yml (centralised in @foundation/config),
+# merged in via `extends` (deep-merge of hooks/commands).
+#
+# A root file is REQUIRED here (unlike the other QA configs, which moved fully):
+# lefthook v2.1.9 discovers config from the repo ROOT only, has no `--config`
+# flag, and its installed `.git/hooks/*` run a fixed `lefthook run <hook>` with no
+# way to point at a relocated file — so the base cannot live under packages/
+# alone. `extends` paths resolve relative to the repo root.
+extends:
+  - packages/shared/config/lefthook.yml

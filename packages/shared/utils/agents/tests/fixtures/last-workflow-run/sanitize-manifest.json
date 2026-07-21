@@ -1,0 +1,10 @@
+{
+	"count_by_field": {
+		"prompt": 10,
+		"response": 35,
+		"path": 497
+	},
+	"total_replaced": 542,
+	"source_journal_sha256": "54a5071f2364cf0727b4b1f878d7e9bd53894b18d7d47f9309e5d0045ac22c9f",
+	"sanitized_journal_sha256": "647edb8fd18b00c222ff0d62e49f6c1a43f84ed454908d6b9cc64ba10797fafd"
+}

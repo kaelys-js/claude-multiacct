@@ -1,0 +1,8 @@
+{
+	"$schema": "../../../.schemas/tsconfig.json",
+	"extends": "@foundation/config/tsconfig.base.json",
+	"compilerOptions": {
+		"lib": ["es2024", "dom"]
+	},
+	"include": ["src/**/*.ts"]
+}

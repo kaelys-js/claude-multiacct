@@ -1,0 +1,211 @@
+{
+	"$comment": "Hand-vendored from resist-js-private (packages/shared/utils/cli/src/tools/schema-updater/schemas/gitleaks.schema.json). No public upstream / SchemaStore entry exists, so this schema is intentionally NOT in packages/shared/utils/sync/src/schemas.ts SCHEMA_SOURCES and is excluded from sync:check.",
+	"$schema": "https://json-schema.org/draft-07/schema#",
+	"$id": "https://resist.js/schemas/gitleaks.schema.json",
+	"title": "Gitleaks Configuration",
+	"description": "Configuration file for Gitleaks secret scanner (.gitleaks.toml)",
+	"type": "object",
+	"properties": {
+		"title": {
+			"type": "string",
+			"description": "Title of the configuration"
+		},
+		"description": {
+			"type": "string",
+			"description": "Description of the configuration's purpose"
+		},
+		"minVersion": {
+			"type": "string",
+			"description": "Minimum Gitleaks version required (e.g. v8.25.0)"
+		},
+		"extend": {
+			"type": "object",
+			"description": "Extend another gitleaks configuration",
+			"properties": {
+				"path": {
+					"type": "string",
+					"description": "Relative path to the configuration file to extend"
+				},
+				"url": {
+					"type": "string",
+					"description": "URL to the configuration file to extend"
+				},
+				"useDefault": {
+					"type": "boolean",
+					"description": "Whether to extend the default gitleaks configuration (mutually exclusive with path)"
+				},
+				"disabledRules": {
+					"type": "array",
+					"description": "Rule IDs to exclude from the inherited configuration",
+					"items": {
+						"type": "string"
+					}
+				}
+			},
+			"additionalProperties": false
+		},
+		"rules": {
+			"type": "array",
+			"description": "List of rules for detecting secrets",
+			"items": {
+				"type": "object",
+				"properties": {
+					"id": {
+						"type": "string",
+						"description": "Unique identifier for the rule"
+					},
+					"description": {
+						"type": "string",
+						"description": "Human-readable description of what the rule detects"
+					},
+					"regex": {
+						"type": "string",
+						"description": "Golang regular expression pattern for detecting secrets"
+					},
+					"path": {
+						"type": "string",
+						"description": "Regular expression for matching file paths"
+					},
+					"secretGroup": {
+						"type": "integer",
+						"description": "Regex capture group index containing the extractable secret",
+						"minimum": 0
+					},
+					"entropy": {
+						"type": "number",
+						"description": "Minimum Shannon entropy threshold for the secret",
+						"minimum": 0
+					},
+					"keywords": {
+						"type": "array",
+						"description": "Keywords that must be present for the rule to match (pre-filter for performance)",
+						"items": {
+							"type": "string"
+						}
+					},
+					"tags": {
+						"type": "array",
+						"description": "Tags for categorizing the rule (use HIGH or LOW for severity)",
+						"items": {
+							"type": "string"
+						}
+					},
+					"skipReport": {
+						"type": "boolean",
+						"description": "Skip reporting this rule's findings (useful for required rules in composites)"
+					},
+					"required": {
+						"type": "array",
+						"description": "Composite rule co-occurrence constraints (v8.28.0+)",
+						"items": {
+							"type": "object",
+							"properties": {
+								"id": {
+									"type": "string",
+									"description": "Required rule identifier that must co-occur"
+								},
+								"withinLines": {
+									"type": "integer",
+									"description": "Vertical proximity constraint (number of lines)",
+									"minimum": 0
+								},
+								"withinColumns": {
+									"type": "integer",
+									"description": "Horizontal proximity constraint (number of columns)",
+									"minimum": 0
+								}
+							},
+							"required": ["id"],
+							"additionalProperties": false
+						}
+					},
+					"allowlists": {
+						"type": "array",
+						"description": "Per-rule allowlist entries to ignore false positives",
+						"items": {
+							"$ref": "#/definitions/allowlist"
+						}
+					}
+				},
+				"required": ["id", "description", "regex"],
+				"additionalProperties": false
+			}
+		},
+		"allowlists": {
+			"type": "array",
+			"description": "Global allowlist entries to ignore false positives (v8.25.0+)",
+			"items": {
+				"allOf": [
+					{
+						"$ref": "#/definitions/allowlist"
+					},
+					{
+						"properties": {
+							"targetRules": {
+								"type": "array",
+								"description": "Limit this allowlist entry to specific rule IDs",
+								"items": {
+									"type": "string"
+								}
+							}
+						}
+					}
+				]
+			}
+		}
+	},
+	"additionalProperties": false,
+	"definitions": {
+		"allowlist": {
+			"type": "object",
+			"description": "Allowlist configuration to ignore false positives",
+			"properties": {
+				"description": {
+					"type": "string",
+					"description": "Description of why these patterns are allowed"
+				},
+				"condition": {
+					"type": "string",
+					"description": "Logic for combining allowlist criteria",
+					"enum": ["OR", "AND"],
+					"default": "OR"
+				},
+				"regexTarget": {
+					"type": "string",
+					"description": "What the regexes match against",
+					"enum": ["match", "line", "secret"],
+					"default": "secret"
+				},
+				"regexes": {
+					"type": "array",
+					"description": "List of regex patterns to allow",
+					"items": {
+						"type": "string"
+					}
+				},
+				"paths": {
+					"type": "array",
+					"description": "List of file path patterns to exclude",
+					"items": {
+						"type": "string"
+					}
+				},
+				"commits": {
+					"type": "array",
+					"description": "List of commit hashes to allow",
+					"items": {
+						"type": "string"
+					}
+				},
+				"stopwords": {
+					"type": "array",
+					"description": "List of stopwords that invalidate a match",
+					"items": {
+						"type": "string"
+					}
+				}
+			},
+			"additionalProperties": false
+		}
+	}
+}

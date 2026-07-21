@@ -1,0 +1,15 @@
+{
+	"$schema": "../../../../.schemas/package.json",
+	"name": "@foundation/agents",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Foundation workflow-harness primitives: typed agent()/parallel()/pipeline()/phase()/log()/budget with a pluggable Host adapter so the same code runs under Claude Code's Workflow tool, a replay fixture, or a no-op default in tests.",
+	"license": "SEE LICENSE IN LICENSE",
+	"devDependencies": {
+		"@foundation/config": "workspace:*"
+	},
+	"exports": {
+		".": "./src/index.ts"
+	}
+}

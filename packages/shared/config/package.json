@@ -1,0 +1,9 @@
+{
+	"$schema": "../../../.schemas/package.json",
+	"name": "@foundation/config",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Shared base configuration (tsconfig base and extensible config sources) for the foundation workspace.",
+	"license": "SEE LICENSE IN LICENSE"
+}

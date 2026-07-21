@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=./.schemas/pnpm-workspace.json
+# Workspace members. `packages/**` matches package dirs at any depth; intermediate
+# dirs without a package.json (packages/shared, packages/shared/utils) are ignored.
+packages:
+  - "packages/**"
+# Dependency cooldown is enforced at UPDATE time by Renovate (minimumReleaseAge:
+# 3 days), NOT here: with exact pins + a committed lockfile installed via
+# --frozen-lockfile, the install-time gate would only ever block our own pinned
+# toolchain. Kept explicitly at 0. (Same rationale as stardust.)
+minimumReleaseAge: 0
+# pnpm 11: deps allowed to run install scripts. lefthook's postinstall installs
+# the git hooks (same as `pnpm prepare`); allow it so `pnpm install` doesn't fail
+# the ignored-builds gate.
+allowBuilds:
+  esbuild: true
+  lefthook: true
+# pnpm 11 made .npmrc auth/registry-only — non-registry settings are read from
+# HERE (or ~/.config/pnpm/config.yaml), NOT .npmrc. So the exact-pin + engine
+# enforcement that .npmrc used to carry lives here, where `pnpm config get`
+# and every install actually honour it. (.npmrc keeps the same keys for any
+# npm-compatible tooling that still reads it, but pnpm ignores them there.)
+saveExact: true
+savePrefix: ""
+engineStrict: true

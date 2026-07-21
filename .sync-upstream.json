@@ -1,0 +1,5 @@
+{
+	"mode": "same-owner",
+	"upstreamRepoSsh": "git@github.com:kaelys-js/foundation-registry.git",
+	"upstreamBranch": "main"
+}
