@@ -1,6 +1,15 @@
 # yaml-language-server: $schema=https://json.schemastore.org/github-issue-config.json
+# Managed by kaelys-js-infra (terraform/repository_files.tf).
+---
+# Force people to pick a template — reduces the "help wanted" issues that
+# would be better as Discussions.
 blank_issues_enabled: false
+
 contact_links:
-  - name: Discussions
-    url: https://github.com/kaelys-js/foundation-registry/discussions
-    about: Ask a question or share ideas
+  - name: Ask a question / share a use case
+    url: https://github.com/kaelys-js/claude-multiacct/discussions
+    about: Use Discussions for questions, ideas, and show-and-tell.
+  - name: Report a security issue
+    url: https://github.com/kaelys-js/claude-multiacct/security/advisories/new
+    about: >
+      Please report vulnerabilities privately, not as public issues.
