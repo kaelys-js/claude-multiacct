@@ -18,7 +18,7 @@
  * @module
  */
 
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 export default defineConfig({
 	test: {
@@ -41,6 +41,14 @@ export default defineConfig({
 		// genuinely stuck test hang indefinitely.
 		testTimeout: 10_000,
 		include: ["packages/**/*.test.ts"],
+		// gate-integrity.test.ts is the QA gates' own meta-test: it spawns the real
+		// lint/format/schema/coverage gates against synthetic-failure fixtures, and
+		// the coverage case forks a nested `vitest run --coverage`. That belongs to
+		// the dedicated `qa:gates` script/CI job, not the main suite — running it
+		// here would nest a vitest-inside-vitest coverage pass on every `test` run.
+		// Kept out of the `packages/**/*.test.ts` glob while preserving vitest's
+		// built-in ignores (node_modules, dist, …).
+		exclude: [...configDefaults.exclude, "packages/shared/utils/qa/tests/gate-integrity.test.ts"],
 		coverage: {
 			provider: "v8",
 			reporter: ["text", "text-summary", "json-summary", "lcov", "html"],

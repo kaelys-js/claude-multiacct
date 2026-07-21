@@ -65,6 +65,7 @@
 		"qa:format:all": "node -e \"process.exit(0)\"",
 		"qa:format:check": "turbo run //#qa:format:check:all",
 		"qa:format:check:all": "node -e \"process.exit(0)\"",
+		"qa:gates": "vitest run --config vitest.gates.config.ts",
 		"qa:hooks": "lefthook validate",
 		"qa:lint": "turbo run //#qa:lint:all",
 		"qa:lint:all": "node -e \"process.exit(0)\"",
