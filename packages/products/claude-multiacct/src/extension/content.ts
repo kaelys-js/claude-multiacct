@@ -32,11 +32,33 @@ const ANCHOR_SELECTORS: readonly string[] = [
 	'header [role="combobox"]',
 ];
 
+/**
+ * Regex matching Claude's model-selector button by its rendered text
+ * (`Opus 4.7`, `Sonnet 4.5`, `Haiku 4.5`, etc.). Load-bearing because
+ * Claude's real button has no `data-testid`, no `aria-label`, no `role`,
+ * and its `id` is a dynamic base-ui slug (`base-ui-_r_li_`) — none of the
+ * attribute selectors above match. Live-verified 2026-07-21 on the
+ * Code-tab bottom bar. Text-content matching is brittle to a rename
+ * ("Foo" → "Opus 5") but survives class/id churn, which is the more
+ * frequent change vector for a hot product.
+ */
+const MODEL_FAMILY_TEXT_RE = /^(Opus|Sonnet|Haiku)\s/iu;
+
 function findAnchor(doc: Document): Element | undefined {
 	for (const sel of ANCHOR_SELECTORS) {
 		const el = doc.querySelector(sel);
 		if (el !== null) {
 			return el;
+		}
+	}
+	// Text-content fallback: iterate every button and match on its text.
+	// Uses NodeList iteration rather than querySelectorAll+Array.from so it
+	// short-circuits at the first hit (typically <20 buttons in Claude's
+	// Code-tab shell before the model selector).
+	for (const btn of doc.querySelectorAll("button")) {
+		const text = btn.textContent?.trim() ?? "";
+		if (MODEL_FAMILY_TEXT_RE.test(text)) {
+			return btn;
 		}
 	}
 	return undefined;

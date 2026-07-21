@@ -241,6 +241,69 @@ describe("bootContent", () => {
 		handle?.destroy();
 	});
 
+	it("mounts by matching model-family text content when no attribute selector hits (live prod DOM)", async () => {
+		// Intent: Claude's real model-selector button has no `data-testid`,
+		// no `aria-label`, no `role="combobox"`, and a dynamic base-ui id —
+		// none of ANCHOR_SELECTORS match. Live-diagnosed on 2026-07-21: the
+		// button is identifiable only by its text content (`Opus 4.7`,
+		// `Sonnet 4.5`, `Haiku 4.5`, …). Adversarial: delete the text-content
+		// fallback in findAnchor and this goes RED because the anchor never
+		// resolves and the picker never mounts.
+		const container = env.doc.createElement("div");
+		const anchor = env.doc.createElement("button");
+		anchor.textContent = "Opus 4.7";
+		container.append(anchor);
+		env.doc.body.append(container);
+		const handle = await bootContent({
+			doc: env.doc,
+			win: env.win,
+			fetchImpl: makeFetch() as any,
+			extensionUrl: (p) => `chrome-extension://x/${p}`,
+		});
+		expect(env.doc.querySelector("[data-cma-picker]")).not.toBeNull();
+		handle?.destroy();
+	});
+
+	it("text-content fallback matches Sonnet + Haiku too, not just Opus", async () => {
+		for (const label of ["Sonnet 4.5", "Haiku 4.5"]) {
+			env.doc.body.innerHTML = "";
+			const container = env.doc.createElement("div");
+			const anchor = env.doc.createElement("button");
+			anchor.textContent = label;
+			container.append(anchor);
+			env.doc.body.append(container);
+			// eslint-disable-next-line no-await-in-loop -- sequential per label to keep env fresh
+			const handle = await bootContent({
+				doc: env.doc,
+				win: env.win,
+				fetchImpl: makeFetch() as any,
+				extensionUrl: (p) => `chrome-extension://x/${p}`,
+			});
+			expect(env.doc.querySelector("[data-cma-picker]")).not.toBeNull();
+			handle?.destroy();
+		}
+	});
+
+	it("text-content fallback does NOT match a generic button (e.g. a nav Home link)", async () => {
+		// Adversarial: if the fallback matched any button, the picker would
+		// mount on the wrong anchor. Sanity gate that it's regex-scoped.
+		const container = env.doc.createElement("div");
+		const btn1 = env.doc.createElement("button");
+		btn1.textContent = "Home";
+		const btn2 = env.doc.createElement("button");
+		btn2.textContent = "New chat";
+		container.append(btn1, btn2);
+		env.doc.body.append(container);
+		const handle = await bootContent({
+			doc: env.doc,
+			win: env.win,
+			fetchImpl: makeFetch() as any,
+			extensionUrl: (p) => `chrome-extension://x/${p}`,
+		});
+		expect(env.doc.querySelector("[data-cma-picker]")).toBeNull();
+		handle?.destroy();
+	});
+
 	it("no-ops the re-mount if a picker is already attached to the anchor", async () => {
 		const container = env.doc.createElement("div");
 		const anchor = env.doc.createElement("button");
