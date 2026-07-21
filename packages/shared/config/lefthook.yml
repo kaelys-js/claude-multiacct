@@ -11,10 +11,23 @@
 # Override locally via lefthook-local.yml (not committed).
 #
 # GATES ARE UNSKIPPABLE. Do NOT set LEFTHOOK=0, LEFTHOOK_EXCLUDE=<hook>, or
-# push with --no-verify. The `no-bypass` guard at priority 0 of every stage
-# below inspects the environment and hard-fails if a bypass attempt is
-# detected. If a gate fails, the correct response is to fix the failing
-# check, not to skip it. See MEMORY: feedback_coverage_gate_bypass.md.
+# push with --no-verify. If a gate fails, the correct response is to fix the
+# failing check, not to skip it. See MEMORY: feedback_coverage_gate_bypass.md.
+#
+# Two layers enforce this:
+#   1. A `no-bypass` command at priority 0 of every stage inspects the
+#      environment and hard-fails on a detected bypass attempt.
+#   2. The SAME check is inlined at the head of every real gate below. Layer 1
+#      alone is defeatable: `LEFTHOOK_EXCLUDE=no-bypass` excludes the guard
+#      command by name before it runs. When that happens the real gates still
+#      carry the check, so the push/commit still fails closed. To silence layer
+#      2 you would have to exclude every gate in the stage by name, which leaves
+#      nothing running — the same posture as disabling the hook outright.
+#
+# One vector this config cannot catch: `LEFTHOOK=0`. lefthook's own installed
+# `.git/hooks/*` wrapper exits 0 on `LEFTHOOK=0` before lefthook (and thus any
+# command here) runs, so it is a wrapper concern, not a config one. It is called
+# out here so nobody mistakes its absence for an oversight.
 
 # ─── Commit Message ──────────────────────────────────────────────────────────
 
@@ -31,7 +44,12 @@ commit-msg:
       fail_text: "Gate bypass attempted. Fix the failing check, do not skip."
     validate:
       priority: 1
-      run: pnpm lint:commit --edit {1}
+      run: |
+        if [ -n "$LEFTHOOK_EXCLUDE" ] || [ "$LEFTHOOK" = "0" ]; then
+          echo "BLOCKED: lefthook gates are unskippable (LEFTHOOK/LEFTHOOK_EXCLUDE set)." >&2
+          exit 1
+        fi
+        pnpm lint:commit --edit {1}
       fail_text: "Commit message does not follow conventional commits. See https://www.conventionalcommits.org"
 
 # ─── Pre-Commit ──────────────────────────────────────────────────────────────
@@ -60,13 +78,23 @@ pre-commit:
     # p1 — Format staged files, then re-stage what changed.
     format:
       priority: 1
-      run: bin/mise exec -- node packages/shared/utils/qa/src/format.ts {staged_files}
+      run: |
+        if [ -n "$LEFTHOOK_EXCLUDE" ] || [ "$LEFTHOOK" = "0" ]; then
+          echo "BLOCKED: lefthook gates are unskippable (LEFTHOOK/LEFTHOOK_EXCLUDE set)." >&2
+          exit 1
+        fi
+        bin/mise exec -- node packages/shared/utils/qa/src/format.ts {staged_files}
       stage_fixed: true
       fail_text: "Formatting failed. Run 'pnpm qa:format' to fix."
     # p2 — Lint staged files after formatting settles them.
     lint:
       priority: 2
-      run: bin/mise exec -- node packages/shared/utils/qa/src/lint.ts {staged_files}
+      run: |
+        if [ -n "$LEFTHOOK_EXCLUDE" ] || [ "$LEFTHOOK" = "0" ]; then
+          echo "BLOCKED: lefthook gates are unskippable (LEFTHOOK/LEFTHOOK_EXCLUDE set)." >&2
+          exit 1
+        fi
+        bin/mise exec -- node packages/shared/utils/qa/src/lint.ts {staged_files}
       fail_text: "Linting failed. Run 'pnpm qa:lint' to see failures."
 
 # ─── Pre-Push ────────────────────────────────────────────────────────────────
@@ -102,7 +130,12 @@ pre-push:
     # it can't fail an offline push — only a reachable content diff is drift).
     sync-drift:
       priority: 1
-      run: pnpm sync:check
+      run: |
+        if [ -n "$LEFTHOOK_EXCLUDE" ] || [ "$LEFTHOOK" = "0" ]; then
+          echo "BLOCKED: lefthook gates are unskippable (LEFTHOOK/LEFTHOOK_EXCLUDE set)." >&2
+          exit 1
+        fi
+        pnpm sync:check
       fail_text: "Generated-file drift. Run 'pnpm sync' to regenerate (versions/turbo/schemas)."
     # p2 — Whole-repo lint (every tool over every tracked file). This includes
     # the whole-project typecheck (tsc --noEmit), REUSE license compliance
@@ -110,24 +143,44 @@ pre-push:
     # tool) — all members of the qa:lint pipeline.
     lint:
       priority: 2
-      run: pnpm qa:lint
+      run: |
+        if [ -n "$LEFTHOOK_EXCLUDE" ] || [ "$LEFTHOOK" = "0" ]; then
+          echo "BLOCKED: lefthook gates are unskippable (LEFTHOOK/LEFTHOOK_EXCLUDE set)." >&2
+          exit 1
+        fi
+        pnpm qa:lint
       fail_text: "Linting failed. Run 'pnpm qa:lint' to see failures."
     # p3 — Whole-repo format check (non-zero if anything is unformatted).
     format-check:
       priority: 3
-      run: pnpm qa:format:check
+      run: |
+        if [ -n "$LEFTHOOK_EXCLUDE" ] || [ "$LEFTHOOK" = "0" ]; then
+          echo "BLOCKED: lefthook gates are unskippable (LEFTHOOK/LEFTHOOK_EXCLUDE set)." >&2
+          exit 1
+        fi
+        pnpm qa:format:check
       fail_text: "Formatting drift. Run 'pnpm qa:format' to fix."
     # p4 — Unit tests (vitest, no coverage). Fast fail on a broken test before the
     # heavier coverage pass.
     test-unit:
       priority: 4
-      run: pnpm qa:test
+      run: |
+        if [ -n "$LEFTHOOK_EXCLUDE" ] || [ "$LEFTHOOK" = "0" ]; then
+          echo "BLOCKED: lefthook gates are unskippable (LEFTHOOK/LEFTHOOK_EXCLUDE set)." >&2
+          exit 1
+        fi
+        pnpm qa:test
       fail_text: "Tests failed. Run 'pnpm test' to see failures."
     # p5 — Coverage gate: `vitest run --coverage` exits non-zero below the per-file
     # thresholds in vitest.config.ts, blocking the push on undertested code.
     test-coverage:
       priority: 5
-      run: pnpm qa:test:coverage
+      run: |
+        if [ -n "$LEFTHOOK_EXCLUDE" ] || [ "$LEFTHOOK" = "0" ]; then
+          echo "BLOCKED: lefthook gates are unskippable (LEFTHOOK/LEFTHOOK_EXCLUDE set)." >&2
+          exit 1
+        fi
+        pnpm qa:test:coverage
       fail_text: "Coverage below threshold. Run 'pnpm test:coverage' to see the gap."
 
 # ─── Post-Checkout / Post-Merge ──────────────────────────────────────────────
