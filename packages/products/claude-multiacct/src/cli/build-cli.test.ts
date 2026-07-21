@@ -131,8 +131,13 @@ describe("build-cli: bundled dist/cma.js is a runnable node script", () => {
 		expect(result.stdout.trim()).toBe(`cma-cli selftest OK ${PACKAGE_VERSION}`);
 	});
 
-	it("init --dry-run → exit 0 (no fs writes on a bare machine)", () => {
+	it("init --dry-run → exit 0 (no fs writes on a bare machine)", async () => {
+		// Point HOME at a fresh dir so the spawn does not read the developer's
+		// real `~/.config/claude-multiacct/config.json` (which turns the
+		// dry-run into a "already exists" no-op and hides the code path).
+		const fakeHome = await mkdtemp(join(tmpdir(), "cma-init-drynrun-home-"));
 		const result = spawnSync(process.execPath, [outfile, "init", "--dry-run"], {
+			env: { ...process.env, HOME: fakeHome, XDG_CONFIG_HOME: join(fakeHome, ".config") },
 			encoding: "utf8",
 		});
 		expect(result.status).toBe(0);

@@ -511,11 +511,28 @@ describe("installer: claude-cache plant (electron-devtools-installer path)", () 
 	});
 
 	it("does NOT touch the cache path when claudeCacheDir is omitted (opt-in)", async () => {
-		// Opt-in default: tests that don't pass claudeCacheDir must never write
-		// to the real user's ~/Library/Application Support/Claude/Extensions/.
-		// Adversarial: if the default becomes eager, this test writes to real
-		// disk (fs throws on the writeFile of the real path if it doesn't
-		// exist, or worse: silently touches the user's real machine).
+		// Opt-in default: an install without claudeCacheDir must not touch the
+		// real user's ~/Library/Application Support/Claude/Extensions/. We can't
+		// just assert the manifest is absent — a developer's machine may have a
+		// pre-existing one from an unrelated Claude Desktop install. Instead
+		// snapshot the file's state (hash + mtime, or "absent") before and after
+		// and assert equality.
+		// Adversarial: if the default becomes eager, `installClaudeCache` would
+		// write our extension bytes over the snapshot and the tag changes.
+		const { stat: statFs } = await import("node:fs/promises");
+		const cachePath = join(defaultClaudeCacheDir(), "manifest.json");
+		const tag = async (): Promise<string> => {
+			const [bytesHash, mtime] = await Promise.all([
+				readFile(cachePath)
+					.then((b) => createHash("sha256").update(b).digest("hex"))
+					.catch(() => "absent"),
+				statFs(cachePath)
+					.then((s) => String(s.mtimeMs))
+					.catch(() => "absent"),
+			]);
+			return `${bytesHash}@${mtime}`;
+		};
+		const before = await tag();
 		const { distDir, installDir, bridge, backup } = await mkFixture();
 		const fs = await realFs();
 		const result = await install({
@@ -528,10 +545,7 @@ describe("installer: claude-cache plant (electron-devtools-installer path)", () 
 			// claudeCacheDir omitted deliberately
 		});
 		expect(result).toEqual({ installed: true, upgraded: false });
-		// If defaultClaudeCacheDir() had been touched, the manifest would be
-		// there. It must not be.
-		const { access } = await import("node:fs/promises");
-		await expect(access(join(defaultClaudeCacheDir(), "manifest.json"))).rejects.toThrow(/ENOENT/u);
+		expect(await tag()).toBe(before);
 	});
 
 	it("heals the cache-dir plant on a byte-identical rerun (matches the primary heal-on-rerun contract)", async () => {
