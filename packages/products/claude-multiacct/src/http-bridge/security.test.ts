@@ -74,6 +74,14 @@ describe("corsPreflight", () => {
 		expect(res.headers["access-control-allow-headers"]).toContain(BRIDGE_SECRET_HEADER);
 		expect(res.headers["access-control-allow-headers"]).toContain("content-type");
 	});
+	it("acknowledges Chrome Private Network Access (Chrome 104+) so an HTTPS page can reach 127.0.0.1", () => {
+		// Adversarial: drop `access-control-allow-private-network` from
+		// corsPreflight and this test flips RED. Without the header, Chrome
+		// blocks the fetch as `TypeError: Failed to fetch` and the extension
+		// cannot talk to the daemon at all — reproduced live on 2026-07-21.
+		const res = corsPreflight("https://claude.ai");
+		expect(res.headers["access-control-allow-private-network"]).toBe("true");
+	});
 });
 
 describe("validateAuth", () => {

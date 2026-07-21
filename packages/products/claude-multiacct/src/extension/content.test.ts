@@ -217,7 +217,7 @@ describe("bootContent", () => {
 		});
 		expect(env.doc.querySelector("[data-cma-picker]")).toBeNull();
 		// SPA hydration: attribute mutation on the existing node.
-		anchor.setAttribute("data-testid", "model-selector");
+		anchor.dataset.testid = "model-selector";
 		await new Promise<void>((resolve) => {
 			setTimeout(resolve, 0);
 		});
@@ -230,14 +230,14 @@ describe("bootContent", () => {
 		// reached execution — without it a matches / injection failure is
 		// indistinguishable from a picker-render failure. Adversarial: drop
 		// the setAttribute at the top of bootContent and this goes red.
-		expect(env.doc.documentElement.getAttribute("data-cma-content")).toBeNull();
+		expect(env.doc.documentElement.dataset.cmaContent).toBeUndefined();
 		const handle = await bootContent({
 			doc: env.doc,
 			win: env.win,
 			fetchImpl: makeFetch() as any,
 			extensionUrl: (p) => `chrome-extension://x/${p}`,
 		});
-		expect(env.doc.documentElement.getAttribute("data-cma-content")).toBe("loaded");
+		expect(env.doc.documentElement.dataset.cmaContent).toBe("loaded");
 		handle?.destroy();
 	});
 

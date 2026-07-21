@@ -19,10 +19,13 @@ import * as v from "valibot";
 
 /**
  * `BridgeConfig` — the subset of the daemon's manifest the extension needs.
- * `strictObject` guards against a manifest schema change silently downgrading
- * to a stale field — a mismatch fails validation, loud (Rule 12).
+ * Non-strict: the daemon also writes `pid` and `startedAt` for its own
+ * single-instance bookkeeping, which the extension has no interest in and
+ * must not reject on. Validate the three fields we depend on and let the
+ * daemon add more as it needs to (Rule 3: extension does not own daemon
+ * schema evolution).
  */
-export const BridgeConfigSchema = v.strictObject({
+export const BridgeConfigSchema = v.object({
 	port: v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(65_535)),
 	secret: v.pipe(v.string(), v.minLength(1)),
 	version: v.pipe(v.string(), v.minLength(1)),

@@ -46,6 +46,8 @@ import {
 	uninstall as uninstallShim,
 } from "../cli-shim/installer.ts";
 import {
+	defaultClaudeCacheCrxPath,
+	defaultClaudeCacheDir,
 	install as installExtension,
 	type InstallerFs as ExtensionFs,
 	status as extensionStatus,
@@ -256,6 +258,8 @@ function buildSteps(deps: WiringDeps): readonly OrchestrationStep[] {
 				fs: realExtensionFs(),
 				flag,
 				env: deps.env,
+				claudeCacheDir: defaultClaudeCacheDir(),
+				claudeCacheCrxPath: defaultClaudeCacheCrxPath(),
 			});
 			return { ok: !("skipped" in result && result.skipped) };
 		},
@@ -263,6 +267,7 @@ function buildSteps(deps: WiringDeps): readonly OrchestrationStep[] {
 			await uninstallExtension({
 				fs: realExtensionFs(),
 				flag,
+				claudeCacheDir: defaultClaudeCacheDir(),
 			});
 			return { ok: true };
 		},

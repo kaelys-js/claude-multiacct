@@ -2,9 +2,12 @@
  * Intent: `readBridgeConfig` is the extension's only path to the daemon's
  * shared secret. It MUST return `undefined` — not throw, not partial —
  * for every plausible failure mode, because a thrown value here breaks
- * the content-script boot and leaves the whole tab silent. Adversarial:
- * swap `strictObject` for `object` and the "extra field rejected" test
- * flips green when it should stay red.
+ * the content-script boot and leaves the whole tab silent. It MUST also
+ * accept the daemon's real write-shape (which carries `pid` + `startedAt`
+ * for single-instance bookkeeping the extension doesn't care about) —
+ * strictObject rejects those and produced a silent no-picker in prod.
+ * Adversarial: flip `object` back to `strictObject` and the
+ * "accepts daemon-shape with pid+startedAt" test flips RED.
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -52,11 +55,22 @@ describe("readBridgeConfig", () => {
 		expect(await readBridgeConfig(fetchImpl as unknown as FetchLike, url)).toBeUndefined();
 	});
 
-	it("rejects an unknown extra field (strictObject)", async () => {
+	it("accepts daemon-shape with pid+startedAt (extra fields the daemon writes)", async () => {
 		const fetchImpl = vi.fn<FetchLike>(() =>
-			ok({ port: 9001, secret: "s", version: "v", extra: "reject" }),
+			ok({
+				port: 65_336,
+				secret: "example-fixture-secret-not-real",
+				version: "0.0.0",
+				pid: 98_361,
+				startedAt: "2026-07-21T05:21:27.029Z",
+			}),
 		);
-		expect(await readBridgeConfig(fetchImpl as unknown as FetchLike, url)).toBeUndefined();
+		const result = await readBridgeConfig(fetchImpl as unknown as FetchLike, url);
+		expect(result).toEqual({
+			port: 65_336,
+			secret: "example-fixture-secret-not-real",
+			version: "0.0.0",
+		});
 	});
 
 	it("rejects a port outside 1..65535", async () => {

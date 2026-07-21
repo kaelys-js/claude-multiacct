@@ -69,6 +69,42 @@ export function defaultInstallDir(): string {
 	);
 }
 
+/**
+ * `electron-devtools-installer`'s cache path. Claude bundles that installer;
+ * on first launch it fetches the real React DevTools CRX from the Chrome
+ * Web Store and unpacks it here (flat, no version subdir). On subsequent
+ * launches it prefers this cached unpacked dir over anything else — so if
+ * we don't also plant here, our extension is never loaded once the cache
+ * is seeded. Live-reproduced 2026-07-21: cached CRX shadowed the Chrome-
+ * Default fallback and every relaunch loaded the real RDT instead.
+ *
+ * We also delete the sibling `.crx` at install time (see `installClaudeCache`)
+ * so the installer doesn't re-extract over our plant on next boot. The
+ * launch wrapper's `--host-resolver-rules` blackhole prevents a fresh
+ * download from ever re-seeding it.
+ *
+ * @returns {string} Absolute path to the flat cache dir.
+ */
+export function defaultClaudeCacheDir(): string {
+	return join(homedir(), "Library", "Application Support", "Claude", "Extensions", RDT_ANCHOR_ID);
+}
+
+/**
+ * Absolute path of the sibling `.crx` the installer would re-extract from.
+ *
+ * @returns {string} Absolute path.
+ */
+export function defaultClaudeCacheCrxPath(): string {
+	return join(
+		homedir(),
+		"Library",
+		"Application Support",
+		"Claude",
+		"Extensions",
+		`${RDT_ANCHOR_ID}.crx`,
+	);
+}
+
 /** Filesystem subset the installer consumes. Injected for tests. */
 export type InstallerFs = {
 	mkdir(path: string, opts: { recursive: true }): Promise<void>;
@@ -84,6 +120,21 @@ export type InstallerFs = {
 
 export type InstallOptions = {
 	installDir?: string;
+	/**
+	 * Second install target — Claude's electron-devtools-installer cache dir.
+	 * Populating this is what actually makes the extension load in prod: the
+	 * loader prefers its own cache over the Chrome-Default fallback once
+	 * seeded. Defaults to `defaultClaudeCacheDir()`; tests override with a
+	 * tmp path. Pass `null` to skip (tests that only exercise the Chrome-
+	 * Default path).
+	 */
+	claudeCacheDir?: string | null;
+	/**
+	 * Path of the sibling `.crx` to delete so the loader doesn't re-extract
+	 * over our plant. Defaults to `defaultClaudeCacheCrxPath()`. Pass `null`
+	 * to skip (tests).
+	 */
+	claudeCacheCrxPath?: string | null;
 	distDir: string;
 	bridgeJsonPath: string;
 	fs: InstallerFs;
@@ -163,6 +214,24 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
 		// Ensure the symlink is present even on a byte-identical rerun so a
 		// user who removed the bridge.json manually can heal by re-running.
 		await ensureBridgeSymlink(opts.fs, dstBridge, opts.bridgeJsonPath);
+		const { claudeCacheDir, claudeCacheCrxPath } = opts;
+		if (claudeCacheDir !== undefined && claudeCacheDir !== null) {
+			// Same heal-on-rerun: if the loader cache was wiped or reseeded by
+			// an upstream update, re-plant. Reads from disk (not the byte-
+			// identical hash cache we already computed) because a plant may
+			// have been separately clobbered.
+			const manifestBuf = await opts.fs.readFile(srcManifest);
+			const contentBuf = await opts.fs.readFile(srcContent);
+			await installClaudeCache(
+				opts.fs,
+				claudeCacheDir,
+				claudeCacheCrxPath ?? null,
+				manifestBuf,
+				contentBuf,
+				opts.bridgeJsonPath,
+				log,
+			);
+		}
 		return { installed: false, alreadyInstalled: true };
 	}
 
@@ -194,7 +263,60 @@ export async function install(opts: InstallOptions): Promise<InstallResult> {
 	await opts.fs.writeFile(dstContent, contentBuf);
 	await ensureBridgeSymlink(opts.fs, dstBridge, opts.bridgeJsonPath);
 
+	const { claudeCacheDir, claudeCacheCrxPath } = opts;
+	if (claudeCacheDir !== undefined && claudeCacheDir !== null) {
+		await installClaudeCache(
+			opts.fs,
+			claudeCacheDir,
+			claudeCacheCrxPath ?? null,
+			manifestBuf,
+			contentBuf,
+			opts.bridgeJsonPath,
+			log,
+		);
+	}
+
 	return { installed: true, upgraded: upgrading };
+}
+
+/**
+ * Plant the extension at Claude's electron-devtools-installer cache path
+ * AND remove the sibling `.crx` that would otherwise re-extract over the
+ * plant on next Claude launch. This is the load-bearing step for the
+ * extension to actually reach the renderer — see `defaultClaudeCacheDir`.
+ *
+ * Idempotent: writes are unconditional per install call (a bytewise-
+ * identical rerun replaces file bytes with the same bytes), but the crx
+ * removal is guarded with an existence check so a missing `.crx` is not
+ * treated as an error.
+ *
+ * @param {InstallerFs} fs - Filesystem shim.
+ * @param {string} cacheDir - Target dir path.
+ * @param {string | null} crxPath - Sibling `.crx` to remove, or null to skip.
+ * @param {Buffer} manifestBuf - Manifest bytes to plant.
+ * @param {Buffer} contentBuf - Content-script bytes to plant.
+ * @param {string} bridgeTarget - Symlink target for `bridge.json`.
+ * @param {(msg: string) => void} log - Logger for operator visibility.
+ * @returns {Promise<void>}
+ */
+async function installClaudeCache(
+	fs: InstallerFs,
+	cacheDir: string,
+	crxPath: string | null,
+	manifestBuf: Buffer,
+	contentBuf: Buffer,
+	bridgeTarget: string,
+	log: (msg: string) => void,
+): Promise<void> {
+	await fs.mkdir(cacheDir, { recursive: true });
+	await fs.writeFile(join(cacheDir, "manifest.json"), manifestBuf);
+	await fs.writeFile(join(cacheDir, "content.js"), contentBuf);
+	await ensureBridgeSymlink(fs, join(cacheDir, "bridge.json"), bridgeTarget);
+	if (crxPath !== null && (await exists(fs, crxPath))) {
+		await fs.rm(crxPath, { force: true });
+		log(`removed stale crx: ${crxPath}`);
+	}
+	log(`planted at claude-cache: ${cacheDir}`);
 }
 
 async function ensureBridgeSymlink(
@@ -218,6 +340,7 @@ async function ensureBridgeSymlink(
 
 export type UninstallOptions = {
 	installDir?: string;
+	claudeCacheDir?: string | null;
 	fs: InstallerFs;
 	/** See `InstallOptions.flag`. Optional; env-var fallback when omitted. */
 	flag?: boolean;
@@ -230,7 +353,10 @@ export type UninstallResult =
 
 /**
  * Uninstall (flag-gated). Removes only the files we created — leaves the
- * install dir if a third party dropped other content in.
+ * install dir if a third party dropped other content in. Cleans up both
+ * install targets (Chrome Default anchor + Claude loader-cache anchor)
+ * so a subsequent Claude launch reverts to whatever the loader fetches
+ * from the network — no orphaned CMA files masquerading as RDT.
  *
  * @param {UninstallOptions} opts - Uninstall inputs.
  * @returns {Promise<UninstallResult>} Skipped or removed.
@@ -239,15 +365,20 @@ export async function uninstall(opts: UninstallOptions): Promise<UninstallResult
 	if (!resolveFlag(opts.flag, opts.env)) {
 		return { skipped: true, reason: "flag-off" };
 	}
-	const installDir = opts.installDir ?? defaultInstallDir();
 	const removed: string[] = [];
-	for (const name of ["manifest.json", "content.js", "bridge.json"]) {
-		const path = join(installDir, name);
-		// eslint-disable-next-line no-await-in-loop -- sequential removal avoids racing concurrent fs ops on the same install dir
-		if (await exists(opts.fs, path)) {
+	const targets: string[] = [opts.installDir ?? defaultInstallDir()];
+	if (opts.claudeCacheDir !== undefined && opts.claudeCacheDir !== null) {
+		targets.push(opts.claudeCacheDir);
+	}
+	for (const dir of targets) {
+		for (const name of ["manifest.json", "content.js", "bridge.json"]) {
+			const path = join(dir, name);
 			// eslint-disable-next-line no-await-in-loop -- sequential removal avoids racing concurrent fs ops on the same install dir
-			await opts.fs.rm(path, { force: true });
-			removed.push(path);
+			if (await exists(opts.fs, path)) {
+				// eslint-disable-next-line no-await-in-loop -- sequential removal avoids racing concurrent fs ops on the same install dir
+				await opts.fs.rm(path, { force: true });
+				removed.push(path);
+			}
 		}
 	}
 	return { removed: true, files: removed };

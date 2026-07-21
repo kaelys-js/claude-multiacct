@@ -60,7 +60,7 @@ export async function bootContent(deps: ContentDeps): Promise<{ destroy(): void 
 	// Inert diagnostic marker — lets an operator confirm from devtools that the
 	// script actually reached execution (vs a matches / injection failure that
 	// looks identical from the picker-missing symptom).
-	deps.doc.documentElement.setAttribute("data-cma-content", "loaded");
+	deps.doc.documentElement.dataset.cmaContent = "loaded";
 	// eslint-disable-next-line no-console
 	console.log(
 		"[cma-content] executed at",

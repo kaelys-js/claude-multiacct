@@ -90,6 +90,16 @@ export function corsPreflight(origin: string): PreflightResponse {
 			"access-control-allow-headers": `content-type,${BRIDGE_SECRET_HEADER}`,
 			"access-control-allow-methods": "GET,POST,OPTIONS",
 			"access-control-max-age": "600",
+			// Chrome Private Network Access — since Chrome 104, a public HTTPS
+			// page fetching a private-IP subresource (127.0.0.1, 10.x, 192.168.x)
+			// sends `Access-Control-Request-Private-Network: true` on the
+			// preflight and the request is blocked as `TypeError: Failed to
+			// fetch` unless the server echoes this header back. The origin
+			// allowlist above is our real auth gate (defense-in-depth alongside
+			// the bearer secret); allowing the PNA acknowledgement here just
+			// clears Chrome's network-layer block for the origins we already
+			// trust. Without it the extension can't talk to the daemon at all.
+			"access-control-allow-private-network": "true",
 		},
 	};
 }

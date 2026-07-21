@@ -13,6 +13,8 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { PACKAGE_VERSION } from "../index.ts";
 import {
+	defaultClaudeCacheCrxPath,
+	defaultClaudeCacheDir,
 	defaultInstallDir,
 	install,
 	type InstallerFs,
@@ -446,6 +448,158 @@ describe("installer: uninstall + status", () => {
 		const result = await uninstall({ fs, flag: true });
 		assertRemoved(result);
 		expect(result.files).toHaveLength(0);
+	});
+});
+
+describe("installer: claude-cache plant (electron-devtools-installer path)", () => {
+	// Live-reproduced 2026-07-21 on kaelys-mac-mini: Claude's electron-devtools-
+	// installer caches an RDT crx at `~/Library/Application Support/Claude/
+	// Extensions/<id>.crx` on first successful CWS fetch and always prefers
+	// its own extracted-cache dir over the Chrome/Default fallback. Without
+	// planting there, the installed extension never reaches the renderer once
+	// the cache is seeded. Adversarial: delete the installClaudeCache call
+	// site and the "plants manifest+content+bridge at claudeCacheDir" test
+	// flips RED because the target files never appear.
+	it("plants manifest+content+bridge at claudeCacheDir when provided", async () => {
+		const { distDir, installDir, bridge, backup } = await mkFixture();
+		const fs = await realFs();
+		const claudeCache = join(installDir, "..", "claude-cache");
+		const claudeCrx = join(installDir, "..", "should-not-exist.crx");
+		const result = await install({
+			distDir,
+			installDir,
+			bridgeJsonPath: bridge,
+			fs,
+			flag: true,
+			backupDir: backup,
+			claudeCacheDir: claudeCache,
+			claudeCacheCrxPath: claudeCrx,
+		});
+		expect(result).toEqual({ installed: true, upgraded: false });
+		const { lstat, readFile: rf, readlink: rl } = await import("node:fs/promises");
+		const m = await rf(join(claudeCache, "manifest.json"));
+		const c = await rf(join(claudeCache, "content.js"));
+		expect(m.equals(await rf(join(distDir, "manifest.json")))).toBe(true);
+		expect(c.equals(await rf(join(distDir, "content.js")))).toBe(true);
+		const st = await lstat(join(claudeCache, "bridge.json"));
+		expect(st.isSymbolicLink()).toBe(true);
+		expect(await rl(join(claudeCache, "bridge.json"))).toBe(bridge);
+	});
+
+	it("removes a stale sibling .crx when it exists (so the loader can not re-extract over the plant)", async () => {
+		// Adversarial: skip the crx-removal branch and the .crx stays behind,
+		// letting the loader re-extract real RDT over our plant on next boot.
+		// This test asserts the removal happens.
+		const { distDir, installDir, bridge, backup } = await mkFixture();
+		const fs = await realFs();
+		const p = await import("node:fs/promises");
+		const claudeCache = join(installDir, "..", "claude-cache");
+		const claudeCrx = join(installDir, "..", "stale.crx");
+		await p.mkdir(join(installDir, ".."), { recursive: true });
+		await p.writeFile(claudeCrx, "PRETEND-CRX-BYTES");
+		await install({
+			distDir,
+			installDir,
+			bridgeJsonPath: bridge,
+			fs,
+			flag: true,
+			backupDir: backup,
+			claudeCacheDir: claudeCache,
+			claudeCacheCrxPath: claudeCrx,
+		});
+		await expect(p.access(claudeCrx)).rejects.toThrow(/ENOENT/u);
+	});
+
+	it("does NOT touch the cache path when claudeCacheDir is omitted (opt-in)", async () => {
+		// Opt-in default: tests that don't pass claudeCacheDir must never write
+		// to the real user's ~/Library/Application Support/Claude/Extensions/.
+		// Adversarial: if the default becomes eager, this test writes to real
+		// disk (fs throws on the writeFile of the real path if it doesn't
+		// exist, or worse: silently touches the user's real machine).
+		const { distDir, installDir, bridge, backup } = await mkFixture();
+		const fs = await realFs();
+		const result = await install({
+			distDir,
+			installDir,
+			bridgeJsonPath: bridge,
+			fs,
+			flag: true,
+			backupDir: backup,
+			// claudeCacheDir omitted deliberately
+		});
+		expect(result).toEqual({ installed: true, upgraded: false });
+		// If defaultClaudeCacheDir() had been touched, the manifest would be
+		// there. It must not be.
+		const { access } = await import("node:fs/promises");
+		await expect(access(join(defaultClaudeCacheDir(), "manifest.json"))).rejects.toThrow(/ENOENT/u);
+	});
+
+	it("heals the cache-dir plant on a byte-identical rerun (matches the primary heal-on-rerun contract)", async () => {
+		const { distDir, installDir, bridge, backup } = await mkFixture();
+		const fs = await realFs();
+		const p = await import("node:fs/promises");
+		const claudeCache = join(installDir, "..", "claude-cache-heal");
+		await install({
+			distDir,
+			installDir,
+			bridgeJsonPath: bridge,
+			fs,
+			flag: true,
+			backupDir: backup,
+			claudeCacheDir: claudeCache,
+		});
+		// Wipe the cache plant.
+		await p.rm(claudeCache, { recursive: true, force: true });
+		// Rerun with identical inputs; primary install returns alreadyInstalled
+		// but the cache-dir plant must be recreated.
+		const result = await install({
+			distDir,
+			installDir,
+			bridgeJsonPath: bridge,
+			fs,
+			flag: true,
+			backupDir: backup,
+			claudeCacheDir: claudeCache,
+		});
+		expect(result).toEqual({ installed: false, alreadyInstalled: true });
+		await p.access(join(claudeCache, "manifest.json"));
+		await p.access(join(claudeCache, "content.js"));
+		await p.access(join(claudeCache, "bridge.json"));
+	});
+
+	it("uninstall clears both install target AND claudeCacheDir when both are provided", async () => {
+		const { distDir, installDir, bridge, backup } = await mkFixture();
+		const fs = await realFs();
+		const claudeCache = join(installDir, "..", "claude-cache-uninstall");
+		await install({
+			distDir,
+			installDir,
+			bridgeJsonPath: bridge,
+			fs,
+			flag: true,
+			backupDir: backup,
+			claudeCacheDir: claudeCache,
+		});
+		const result = await uninstall({
+			installDir,
+			claudeCacheDir: claudeCache,
+			fs,
+			flag: true,
+		});
+		assertRemoved(result);
+		// 3 primary + 3 cache = 6 files removed
+		expect(result.files.length).toBe(6);
+		const { access } = await import("node:fs/promises");
+		await expect(access(join(claudeCache, "content.js"))).rejects.toThrow(/ENOENT/u);
+	});
+
+	it("defaultClaudeCacheDir + CrxPath route through the RDT anchor id under Claude/Extensions/", () => {
+		expect(defaultClaudeCacheDir()).toMatch(
+			/\/Claude\/Extensions\/fmkadmapgofadopljbjfkapdkoienihi$/u,
+		);
+		expect(defaultClaudeCacheCrxPath()).toMatch(
+			/\/Claude\/Extensions\/fmkadmapgofadopljbjfkapdkoienihi\.crx$/u,
+		);
 	});
 });
 
