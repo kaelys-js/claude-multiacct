@@ -31,7 +31,9 @@ const outfile = resolve(pkgRoot, "dist/shim.js");
 
 const entryContents = `
 import { spawn, spawnSync } from "node:child_process";
-import { dirname } from "node:path";
+import { appendFileSync, mkdirSync, openSync, closeSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PACKAGE_VERSION } from "./src/index.ts";
 import { runShim } from "./src/cli-shim/shim.ts";
@@ -65,6 +67,19 @@ const result = await runShim({
 	writePidFile: (uuid) => writeSessionPid(uuid, process.pid),
 	removePidFile: (uuid) => removeSessionPid(uuid),
 	warn: (m) => { process.stderr.write("[cma-shim] " + m + "\\n"); },
+	logSpawn: (sessionUuid, tokenHash) => {
+		try {
+			const logDir = join(homedir(), ".claude-multiacct", "logs");
+			mkdirSync(logDir, { recursive: true, mode: 0o700 });
+			const logPath = join(logDir, "shim-spawns.log");
+			// Touch with 0600 if new; append-only append after.
+			try { closeSync(openSync(logPath, "a", 0o600)); } catch {}
+			const line = new Date().toISOString() + " session=" + (sessionUuid ?? "-") + " token-sha256=" + tokenHash + "\\n";
+			appendFileSync(logPath, line, { mode: 0o600 });
+		} catch {
+			// audit-only; never block a spawn
+		}
+	},
 });
 process.exit(result.exitCode);
 `;

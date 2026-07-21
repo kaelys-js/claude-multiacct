@@ -290,6 +290,68 @@ describe("runShim — describe() error-string helper (guards non-Error rejection
 	});
 });
 
+describe("runShim — logSpawn audit hook", () => {
+	// Intent: every child spawn is auditable, and the audit sees the token
+	// that actually reaches claude.real (not the primary token when the swap
+	// wins, not a stale token when a hot-swap respawns). The runtime writes
+	// this to shim-spawns.log; without the hook fired at every spawn point,
+	// Item 13's "two entries with different token-sha256" proof is impossible.
+	it("fires exactly once per invocation with a hash of the env token", async () => {
+		const logSpawn = vi.fn<(uuid: string | undefined, hash: string) => void>();
+		const { deps } = makeDeps({ logSpawn });
+		await runShim(deps);
+		expect(logSpawn).toHaveBeenCalledTimes(1);
+		expect(logSpawn).toHaveBeenNthCalledWith(
+			1,
+			SESSION_A,
+			expect.stringMatching(/^[0-9a-f]{16}$/u),
+		);
+	});
+
+	it("swap path logs the SWAPPED token hash, not the primary", async () => {
+		const logSpawn = vi.fn<(uuid: string | undefined, hash: string) => void>();
+		const primaryLogSpawn = vi.fn<(uuid: string | undefined, hash: string) => void>();
+		const swapDeps = makeDeps({
+			logSpawn,
+			choiceStore: {
+				read: () =>
+					Promise.resolve({
+						[SESSION_A]: {
+							sessionUuid: SESSION_A,
+							accountUuid: UUID_B,
+							chosenAt: "2026-07-19T00:00:00.000Z",
+						},
+					}),
+				write: async () => {},
+			},
+			tokenStore: {
+				get: () => Promise.resolve("swapped-token"),
+				put: async () => {},
+			},
+		});
+		const primaryDeps = makeDeps({ logSpawn: primaryLogSpawn });
+		await runShim(swapDeps.deps);
+		await runShim(primaryDeps.deps);
+		const [swappedCall] = logSpawn.mock.calls;
+		const [primaryCall] = primaryLogSpawn.mock.calls;
+		expect(swappedCall).toBeDefined();
+		expect(primaryCall).toBeDefined();
+		const [, swappedHash] = swappedCall as [string | undefined, string];
+		const [, primaryHash] = primaryCall as [string | undefined, string];
+		expect(swappedHash).not.toBe(primaryHash);
+	});
+
+	it("logSpawn throwing does not fail the spawn (audit is best-effort)", async () => {
+		const { deps } = makeDeps({
+			logSpawn: () => {
+				throw new Error("disk full");
+			},
+		});
+		const result = await runShim(deps);
+		expect(result.exitCode).toBe(0);
+	});
+});
+
 describe("moduleDir", () => {
 	it("returns the directory of a file:// URL", async () => {
 		const { moduleDir } = await import("./shim.ts");
