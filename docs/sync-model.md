@@ -7,6 +7,7 @@ Session state moves between instances in four layers, each with different sharin
 **Location.** `~/.claude/projects/<projectdirEncoded>/<sessionId>.jsonl` — one JSONL file per session with every message, tool call, and timestamp.
 
 **Sharing.** File-layer symlink. On install we point:
+
 ```
 ~/.claude-<label>/projects → ~/.claude/projects
 ```
@@ -26,11 +27,13 @@ We also symlink `sessions`, `todos`, `shell-snapshots`, `plugins`, `skills` at t
 **Location.** `<userData>/claude-code-sessions/<accountUuid>/<orgUuid>/local_<sessId>.json` — one JSON per session, sidebar-driving metadata (title, `isArchived`, `lastActivityAt`, `cwd`, `model`, `completedTurns`).
 
 The primary's path might look like:
+
 ```
 ~/Library/Application Support/Claude/claude-code-sessions/87b5cd86…/c5e0ad3e…/local_<sessId>.json
 ```
 
 **Sharing.** Per-account-folder symlink at userData level:
+
 ```
 Claude-B/claude-code-sessions/<mirrorAcctUUID>/<mirrorOrgUUID>
   → Claude/claude-code-sessions/<primaryAcctUUID>/<primaryOrgUUID>
@@ -47,6 +50,7 @@ The key observation: the JSON files THEMSELVES have no `accountUuid` field. The 
 **Location.** `<userData>/local-agent-mode-sessions/<accountUuid>/…` — plan / explore / judge subagent state.
 
 **Sharing.** Same per-account-folder symlink pattern as layer 2, but only account-scoped (no org partition below):
+
 ```
 Claude-B/local-agent-mode-sessions/<mirrorAcctUUID>
   → Claude/local-agent-mode-sessions/<primaryAcctUUID>
@@ -57,6 +61,7 @@ Same "post-login install step" caveat.
 ## Layer 4 — Chromium IndexedDB / Local Storage / Session Storage
 
 **Location.** `<userData>/{IndexedDB,Local Storage,Session Storage}/` — LevelDB stores. These hold:
+
 - The claude.ai web-chat side of the app (drafts, chat cache, feature flags)
 - Some UI state (theme preferences that Anthropic sync-serves, etc.)
 - Artifact drafts

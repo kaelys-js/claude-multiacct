@@ -1,3 +1,4 @@
+#:schema ./.schemas/gitleaks.json
 # Secret-scanning standard for stardust — gitleaks. Run via `pnpm qa:lint`
 # (staged scan in the pre-commit path). Extends gitleaks' built-in ruleset
 # rather than replacing it, then narrows false positives with a reviewed

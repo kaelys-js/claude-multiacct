@@ -59,17 +59,17 @@ diff <(jq -S . mac-a.json) <(jq -S . mac-b.json)
 
 What the JSON contains and what each field means for the diff:
 
-| Field | Should match | Why |
-|---|---|---|
-| `repo` | NO (per-Mac path) | Each Mac's clone lives at a different path. |
-| `config` | NO (per-Mac path) | Same — `$HOME` differs. |
-| `logs`, `backups` | NO (per-Mac path) | Same. |
-| `launchd_agents` | YES — all three `loaded` | The three agents (`sessions-sync`, `clone-refresh`, `metadata-symlink`) MUST be `loaded` on any Mac running mirrors. If one shows `not-loaded`, run `claude-multiacct repair` on that Mac. |
-| `instances[].label` | YES | Same label set on both Macs proves the same mirror inventory. |
-| `instances[].email` | YES | Same email per label proves each mirror is signed into the same account. |
-| `instances[].configDir` / `.userData` | NO (per-Mac path) | Absolute paths under `$HOME`. |
-| `instances[].health` | YES — `ok` on both | Any `degraded` reveals a per-Mac issue in the `issues` array below. |
-| `instances[].issues` | YES — empty `[]` on both | Non-empty `issues` names the exact fix (`shared-symlinks-missing`, `metadata-symlink-missing`, `bundle-id-drift`, `codesign-broken`, `ls-not-registered`, `never-launched`, etc.). |
+| Field                                 | Should match             | Why                                                                                                                                                                                        |
+| ------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `repo`                                | NO (per-Mac path)        | Each Mac's clone lives at a different path.                                                                                                                                                |
+| `config`                              | NO (per-Mac path)        | Same — `$HOME` differs.                                                                                                                                                                    |
+| `logs`, `backups`                     | NO (per-Mac path)        | Same.                                                                                                                                                                                      |
+| `launchd_agents`                      | YES — all three `loaded` | The three agents (`sessions-sync`, `clone-refresh`, `metadata-symlink`) MUST be `loaded` on any Mac running mirrors. If one shows `not-loaded`, run `claude-multiacct repair` on that Mac. |
+| `instances[].label`                   | YES                      | Same label set on both Macs proves the same mirror inventory.                                                                                                                              |
+| `instances[].email`                   | YES                      | Same email per label proves each mirror is signed into the same account.                                                                                                                   |
+| `instances[].configDir` / `.userData` | NO (per-Mac path)        | Absolute paths under `$HOME`.                                                                                                                                                              |
+| `instances[].health`                  | YES — `ok` on both       | Any `degraded` reveals a per-Mac issue in the `issues` array below.                                                                                                                        |
+| `instances[].issues`                  | YES — empty `[]` on both | Non-empty `issues` names the exact fix (`shared-symlinks-missing`, `metadata-symlink-missing`, `bundle-id-drift`, `codesign-broken`, `ls-not-registered`, `never-launched`, etc.).         |
 
 A cleanly-set-up fleet has `launchd_agents` all `loaded` on every Mac, the same
 labels and emails everywhere, and empty `issues` arrays.
@@ -95,7 +95,7 @@ carrying primary's identity, IndexedDB drift, add / remove / reset flows).
 - **`launchd_agents` shows `not-loaded` for one or more agents on Mac B.**
   Run `claude-multiacct repair` on Mac B — it re-renders the launchd plists
   and reloads the agents. If one agent still won't load, `launchctl print
-  gui/$(id -u)/com.user.claude-<name>` shows the reason (usually a permission
+gui/$(id -u)/com.user.claude-<name>` shows the reason (usually a permission
   or WatchPaths issue).
 
 - **`instances[].health = degraded` on one Mac but not the other.**

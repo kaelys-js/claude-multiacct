@@ -57,12 +57,12 @@ The refresh is deliberately NOT gated on the primary Claude Desktop being closed
 
 `claude-multiacct doctor` runs these checks per instance:
 
-| Check | Command | Failure mode reported |
-|---|---|---|
-| Codesign valid | `codesign -v "<app>"` | `codesign-broken` |
-| Bundle-id parity | `plutil -extract CFBundleIdentifier raw "<app>/Contents/Info.plist"` compared to `com.claude-multiacct.claude-account-<label>-desktop` | `bundle-id-drift` |
-| Claude version parity | `plutil -extract CFBundleShortVersionString raw` on clone vs primary | `version-drift` |
-| LaunchServices registered | `lsregister -dump \| grep -F "<app>"` | `ls-not-registered` |
+| Check                     | Command                                                                                                                                | Failure mode reported |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | --------------------- |
+| Codesign valid            | `codesign -v "<app>"`                                                                                                                  | `codesign-broken`     |
+| Bundle-id parity          | `plutil -extract CFBundleIdentifier raw "<app>/Contents/Info.plist"` compared to `com.claude-multiacct.claude-account-<label>-desktop` | `bundle-id-drift`     |
+| Claude version parity     | `plutil -extract CFBundleShortVersionString raw` on clone vs primary                                                                   | `version-drift`       |
+| LaunchServices registered | `lsregister -dump \| grep -F "<app>"`                                                                                                  | `ls-not-registered`   |
 
 A `bundle-id-drift` here means the clone was built by an OLD version of this repo (before the fix) or the plist got manually mutated. `version-drift` means the WatchPaths agent hasn't caught up to a recent Squirrel update. Both are fixed by:
 
