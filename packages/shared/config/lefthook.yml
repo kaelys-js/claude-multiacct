@@ -106,13 +106,18 @@ pre-push:
 post-checkout:
   commands:
     deps:
-      run: pnpm install --frozen-lockfile
+      # `bin/mise` prepends the current repo/worktree root to
+      # `MISE_TRUSTED_CONFIG_PATHS`, so a freshly-created git worktree
+      # (whose mise.toml is not yet globally trusted) still boots. A
+      # bare `pnpm`/`node` here would fail with `Config files ... are
+      # not trusted` on the first post-checkout after `git worktree add`.
+      run: bin/mise exec -- pnpm install --frozen-lockfile
     sync:
-      run: node packages/shared/utils/sync/src/auto.ts
+      run: bin/mise exec -- node packages/shared/utils/sync/src/auto.ts
 
 post-merge:
   commands:
     deps:
-      run: pnpm install --frozen-lockfile
+      run: bin/mise exec -- pnpm install --frozen-lockfile
     sync:
-      run: node packages/shared/utils/sync/src/auto.ts
+      run: bin/mise exec -- node packages/shared/utils/sync/src/auto.ts
