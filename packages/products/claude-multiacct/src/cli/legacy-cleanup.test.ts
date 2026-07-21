@@ -154,7 +154,8 @@ describe("summarize", () => {
 		expect(s).toContain("Legacy CLI:");
 		expect(s).toContain("Mirror stores (1)");
 		expect(s).toContain("Legacy data dir:");
-		expect(s).toContain("Remove all? [y/N]");
+		expect(s).toContain("moved to ~/.Trash/");
+		expect(s).toContain("type PURGE");
 	});
 
 	it("omits empty sections", () => {

@@ -125,7 +125,7 @@ const io = {
 			verify: realVerify,
 		};
 	},
-	makeInstallPorts: () => makeRealInstallPorts({ logger, env: process.env }),
+	makeInstallPorts: (parsed) => makeRealInstallPorts({ logger, env: process.env }, parsed),
 	makeUninstallPorts: () => makeRealUninstallPorts({ logger, env: process.env }),
 	makeLaunchPorts: () => makeRealLaunchPorts({ logger }),
 	makeMigratePorts: () => makeRealMigratePorts({ logger }),

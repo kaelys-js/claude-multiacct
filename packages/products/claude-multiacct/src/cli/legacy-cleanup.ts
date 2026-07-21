@@ -220,7 +220,11 @@ export function summarize(a: LegacyArtifacts): string {
 	if (a.legacyDataDir !== undefined) {
 		lines.push("", `Legacy data dir: ${a.legacyDataDir}`);
 	}
-	lines.push("", "Remove all? [y/N]");
+	lines.push(
+		"",
+		"These artifacts will be moved to ~/.Trash/ (not permanently deleted).",
+		"To proceed, type PURGE (in capitals) and press Enter. Anything else aborts.",
+	);
 	return lines.join("\n");
 }
 

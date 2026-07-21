@@ -63,7 +63,7 @@ export type DispatchIO = {
 	 * ports lazily on the first invocation of the corresponding command.
 	 * Tests inject fakes so they never touch the real machine.
 	 */
-	makeInstallPorts?: () => Promise<InstallPorts>;
+	makeInstallPorts?: (parsed?: ParsedArgs) => Promise<InstallPorts>;
 	makeUninstallPorts?: () => Promise<UninstallPorts>;
 	makeLaunchPorts?: () => Promise<LaunchPorts>;
 	makeMigratePorts?: () => Promise<MigratePorts>;
@@ -149,7 +149,7 @@ export async function dispatchCli(argv: readonly string[], io: DispatchIO): Prom
 			return await runDoctor(io);
 		}
 		case "install": {
-			return await runInstall(io);
+			return await runInstall(parsed, io);
 		}
 		case "uninstall": {
 			return await runUninstall(io);
@@ -285,17 +285,18 @@ async function buildStatusPorts(io: DispatchIO): Promise<Parameters<typeof colle
 /**
  * `cma install` dispatch wrapper.
  *
+ * @param {ParsedArgs} parsed - Parsed argv (for `--purge-legacy` and friends).
  * @param {DispatchIO} io - Injected IO ports.
  * @returns {Promise<number>} Exit code from the install pipeline.
  */
-async function runInstall(io: DispatchIO): Promise<number> {
+async function runInstall(parsed: ParsedArgs, io: DispatchIO): Promise<number> {
 	if (io.makeInstallPorts === undefined) {
 		io.logger.error(
 			"cma install: no port factory wired; the bundled CLI supplies this — under `node --import ...` you must inject makeInstallPorts",
 		);
 		return EXIT_COMMAND_ERROR;
 	}
-	const ports = await io.makeInstallPorts();
+	const ports = await io.makeInstallPorts(parsed);
 	const result = await installCommand(ports);
 	return result.exitCode;
 }
