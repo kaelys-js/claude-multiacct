@@ -359,9 +359,10 @@ async function accountSetPrimary(args: ParsedArgs, ports: AccountPorts): Promise
 		ports.logger.error(`cma account set-primary: failed (${result.reason}): ${result.detail}`);
 		return { exitCode: 2 };
 	}
-	ports.logger.log(
-		`cma account set-primary: '${result.previousPrimary.label}' → '${result.newPrimary.label}'`,
-	);
+	// previousPrimary is undefined when no account held the stored default yet
+	// (electing a first default); report that plainly rather than crashing.
+	const from = result.previousPrimary?.label ?? "(none)";
+	ports.logger.log(`cma account set-primary: '${from}' → '${result.newPrimary.label}'`);
 	return { exitCode: 0 };
 }
 

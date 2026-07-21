@@ -26,7 +26,7 @@
 
 import * as v from "valibot";
 import { type Account, type AccountUuid, AccountUuidSchema } from "../domain/account.ts";
-import { type AccountRegistry, getPrimary } from "../domain/registry.ts";
+import type { AccountRegistry } from "../domain/registry.ts";
 import type { AtomicRegistryWriter } from "../registry/registry-writer.ts";
 import type { OAuthTokens, ProvisionResult, RefreshResult, VerifyResult } from "../oauth/models.ts";
 import {
@@ -410,14 +410,22 @@ export async function refreshAccount(args: {
 
 /** `setPrimary` result. */
 export type SetPrimaryResult =
-	| { ok: true; previousPrimary: Account; newPrimary: Account }
+	| { ok: true; previousPrimary: Account | undefined; newPrimary: Account }
 	| { ok: false; reason: "not_found" | "already_primary" | "registry_write_failed"; detail: string }
 	| SkippedResult;
 
 /**
- * `setPrimary` — flip the `isPrimary` bit atomically. Enforces PR1's
- * exactly-one-primary invariant: the previous primary becomes non-primary
- * in the SAME write, so the invariant never lapses even transiently on disk.
+ * `setPrimary` — flip the stored `isPrimary` default in one atomic write: the
+ * chosen account becomes the sole `isPrimary: true`, every other becomes
+ * `false`, so the stored default stays single-valued even though the schema no
+ * longer forces it. This manages the operator's stored default; it does NOT
+ * decide the active account — that is derived at runtime from Claude.app's
+ * current token (`domain/registry.ts::getPrimary`).
+ *
+ * `previousPrimary` is whichever account currently holds the stored flag, or
+ * `undefined` when none does (now reachable: a no-primary registry loads fine
+ * since the exactly-one-primary invariant was removed, e.g. electing a first
+ * default after a hand-edit wiped it).
  *
  * @param {object} args - `{ selector, ports, env, overrideFlag }`.
  * @returns {Promise<SetPrimaryResult>} Flip outcome or skip when flag off.
@@ -447,11 +455,13 @@ export async function setPrimary(args: {
 	if (target.isPrimary) {
 		return { ok: false, reason: "already_primary", detail: `${target.label} is already primary` };
 	}
-	const previousPrimary = getPrimary(reg);
+	// The account currently holding the stored default (may be none now that the
+	// schema no longer forces exactly one). Reported for operator feedback only.
+	const previousPrimary = reg.accounts.find((a) => a.isPrimary);
 	const next: AccountRegistry = {
 		accounts: reg.accounts.map((a) => ({
 			...a,
-			// Exactly one primary in the same write — invariant never lapses.
+			// Single stored default in the same write — never two, never zero.
 			isPrimary: a.uuid === target.uuid,
 		})),
 	};

@@ -392,10 +392,10 @@ describe("dispatchCli", () => {
 		const { mkdir } = await import("node:fs/promises");
 		const dir = await mkdtemp(join(tmpdir(), "cma-dispatch-"));
 		await mkdir(join(dir, ".config", "claude-multiacct"), { recursive: true });
-		// Valid JSON, invalid schema (empty accounts violates exactly-one-primary).
+		// Valid JSON, invalid schema (unknown top-level key violates strictObject).
 		await writeFile(
 			join(dir, ".config", "claude-multiacct", "registry.json"),
-			JSON.stringify({ accounts: [] }),
+			JSON.stringify({ accounts: [], surprise: true }),
 			"utf8",
 		);
 		const oldHome = process.env.HOME;

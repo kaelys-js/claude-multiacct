@@ -562,6 +562,20 @@ describe("cma account set-primary", () => {
 		expect(h.logs.join("\n")).toMatch(/Personal.*Work/u);
 	});
 
+	it("electing a first default prints '(none)' as the prior primary, exit 0", async () => {
+		// A no-primary registry now loads (invariant removed), so set-primary can
+		// elect a first default. The transition line must read '(none)' → target
+		// rather than crash on an absent previousPrimary.
+		const noPrimary: AccountRegistry = {
+			accounts: baseRegistry().accounts.map((a) => ({ ...a, isPrimary: false })),
+		};
+		const h = makeHarness({ registry: noPrimary, overrideFlag: true });
+		const args = parseArgs(["account", "set-primary", "--label=Work"]);
+		const result = await accountCommand(args, h.ports);
+		expect(result.exitCode).toBe(0);
+		expect(h.logs.join("\n")).toMatch(/\(none\).*Work/u);
+	});
+
 	it("skipped when flag off", async () => {
 		const h = makeHarness({ registry: baseRegistry() });
 		const args = parseArgs(["account", "set-primary", "--label=Work"]);

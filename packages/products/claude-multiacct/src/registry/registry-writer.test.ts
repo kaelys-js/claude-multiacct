@@ -33,7 +33,6 @@ import {
 } from "./registry-writer.ts";
 
 const UUID_A = "11111111-1111-4111-8111-111111111111";
-const UUID_B = "22222222-2222-4222-8222-222222222222";
 
 function validRegistry(): AccountRegistry {
 	return {
@@ -131,19 +130,10 @@ describe("AtomicRegistryWriter — validation before disk (adversarial anchor)",
 			},
 		};
 		const writer = new AtomicRegistryWriter({ path, fs: spyFs, backupRoot });
-		// Two primaries → violates PR1 invariant.
+		// Duplicate uuids → violates the unique-uuid invariant.
+		const first = validRegistry().accounts[0];
 		const invalid: unknown = {
-			accounts: [
-				{ ...validRegistry().accounts[0], isPrimary: true },
-				{
-					uuid: UUID_B,
-					label: "Work",
-					isPrimary: true,
-					subscriptionType: "Pro",
-					rateLimitTier: "tier-2",
-					encryptedTokenRef: "keychain:b",
-				},
-			],
+			accounts: [first, { ...first, label: "Work", encryptedTokenRef: "keychain:b" }],
 		};
 		await expect(writer.write(invalid as AccountRegistry)).rejects.toThrow();
 		expect(calls).toEqual([]);

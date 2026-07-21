@@ -2,16 +2,13 @@
  * `@foundation/claude-multiacct` — AccountRegistry domain model.
  *
  * The registry is the on-disk source of truth for the pool: every configured
- * `Account`, plus three invariants the runtime relies on and cannot recover
+ * `Account`, plus two invariants the runtime relies on and cannot recover
  * from at call sites:
  *
- * 1. **Exactly one primary.** The routing shim falls back to the primary
- *    account when a session has no explicit choice; zero primaries makes
- *    that fallback undefined, two makes it non-deterministic.
- * 2. **Unique uuids.** UUIDs key every downstream store (choices, tokens,
+ * 1. **Unique uuids.** UUIDs key every downstream store (choices, tokens,
  *    usage snapshots); a collision would silently overwrite one account's
  *    state with another's.
- * 3. **Unique labels.** The UI selects accounts by label; a duplicate label
+ * 2. **Unique labels.** The UI selects accounts by label; a duplicate label
  *    makes the human-facing picker ambiguous.
  *
  * Invariants are enforced inside the valibot schema via `v.check` on the
@@ -21,10 +18,22 @@
  * answer, rather than a schema-check plus a separately-invoked helper the
  * caller might forget to run.
  *
- * The `getPrimary` / `getPooled` / `byUuid` helpers are pure lookups over
- * an already-validated registry. `getPrimary` asserts the invariant found
- * one primary — a defensive check that documents the contract even though
- * a valid registry can never reach the throw path.
+ * There is deliberately NO "exactly one primary" invariant. The active
+ * account is no longer a stored flag the schema must police; it is DERIVED at
+ * runtime by `getPrimary` as the account whose OAuth token-sha256 matches the
+ * token Claude.app is currently authenticated as. That makes "which account is
+ * active?" track reality (whatever Claude.app is logged in as) instead of a
+ * bit that can silently drift from it. The `isPrimary` field on `Account`
+ * survives as the operator's stored default (managed by the CLI `set-primary`
+ * command, shown in `status`), but it is no longer what account-resolution
+ * consults.
+ *
+ * `getPrimary` / `getPooled` derive the active account from two injected
+ * dependencies, the current active token sha and a per-account sha resolver,
+ * so the domain stays pure: no filesystem, no keychain, no token-store reads
+ * live here. The IO that produces those shas lives in
+ * `discovery/active-token.ts` and is wired in by callers. `byUuid` is a plain
+ * lookup over an already-validated registry.
  *
  * @module
  */
@@ -44,10 +53,6 @@ export const AccountRegistrySchema = v.pipe(
 		accounts: v.array(AccountSchema),
 	}),
 	v.check(
-		(r) => r.accounts.filter((a) => a.isPrimary).length === 1,
-		"AccountRegistry must contain exactly one primary account",
-	),
-	v.check(
 		(r) => new Set(r.accounts.map((a) => a.uuid)).size === r.accounts.length,
 		"AccountRegistry account uuids must be unique",
 	),
@@ -59,28 +64,73 @@ export const AccountRegistrySchema = v.pipe(
 export type AccountRegistry = v.InferOutput<typeof AccountRegistrySchema>;
 
 /**
- * Return the primary account. A valid registry has exactly one; the throw
- * documents that contract for callers who bypass parsing.
+ * The sha256 (hex) of the OAuth token Claude.app is currently authenticated
+ * as, or `undefined` when it cannot be determined (no keychain key, no config,
+ * unreadable token). Produced by `discovery/active-token.ts` and injected here
+ * so the domain never touches IO.
+ */
+export type ActiveTokenSha = string | undefined;
+
+/**
+ * Resolve one account's OAuth token sha256 (hex), or `undefined` when its
+ * token is missing/unreadable. Injected: the sha comes from hashing the
+ * account's stored token, a token-store read the domain must not perform
+ * itself. Kept synchronous so `getPrimary` stays pure — callers do the async
+ * token-store work up-front and hand in a resolver over a materialized
+ * uuid→sha map.
+ */
+export type AccountTokenSha = (account: Account) => string | undefined;
+
+/**
+ * Derive the active ("primary") account at runtime.
+ *
+ * The active account is the one whose OAuth token sha256 matches
+ * `activeTokenSha`, i.e. the account Claude.app is presently logged in as.
+ * When that match cannot be made (Claude.app's token is unreadable, or no
+ * pooled account holds it) we fall back to the FIRST account in registry
+ * order. First-in-order is deterministic: it is the earliest-provisioned
+ * account, the historical default, so the picker highlights a stable,
+ * predictable account rather than nothing whenever the live token cannot be
+ * resolved. An empty registry has no active account → `undefined`.
  *
  * @param {AccountRegistry} registry - A validated registry.
- * @returns {Account} The account whose `isPrimary` is `true`.
+ * @param {ActiveTokenSha} activeTokenSha - Sha of Claude.app's current token.
+ * @param {AccountTokenSha} accountTokenSha - Per-account token-sha resolver.
+ * @returns {Account | undefined} The active account, or `undefined` when the pool is empty.
  */
-export function getPrimary(registry: AccountRegistry): Account {
-	const primary = registry.accounts.find((a) => a.isPrimary);
-	if (primary === undefined) {
-		throw new Error("AccountRegistry invariant violated: no primary account");
+export function getPrimary(
+	registry: AccountRegistry,
+	activeTokenSha: ActiveTokenSha,
+	accountTokenSha: AccountTokenSha,
+): Account | undefined {
+	if (activeTokenSha !== undefined) {
+		const match = registry.accounts.find((a) => accountTokenSha(a) === activeTokenSha);
+		if (match !== undefined) {
+			return match;
+		}
 	}
-	return primary;
+	// Fallback: first account in declaration order (undefined for an empty pool).
+	return registry.accounts[0];
 }
 
 /**
- * Return every non-primary account, preserving registry order.
+ * Return every account EXCEPT the runtime-derived active one, preserving
+ * registry order. Mirrors `getPrimary`'s derivation so "active vs pooled" is a
+ * single consistent split: the pooled set is exactly the accounts the picker
+ * offers to switch TO, given the currently-active account.
  *
  * @param {AccountRegistry} registry - A validated registry.
- * @returns {Account[]} The non-primary accounts in declaration order.
+ * @param {ActiveTokenSha} activeTokenSha - Sha of Claude.app's current token.
+ * @param {AccountTokenSha} accountTokenSha - Per-account token-sha resolver.
+ * @returns {Account[]} The non-active accounts in declaration order.
  */
-export function getPooled(registry: AccountRegistry): Account[] {
-	return registry.accounts.filter((a) => !a.isPrimary);
+export function getPooled(
+	registry: AccountRegistry,
+	activeTokenSha: ActiveTokenSha,
+	accountTokenSha: AccountTokenSha,
+): Account[] {
+	const primary = getPrimary(registry, activeTokenSha, accountTokenSha);
+	return registry.accounts.filter((a) => a.uuid !== primary?.uuid);
 }
 
 /**

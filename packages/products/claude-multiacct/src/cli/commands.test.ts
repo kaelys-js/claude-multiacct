@@ -493,6 +493,22 @@ describe("setPrimary — flag gate + invariant (exactly one primary)", () => {
 		expect(primaries[0]?.label).toBe("Work");
 	});
 
+	it("elects a default with previousPrimary=undefined when none is stored yet", async () => {
+		// The exactly-one-primary schema invariant is gone, so a no-primary
+		// registry now loads. set-primary must still elect one and report the
+		// transition from "none" instead of assuming a previous default existed.
+		const noPrimary: AccountRegistry = {
+			accounts: baseRegistry().accounts.map((a) => ({ ...a, isPrimary: false })),
+		};
+		const ports = makePorts({ registry: noPrimary });
+		const r = await setPrimary({ selector: { label: "Work" }, ports, overrideFlag: true });
+		assertOk(r);
+		expect(r.previousPrimary).toBeUndefined();
+		expect(r.newPrimary.label).toBe("Work");
+		const [written] = ports.writes;
+		expect(written?.accounts.filter((a) => a.isPrimary)).toHaveLength(1);
+	});
+
 	it("already_primary when the target is already the primary", async () => {
 		const ports = makePorts({ registry: baseRegistry() });
 		const r = await setPrimary({
