@@ -280,7 +280,7 @@ export function mountUsage(opts: UsageMountOptions): UsageHandle {
 	// Use the injected doc's window's MutationObserver so JSDOM tests work
 	// without polluting globals.
 	const MO = (
-		(opts.doc.defaultView ?? (globalThis as unknown as { MutationObserver: typeof MutationObserver }))
+		opts.doc.defaultView ?? (globalThis as unknown as { MutationObserver: typeof MutationObserver })
 	).MutationObserver;
 	const observer = new MO(() => {
 		renderIfOpen();

@@ -48,12 +48,12 @@ flowchart LR
 
 Four subsystems, all flag-gated on `CLAUDE_MULTIACCT_ENABLE_SHIM=1`:
 
-| Subsystem | Role | Where |
-|-----------|------|-------|
-| CLI shim | Intercepts `claude` spawn, swaps OAuth token env per session | `src/cli-shim/` |
-| Watcher | Reapplies shim on Claude auto-update | `src/watcher/` |
-| Bridge daemon | Loopback HTTP API — accounts, choices, usage | `src/http-bridge/` |
-| Extension | Picker in Code tab + user-menu injection | `src/extension/` |
+| Subsystem     | Role                                                         | Where              |
+| ------------- | ------------------------------------------------------------ | ------------------ |
+| CLI shim      | Intercepts `claude` spawn, swaps OAuth token env per session | `src/cli-shim/`    |
+| Watcher       | Reapplies shim on Claude auto-update                         | `src/watcher/`     |
+| Bridge daemon | Loopback HTTP API — accounts, choices, usage                 | `src/http-bridge/` |
+| Extension     | Picker in Code tab + user-menu injection                     | `src/extension/`   |
 
 The extension loads via Claude's own React DevTools loader path — no asar patching. The launch wrapper blackholes `clients2.google.com` via `--host-resolver-rules` so the loader always uses the local cache we planted.
 
