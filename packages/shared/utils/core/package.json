@@ -1,0 +1,15 @@
+{
+	"$schema": "../../../../.schemas/package.json",
+	"name": "@foundation/core",
+	"version": "0.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Foundation shared helpers used by more than one of the qa and sync packages.",
+	"license": "SEE LICENSE IN LICENSE",
+	"devDependencies": {
+		"@foundation/config": "workspace:*"
+	},
+	"exports": {
+		".": "./src/index.ts"
+	}
+}

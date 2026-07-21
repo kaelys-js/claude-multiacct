@@ -1,15 +1,16 @@
-# Self-hosted Renovate for kaelys-js/claude-multiacct. Runs the Renovate CLI
-# on a schedule and on demand. Renovate reads renovate.json5 at the repo root
-# and opens/updates PRs against main. CI (.github/workflows/ci.yml) validates
-# every PR; patch/minor/digest PRs then platform-auto-merge (per
-# renovate.json5), major PRs wait for review.
+# yaml-language-server: $schema=../../.schemas/github-workflow.json
+# Self-hosted Renovate (private repo).
+#
+# Runs the Renovate CLI on a schedule and on demand. Renovate reads
+# renovate.json5 at the repo root and opens/updates PRs against main.
+# CI (.github/workflows/ci.yml) validates every PR; patch/minor/digest PRs
+# then platform-auto-merge (per renovate.json5), major PRs wait for review.
 #
 # AUTH: this workflow mints a short-lived GitHub App installation token per run
-# via actions/create-github-app-token; no long-lived PAT lives in secrets.
-# See docs/renovate-setup.md for the one-time App setup — the App name is
-# `kaelys-js-renovate` and the same App is installed on stardust, kaelys-js,
-# and this repo.
----
+# via actions/create-github-app-token; no long-lived PAT lives in secrets. The
+# App name is `kaelys-js-renovate`, shared with stardust, kaelys-js, and
+# claude-multiacct.
+
 name: renovate
 
 "on":
@@ -40,13 +41,18 @@ permissions:
 jobs:
   renovate:
     name: renovate
-    runs-on: ubuntu-latest
+    # Route to the kaelys-mac-mini self-hosted runner when SELF_HOSTED_ENABLED
+    # is set on the repo; fall back to ubuntu-latest if the mini is down or
+    # the escape hatch is flipped off. renovatebot/github-action is a JS
+    # action that shells out to `docker run ghcr.io/renovatebot/renovate` —
+    # the mac-mini has Docker available and the renovate image is multi-arch.
+    runs-on: ${{ vars.SELF_HOSTED_ENABLED == 'true' && fromJSON('["self-hosted","kaelys-mac-mini"]') || 'ubuntu-latest' }}
     timeout-minutes: 30
     steps:
       # Pre-flight FIRST (before checkout): fail loud with a pointer to the
       # runbook if the App secrets aren't set yet. Without this, the workflow
-      # would spend a minute checking out + minting a token before failing with
-      # an opaque "Bad credentials" from create-github-app-token.
+      # would spend a minute checking out + minting a token before failing
+      # with an opaque "Bad credentials" from create-github-app-token.
       - name: Verify GitHub App secrets are configured
         env:
           APP_CID: ${{ secrets.RENOVATE_APP_CLIENT_ID }}
@@ -55,8 +61,6 @@ jobs:
           if [[ -z "$APP_CID" || -z "$APP_PK" ]]; then
             printf 'Renovate is not configured yet.\n'
             printf '\n'
-            printf 'One-time setup: see docs/renovate-setup.md\n'
-            printf '\n'
             printf 'Missing secrets:\n'
             [[ -z "$APP_CID" ]] && printf '  - RENOVATE_APP_CLIENT_ID\n'
             [[ -z "$APP_PK" ]] && printf '  - RENOVATE_APP_PRIVATE_KEY\n'
@@ -64,11 +68,11 @@ jobs:
           fi
 
       - name: Check out
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Mint GitHub App installation token
         id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           client-id: ${{ secrets.RENOVATE_APP_CLIENT_ID }}
           private-key: ${{ secrets.RENOVATE_APP_PRIVATE_KEY }}
@@ -78,13 +82,15 @@ jobs:
       - name: Run Renovate
         # Pinned to a tag + digest, like the rest of our workflow deps.
         # Renovate keeps this line current via the github-actions manager.
-        uses: renovatebot/github-action@22e0a16091fc706b04affe6ae53d5e3358ac4023  # v46.1.19
+        uses: renovatebot/github-action@22e0a16091fc706b04affe6ae53d5e3358ac4023 # v46.1.19
         with:
           token: ${{ steps.app-token.outputs.token }}
           configurationFile: renovate.json5
         env:
           # Restrict to this repo; the token scopes it too, but be explicit.
-          RENOVATE_REPOSITORIES: kaelys-js/claude-multiacct
+          # github.repository resolves to `<owner>/<repo>` — the same repo
+          # renovate.json5 lives in, so fork and upstream share this file.
+          RENOVATE_REPOSITORIES: ${{ github.repository }}
           # Honor the schedule in renovate.json5; on manual dispatch, ignore
           # it so an on-demand run actually does work.
           # yamllint disable-line rule:line-length

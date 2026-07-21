@@ -1,0 +1,14 @@
+// Authoritative markdownlint-cli2 config (centralised in @foundation/config),
+// reached by `markdownlint-cli2 --config packages/shared/config/.markdownlint-cli2.jsonc`
+// (see packages/shared/utils/qa/src/registry.ts). The QA dispatch also passes `--no-globs` so the
+// `globs` below stay inert and only the dispatch's explicit file list is linted;
+// `ignores` still filter. `config.extends` pulls in the sibling rule set and
+// resolves relative to THIS file's directory (packages/shared/config/).
+{
+	"$schema": "../../../.schemas/markdownlint-cli2.json",
+	"config": {
+		"extends": "markdownlint.jsonc",
+	},
+	"globs": ["**/*.md", "**/*.mdx"],
+	"ignores": ["node_modules", ".mise", "dist", "build", "coverage", "CHANGELOG.md"],
+}

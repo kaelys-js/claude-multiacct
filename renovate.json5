@@ -1,90 +1,193 @@
 {
-	// Self-hosted Renovate config for kaelys-js/claude-multiacct — a Bash + bats
-	// CLI whose tool pins live in mise.toml. Scope: mise-managed tools + GitHub
-	// Actions used by .github/workflows/*.
+	// Self-hosted Renovate config for foundation-registry. Scope: npm/pnpm
+	// workspace deps + mise-pinned toolchain.
 	//
-	// 1. mise tools. The built-in `mise` manager reads mise.toml `[tools]`
-	//    (shellcheck, bats, gitleaks, yamllint, yq). patch/minor auto-merge
-	//    after CI (`bin/claude-multiacct qa lint && qa test` on macOS-14);
-	//    major -> review PR (a shellcheck major, say, could reject constructs
-	//    the codebase relies on).
+	// 1. npm/pnpm deps. The built-in `npm` manager reads the workspace
+	//    package.json files + pnpm-lock.yaml. patch/minor/digest are auto-merged
+	//    after CI; major is a review PR. lockFileMaintenance refreshes the lock.
 	//
-	// 2. GitHub Actions. The built-in `github-actions` manager reads every
-	//    `uses:` line in .github/workflows/*.yml — actions/checkout,
-	//    jdx/mise-action, actions/create-github-app-token. Same policy:
-	//    patch/minor/digest auto-merge, major review PR.
+	// 2. mise tools. The built-in `mise` manager reads mise.toml `[tools]`
+	//    (node, pnpm, oxlint, gitleaks, etc.). Same policy as npm:
+	//    patch/minor auto-merge after CI, major -> review PR.
 	//
-	// npm/dockerfile/custom.regex are out of scope — no node deps, no
-	// containers, no non-standard configs to parse in this repo.
+	// 3. GitHub Actions. The built-in `github-actions` manager reads every
+	//    `uses:` line in .github/workflows/*.yml. Same policy as npm:
+	//    patch/minor/digest auto-merge, major review PR. Every pin is a full
+	//    commit SHA with a `# vX.Y.Z` comment; helpers:pinGitHubActionDigestsToSemver
+	//    keeps the comment fresh whenever Renovate bumps the digest.
 	//
-	// Every Renovate commit is `chore(deps): …`. This repo has no commitlint
-	// today; keeping the shape identical to stardust means adopting commitlint
-	// later is a no-op for Renovate PRs.
+	// All auto-merges wait a `minimumReleaseAge` cool-down so brand-new releases
+	// aren't merged the instant they publish. Every Renovate commit is
+	// `chore(deps): …`, which passes this repo's commitlint for ALL managers.
 	$schema: "https://docs.renovatebot.com/renovate-schema.json",
 
 	extends: [
 		"config:recommended",
 		":dependencyDashboard",
 		":semanticCommits",
-		// Keep every GitHub Actions `uses:` line pinned to a full commit SHA
-		// with a `# vX.Y.Z` comment. Renovate rewrites the comment when it
-		// bumps the pin, so tag context stays visible next to the digest.
 		"helpers:pinGitHubActionDigestsToSemver",
 	],
 
 	timezone: "America/Vancouver",
 
-	// Same overnight window as stardust + kaelys-js so all three bots stay off
-	// the day.
+	// Conservative cadence: once a day, before 06:00 local. Weekly digest churn
+	// stays low-noise and lands before the workday.
 	schedule: ["* 0-5 * * *"],
 
 	dependencyDashboard: true,
 
 	// --- Commit / PR message shape -------------------------------------------
-	// Format matches stardust's Renovate: `chore(deps): update <pkg> to <ver>`.
+	// Must satisfy this repo's commitlint: type MUST be in the type-enum and
+	// "chore" IS in it; scope is kebab-case. So every Renovate commit reads:
+	//   chore(deps): update <dep> to <newvalue>
+	// which passes type-enum, type-case, scope-case, subject-empty.
 	semanticCommits: "enabled",
 	semanticCommitType: "chore",
 	semanticCommitScope: "deps",
 	commitMessagePrefix: "chore(deps):",
+	// Renovate's default body appends the changelog etc.; the header above is the
+	// only line commitlint validates and it is compliant.
 
 	// --- DCO signoff -----------------------------------------------------------
-	// This repo doesn't have probot/dco installed today, but stardust does, and
-	// we use the same GitHub App identity across the org. Injecting the trailer
-	// here keeps every kaelys-js-renovate[bot] commit consistent.
+	// Renovate's commits are authored by the shared GitHub App bot
+	// (kaelys-js-renovate[bot]); the same trailer is injected on every repo so
+	// probot/dco (when installed anywhere in the org) sees a consistent signoff.
 	commitBody: "Signed-off-by: kaelys-js-renovate[bot] <304942767+kaelys-js-renovate[bot]@users.noreply.github.com>",
 
 	// --- Concurrency / noise control -----------------------------------------
-	// Throttle to one open Renovate PR at a time / one new PR per hour so
-	// the CI-minutes-per-day floor stays predictable (public repo — Actions
-	// minutes are free, but Renovate PR churn still creates review load).
-	// Renovate closes over-limit PRs on its next scheduled run.
+	// Throttle to one open Renovate PR at a time / one new PR per hour so the
+	// self-hosted runner (kaelys-mac-mini) is not swamped by parallel Renovate
+	// churn and the CI-minutes-per-day floor stays predictable. Renovate
+	// closes over-limit PRs on its next scheduled run.
 	prConcurrentLimit: 1,
 	prHourlyLimit: 1,
+	// Rebase stale branches so the digest/tag stays fresh until merge.
 	rebaseWhen: "behind-base-branch",
 
 	// Cool-down: never auto-merge a release younger than this. Guards against
-	// a compromised/yanked just-published version landing hands-off.
+	// a compromised/yanked just-published version landing hands-off. (The pnpm
+	// workspace's own minimumReleaseAge is 0; this is Renovate's independent gate.)
 	minimumReleaseAge: "3 days",
 
 	// Enabled managers:
-	//   - mise            -> mise.toml [tools] versions
-	//   - github-actions  -> .github/workflows/*.yml `uses:` lines
-	// Everything else stays off — no npm/dockerfile/custom.regex here.
-	enabledManagers: ["mise", "github-actions"],
+	//   - npm             -> package.json (× workspace) + pnpm-lock.yaml
+	//   - mise            -> mise.toml [tools] versions (all tools EXCEPT node + pnpm,
+	//                       which are handled by custom.regex below for bump-together)
+	//   - custom.regex    -> mise.toml `node = "..."` + `pnpm = "..."` lines, matched
+	//                       with depName == the npm engines depName so Renovate groups
+	//                       mise.toml + package.json engines into ONE PR
+	//   - github-actions  -> .github/workflows/*.yml `uses:` lines (SHA-pinned)
+	// Everything else stays off.
+	enabledManagers: ["npm", "mise", "custom.regex", "github-actions"],
+
+	// --- customManager: mise.toml node + pnpm (bump-together) ----------------
+	// The built-in `mise` manager reads mise.toml [tools], but its datasources for
+	// node + pnpm differ from what npm's engines manager emits — so without help,
+	// a node bump and its matching engines.node bump land in TWO separate PRs.
+	//
+	// These customManagers match ONLY the `node = "..."` and `pnpm = "..."` lines
+	// in mise.toml and re-declare them with the same depName the npm manager uses
+	// for package.json engines. Combined with the `node + pnpm toolchain` group
+	// rule below, Renovate groups mise.toml + package.json engines into a single
+	// PR per version. Built-in mise handling of node + pnpm is disabled via a
+	// packageRule below so there is no double-management.
+	customManagers: [
+		{
+			customType: "regex",
+			managerFilePatterns: ["/^mise\\.toml$/"],
+			matchStrings: ['^node\\s*=\\s*"(?<currentValue>[^"]+)"'],
+			depNameTemplate: "node",
+			packageNameTemplate: "nodejs/node",
+			datasourceTemplate: "github-releases",
+			versioningTemplate: "node",
+			extractVersionTemplate: "^v(?<version>.+)$",
+		},
+		{
+			customType: "regex",
+			managerFilePatterns: ["/^mise\\.toml$/"],
+			matchStrings: ['^pnpm\\s*=\\s*"(?<currentValue>[^"]+)"'],
+			depNameTemplate: "pnpm",
+			packageNameTemplate: "pnpm",
+			datasourceTemplate: "npm",
+			versioningTemplate: "npm",
+		},
+	],
+
+	// Keep pnpm-lock.yaml fresh (dedupe / transitive security bumps) via a
+	// scheduled lockfile-only PR. Auto-merged after CI (see packageRules).
+	lockFileMaintenance: {
+		enabled: true,
+		automerge: true,
+		platformAutomerge: true,
+	},
 
 	// --- packageRules --------------------------------------------------------
 	// Automerge matrix (all automerges gated on green CI + minimumReleaseAge):
-	//   mise            patch/minor             -> automerge (grouped)
-	//   mise            major                   -> review PR (never grouped)
-	//   github-actions  patch/minor/digest      -> automerge (grouped)
-	//   github-actions  major                   -> review PR (never grouped)
+	//   npm     patch/minor/digest      -> automerge (devDeps grouped)
+	//   npm     major                   -> review PR (never grouped)
+	//   mise    patch/minor             -> automerge (grouped)
+	//   mise    major                   -> review PR (never grouped)
+	//   lockFileMaintenance             -> automerge (configured above)
 	packageRules: [
+		// ── node + pnpm bump-together (mise.toml + package.json engines) ────
+		{
+			// Prevent double-management: the built-in mise manager also reads
+			// mise.toml [tools], so disable its handling of node + pnpm SPECIFICALLY.
+			// Every OTHER mise tool (typescript, oxlint, ruff, etc.) still runs
+			// under the mise manager unchanged.
+			matchManagers: ["mise"],
+			matchDepNames: ["node", "pnpm"],
+			enabled: false,
+		},
+		{
+			// Group mise.toml (custom.regex) + package.json engines (npm) into
+			// ONE PR per bump — same depName + same target version = one branch.
+			// patch/minor auto-merges (CI validates both files together).
+			matchDepNames: ["node", "pnpm"],
+			matchManagers: ["custom.regex", "npm"],
+			groupName: "node + pnpm toolchain",
+			commitMessageTopic: "node + pnpm toolchain",
+			matchUpdateTypes: ["patch", "minor", "digest"],
+			automerge: true,
+			automergeType: "pr",
+			platformAutomerge: true,
+		},
+		{
+			// Major bumps of node/pnpm (a new Node major etc.) are a human
+			// decision; review PR.
+			matchDepNames: ["node", "pnpm"],
+			matchManagers: ["custom.regex", "npm"],
+			matchUpdateTypes: ["major"],
+			groupName: "node + pnpm toolchain",
+			automerge: false,
+		},
+
+		// ── npm / pnpm workspace deps ────────────────────────────────────────
+		{
+			// patch/minor/digest are non-breaking by semver; CI (format/lint/types/
+			// tests) fully validates JS deps, so auto-merge after green CI. devDeps
+			// (all our deps are devDependencies) grouped to keep PR noise down.
+			matchManagers: ["npm"],
+			matchUpdateTypes: ["patch", "minor", "digest"],
+			automerge: true,
+			automergeType: "pr",
+			platformAutomerge: true,
+			groupName: "npm dev dependencies (non-major)",
+			commitMessageTopic: "npm dev dependencies",
+		},
+		{
+			// Major npm bumps can break; review PR, its own PR (never grouped).
+			matchManagers: ["npm"],
+			matchUpdateTypes: ["major"],
+			automerge: false,
+			groupName: null,
+		},
+
 		// ── mise toolchain ───────────────────────────────────────────────────
 		{
-			// patch/minor toolchain bumps auto-merge after green CI — the qa
-			// gate runs every tool (shellcheck, bats, gitleaks, yamllint) via
-			// mise, so a broken tool version fails CI before merge. Grouped
-			// to keep PR noise down.
+			// patch/minor toolchain bumps (linters/formatters/runtimes) auto-merge
+			// after green CI — CI runs every tool via `mise exec`, so a broken tool
+			// version fails CI before merge. Grouped to keep noise down.
 			matchManagers: ["mise"],
 			matchUpdateTypes: ["patch", "minor"],
 			automerge: true,
@@ -94,8 +197,8 @@
 			commitMessageTopic: "mise toolchain",
 		},
 		{
-			// Major toolchain bumps (e.g. shellcheck v0 -> v1) are a human
-			// decision; review PR, its own PR (never grouped).
+			// Major toolchain bumps (e.g. a new Node major) are a human decision;
+			// review PR, its own PR (never grouped).
 			matchManagers: ["mise"],
 			matchUpdateTypes: ["major"],
 			automerge: false,
@@ -105,8 +208,8 @@
 		// ── GitHub Actions ───────────────────────────────────────────────────
 		{
 			// patch/minor/digest bumps for the workflow `uses:` pins auto-merge
-			// after green CI. Grouped so a single actions/checkout bump lands
-			// as one PR across every workflow.
+			// after green CI. Grouped so a single actions/checkout or mise-action
+			// bump lands as one PR across every workflow.
 			matchManagers: ["github-actions"],
 			matchUpdateTypes: ["patch", "minor", "digest"],
 			automerge: true,

@@ -1,21 +1,35 @@
----
+# yaml-language-server: $schema=../../.schemas/github-workflow.json
 # renovate-fixup — regenerate CI-checked derived files on Renovate PRs and
 # push the fix back to the PR branch so CI regreens. Runs BEFORE the CI's
-# `qa format:check` step (`shfmt -d ...`) would fail on drift Renovate's
-# own container cannot regenerate.
+# `sync` and `format` jobs would fail on drift Renovate's own container
+# cannot regenerate.
 #
 # What this repo actually needs regenerated after a Renovate bump:
-#   - shell formatting (`bin/claude-multiacct qa format` — `shfmt -w`). When
-#     Renovate bumps shfmt in mise.toml, the new version can change the
-#     canonical output of one of `bin/*`, `lib/*.sh`, or `tests/*.bats`.
-#     CI's `shfmt -d bin/* lib/*.sh tests/*.bats` catches the drift; this
-#     workflow runs `shfmt -w` and pushes the reformatted files back.
+#   - mise.toml pnpm pin + mise.lock (Renovate's "npm dev dependencies"
+#     grouping bumps `engines.pnpm` + `packageManager` in package.json without
+#     touching mise.toml, so this workflow mirrors package.json's
+#     `engines.pnpm` into `mise.toml` and re-locks. Without this, mise-provided
+#     pnpm 11.x runs against a package.json pinning pnpm 11.y, and .npmrc's
+#     `manage-package-manager-versions=true` triggers a broken auto-download of
+#     the mismatched version into `~/Library/pnpm/store` — first line reads
+#     "This file intentionally left blank" and exec fails with
+#     `pnpm: line 1: This: command not found`, exit 127).
+#   - pnpm-lock.yaml (Renovate sometimes only rewrites package.json / mise.toml
+#     without a workspace install; a follow-up `pnpm install --lockfile-only`
+#     recomputes the lockfile). Uses `./bin/mise` to invoke pnpm through the
+#     vendored mise wrapper — same shape every other job uses.
+#   - `pnpm sync` outputs (versions.ts + turbo.ts + schemas.ts). These
+#     regenerate `versions.json` / `turbo.json` / product JSON schemas from
+#     typed sources — CI runs `pnpm sync:check` and fails on drift.
+#   - Repo formatters (`pnpm format` — oxfmt + taplo + syncpack). Formatter
+#     version bumps or a package.json edit can shift canonical output.
 #
-# No pnpm / no lockfile / no schema regen — this is a plain bash + bats
-# repo. The only regeneration step is the shell formatter.
+# Not regenerated here:
+#   - Test snapshots / governance records — hand-authored artefacts a Renovate
+#     bump shouldn't touch. A break signals a real change to review.
 #
-# Loop protection: only commits when the working tree has drift after
-# `shfmt -w`. A clean tree exits silently — this workflow cannot
+# Loop protection: only commits when the working tree has drift after the
+# regeneration steps. A clean tree exits silently — this workflow cannot
 # infinite-loop against itself.
 #
 # Auth: mints a short-lived GitHub App installation token via
@@ -24,9 +38,7 @@
 # every other Renovate commit on the PR and DCO stays happy.
 name: renovate-fixup
 
-# `on:` is quoted to avoid yamllint's truthy warning — it's the YAML 1.1
-# boolean alias for `true` (matches ci.yml's convention).
-"on":
+on:
   pull_request:
     types: [opened, synchronize, reopened]
     branches: [main]
@@ -44,40 +56,105 @@ permissions:
   contents: read
   pull-requests: read
 
+env:
+  CI: "true" # pnpm 11: allow non-interactive node_modules rebuild
+
 jobs:
   fixup:
-    name: regenerate shell formatting (Renovate PRs only)
+    name: regenerate derived files (Renovate PRs only)
     # Only run for PRs opened by our Renovate GitHub App bot, on same-repo
     # branches (fork PRs don't get secrets anyway).
     if: >
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.user.login == 'kaelys-js-renovate[bot]'
-    runs-on: macos-14
+    # Route to the kaelys-mac-mini self-hosted runner when SELF_HOSTED_ENABLED
+    # is set on the repo; fall back to ubuntu-latest if the mini is down or
+    # the escape hatch is flipped off.
+    runs-on: ${{ vars.SELF_HOSTED_ENABLED == 'true' && fromJSON('["self-hosted","kaelys-mac-mini"]') || 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
       - name: Mint GitHub App installation token
         id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           client-id: ${{ secrets.RENOVATE_APP_CLIENT_ID }}
           private-key: ${{ secrets.RENOVATE_APP_PRIVATE_KEY }}
 
       - name: Check out PR head (using App token so the eventual push retriggers CI)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           token: ${{ steps.app-token.outputs.token }}
           ref: ${{ github.event.pull_request.head.ref }}
           # Full history so `git commit` doesn't complain about a shallow clone.
           fetch-depth: 0
 
-      # Same toolchain as CI (mise.toml pins shfmt / shellcheck / bats / …).
-      - name: Install mise + pinned toolchain
-        uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d  # v4.2.0
+      # Same toolchain shape every CI job in this repo uses: vendored bin/mise
+      # wrapper + restored .mise cache. Keeps fixup's environment byte-identical
+      # to what the CI jobs it's fixing up will run under next.
+      - name: Restore mise toolchain
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .mise
+          key: mise-${{ runner.os }}-${{ hashFiles('mise.toml', 'mise.lock') }}
 
-      # `bin/claude-multiacct qa format` runs `shfmt -w bin/* lib/*.sh
-      # tests/*.bats` — the write-mode counterpart to CI's `shfmt -d …` check.
-      - name: Reformat shell (shfmt -w bin/ lib/ tests/)
-        run: bin/claude-multiacct qa format
+      - name: Expose vendored mise on PATH
+        run: |
+          ./bin/mise --version >/dev/null 2>&1 || true
+          mkdir -p "$HOME/.local/bin"
+          ln -sf "$(ls "$PWD"/.mise/mise-* | head -n1)" "$HOME/.local/bin/mise"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Install toolchain
+        run: ./bin/mise install
+
+      # If Renovate bumped package.json's `engines.pnpm` / `packageManager`
+      # without also bumping `mise.toml [tools] pnpm`, mise-provided pnpm is
+      # older than the version package.json advertises. .npmrc has
+      # `manage-package-manager-versions=true`, so the older pnpm sees the
+      # newer packageManager field and auto-downloads the requested version
+      # into `~/Library/pnpm/store` — that download is a placeholder file
+      # (`This file intentionally left blank`) and the next invocation dies
+      # with `pnpm: line 1: This: command not found`. Fix: mirror
+      # `engines.pnpm` into mise.toml, refresh mise.lock, install the new
+      # pnpm through mise (fetches from GitHub releases via aqua, not the
+      # broken npm auto-download path). No-op when versions already match.
+      - name: Sync mise.toml pnpm pin from package.json engines.pnpm
+        run: |
+          set -euo pipefail
+          PKG_PNPM=$(node -e "const p=require('./package.json'); process.stdout.write(p.engines && p.engines.pnpm ? p.engines.pnpm : '')")
+          if [ -z "$PKG_PNPM" ]; then
+            echo "renovate-fixup: package.json has no engines.pnpm — nothing to mirror."
+            exit 0
+          fi
+          MISE_PNPM=$(awk -F'"' '/^pnpm = "/ { print $2; exit }' mise.toml)
+          if [ "$PKG_PNPM" = "$MISE_PNPM" ]; then
+            echo "renovate-fixup: mise.toml pnpm ($MISE_PNPM) already matches package.json engines.pnpm ($PKG_PNPM) — no drift."
+            exit 0
+          fi
+          echo "renovate-fixup: mirroring package.json engines.pnpm ($PKG_PNPM) into mise.toml (was $MISE_PNPM)."
+          awk -v v="$PKG_PNPM" '
+            /^pnpm = "/ && !done { print "pnpm = \"" v "\""; done=1; next }
+            { print }
+          ' mise.toml > mise.toml.new
+          mv mise.toml.new mise.toml
+          # mise.lock has `lockfile = true` in mise.toml settings, so
+          # `mise install` refuses a version whose SHA isn't recorded. Force
+          # the install for pnpm (fetches from aqua, computes fresh hash),
+          # then run `mise lock` to persist the new checksums into mise.lock.
+          ./bin/mise install --force pnpm
+          ./bin/mise lock
+
+      - name: Regenerate pnpm lockfile (in case package.json changed)
+        run: ./bin/mise exec -- pnpm install --lockfile-only
+
+      - name: Install deps for sync/format scripts
+        run: ./bin/mise exec -- pnpm install --frozen-lockfile
+
+      - name: Regenerate versions.json / turbo.json / product schemas
+        run: ./bin/mise exec -- pnpm run sync
+
+      - name: Reformat repo files (oxfmt + taplo + syncpack)
+        run: ./bin/mise exec -- pnpm run format
 
       - name: Commit + push if there's drift
         env:
@@ -86,7 +163,7 @@ jobs:
           BOT_EMAIL: "304942767+kaelys-js-renovate[bot]@users.noreply.github.com"
         run: |
           if [[ -z "$(git status --porcelain)" ]]; then
-            echo "renovate-fixup: no drift — shfmt output already matches."
+            echo "renovate-fixup: no drift — all derived files already in sync."
             exit 0
           fi
           echo "renovate-fixup: drift detected in these files:"
@@ -96,13 +173,13 @@ jobs:
           git add -A
           git commit \
             --signoff \
-            --message "chore(deps): reformat shell for this shfmt bump" \
-            --message "Follow-on to the Renovate bump on this PR. shfmt's
-          canonical output shifted with the new pinned version and
-          bin/*, lib/*.sh, tests/*.bats need reformatting. Renovate
-          can't run shfmt inside its own container, so
-          renovate-fixup.yml runs bin/claude-multiacct qa format here
-          and pushes the reformatted files back.
+            --message "chore(deps): regenerate derived files for this bump" \
+            --message "Follow-on to the Renovate bump on this PR. pnpm-lock.yaml,
+          sync outputs (versions.json / turbo.json / product schemas), and
+          repo-file formatters (oxfmt + taplo + syncpack) are deterministic
+          outputs of the pinned toolchain — Renovate can't run the
+          regeneration inside its own container, so renovate-fixup.yml runs
+          it here and pushes the result back.
 
           Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
           git push origin "HEAD:${{ github.event.pull_request.head.ref }}"

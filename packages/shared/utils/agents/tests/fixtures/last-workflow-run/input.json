@@ -1,0 +1,19 @@
+{
+	"task_id": "clickup:HAND_SYNTH-01",
+	"client_slug": "handled-monorepo-poc",
+	"client_repo": "<sanitized-path-484>",
+	"default_branch": "main",
+	"pinned_sha": "5d47be3a593effe56e35991476b5e0efe93f01eb",
+	"poc_readme": {
+		"sanitized": true,
+		"len": 5108,
+		"hash": "c905c3b0"
+	},
+	"poc_evidence_lock": "",
+	"summary_section": "",
+	"pinned_files": [],
+	"clickup_task_id": "",
+	"clickup_task_url": "",
+	"branch_prefix": "<sanitized-path-485>",
+	"trp_parallel_safe": true
+}

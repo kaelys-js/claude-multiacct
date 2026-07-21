@@ -1,0 +1,74 @@
+{
+	"ready_to_ship": false,
+	"task_id": "clickup:HAND_SYNTH-01",
+	"task_id_slug": "clickup-hand-synth-01",
+	"client_repo": "<sanitized-path-486>",
+	"pinned_sha": "5d47be3a593effe56e35991476b5e0efe93f01eb",
+	"branch_name": "<sanitized-path-487>",
+	"commit_message": "<sanitized-path-488>",
+	"files_to_modify": [
+		{
+			"path": "<sanitized-path-489>",
+			"rationale": {
+				"sanitized": true,
+				"len": 266,
+				"hash": "db8a8d6c"
+			},
+			"full_content": {
+				"sanitized": true,
+				"len": 1227,
+				"hash": "1d49e7ba"
+			}
+		},
+		{
+			"path": "<sanitized-path-490>",
+			"rationale": {
+				"sanitized": true,
+				"len": 300,
+				"hash": "fee3606b"
+			},
+			"full_content": {
+				"sanitized": true,
+				"len": 1825,
+				"hash": "69d5db20"
+			}
+		}
+	],
+	"test_additions": [
+		{
+			"path": "<sanitized-path-491>",
+			"full_content": {
+				"sanitized": true,
+				"len": 177,
+				"hash": "7e9b026f"
+			},
+			"fails_without_fix": {
+				"sanitized": true,
+				"len": 119,
+				"hash": "5d269a10"
+			}
+		}
+	],
+	"pr_title": "<sanitized-path-492>",
+	"pr_body_sections": {
+		"summary": "<sanitized-path-493>",
+		"fix": {
+			"sanitized": true,
+			"len": 147,
+			"hash": "7c8e4b0d"
+		},
+		"test_plan": "<sanitized-path-494>",
+		"rollback_plan": "git revert the merge commit; no data migrations, no user re-auth required. Follow-up: none.",
+		"references": "Private advisory HAND_SYNTH-01."
+	},
+	"codeowners_paths": ["<sanitized-path-495>", "<sanitized-path-496>"],
+	"style_recon": {
+		"voice": {
+			"sanitized": true,
+			"len": 158,
+			"hash": "69603f86"
+		}
+	},
+	"mode": "solve",
+	"is_spike": false
+}

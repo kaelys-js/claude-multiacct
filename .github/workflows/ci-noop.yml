@@ -1,16 +1,16 @@
----
+# yaml-language-server: $schema=../../.schemas/github-workflow.json
 # CI noop for docs-only changes. ci.yml carries `paths-ignore` for the same
 # list; when a push or PR touches ONLY files in that list, ci.yml skips and
-# GitHub leaves the required check (`qa lint + qa test`) in Pending — branch
-# protection then blocks the docs-only PR from merging. This workflow
-# mirrors the path list under `paths:` (not `paths-ignore:`), matches the
-# required-check name via `jobs.<id>.name`, and reports success so docs-only
-# PRs merge without a real CI run.
+# GitHub leaves the required checks (`format`, `lint`, `sync`, `test`) in
+# Pending — branch protection then blocks the docs-only PR from merging.
+# This workflow mirrors the path list under `paths:` (not `paths-ignore:`),
+# matches the required-check names via `jobs.<id>.name`, and reports success
+# so docs-only PRs merge without a real CI run.
 #
 # Keep the path list here in sync with ci.yml.
 name: CI
 
-"on":
+on:
   push:
     branches: [main]
     paths:
@@ -52,11 +52,30 @@ permissions:
   contents: read
 
 jobs:
-  qa:
-    name: qa lint + qa test
-    # ubuntu-latest (not macos-14 like real ci.yml) — the noop is a 5-second
-    # echo and does not need the darwin toolchain the real qa job needs.
-    runs-on: ubuntu-latest
+  format:
+    name: format
+    # Route to the same self-hosted runner as ci.yml so noop runs are billed
+    # against the runner (free) rather than the paid Actions plan. Falls back
+    # to ubuntu-latest if the mini is down or the escape hatch is flipped off.
+    runs-on: ${{ vars.SELF_HOSTED_ENABLED == 'true' && fromJSON('["self-hosted","kaelys-mac-mini"]') || 'ubuntu-latest' }}
+    timeout-minutes: 2
+    steps:
+      - run: echo "docs-only change - real CI skipped (see ci.yml paths-ignore)"
+  lint:
+    name: lint
+    runs-on: ${{ vars.SELF_HOSTED_ENABLED == 'true' && fromJSON('["self-hosted","kaelys-mac-mini"]') || 'ubuntu-latest' }}
+    timeout-minutes: 2
+    steps:
+      - run: echo "docs-only change - real CI skipped (see ci.yml paths-ignore)"
+  sync:
+    name: sync
+    runs-on: ${{ vars.SELF_HOSTED_ENABLED == 'true' && fromJSON('["self-hosted","kaelys-mac-mini"]') || 'ubuntu-latest' }}
+    timeout-minutes: 2
+    steps:
+      - run: echo "docs-only change - real CI skipped (see ci.yml paths-ignore)"
+  test:
+    name: test
+    runs-on: ${{ vars.SELF_HOSTED_ENABLED == 'true' && fromJSON('["self-hosted","kaelys-mac-mini"]') || 'ubuntu-latest' }}
     timeout-minutes: 2
     steps:
       - run: echo "docs-only change - real CI skipped (see ci.yml paths-ignore)"
