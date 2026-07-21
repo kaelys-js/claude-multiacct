@@ -28,7 +28,10 @@ const EMPTY: LegacyArtifacts = {
 	legacyDataDir: undefined,
 };
 
-function mkPorts(detected: LegacyArtifacts, overrides: Partial<LegacyCleanupPorts> = {}): LegacyCleanupPorts {
+function mkPorts(
+	detected: LegacyArtifacts,
+	overrides: Partial<LegacyCleanupPorts> = {},
+): LegacyCleanupPorts {
 	return {
 		detect: () => Promise.resolve(detected),
 		promptConfirm: () => Promise.resolve(true),
@@ -128,10 +131,9 @@ describe("runLegacyCleanup", () => {
 			}
 			return Promise.resolve();
 		});
-		const outcome = await runLegacyCleanup(
-			mkPorts(detected, { removeCloneApp: removeClone }),
-			{ assumeYes: true },
-		);
+		const outcome = await runLegacyCleanup(mkPorts(detected, { removeCloneApp: removeClone }), {
+			assumeYes: true,
+		});
 		expect(outcome.failed).toHaveLength(1);
 		expect(outcome.failed[0]!.reason).toContain("EACCES");
 		expect(outcome.removed.cloneApps).toEqual(["/x/B.app"]);

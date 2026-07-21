@@ -133,9 +133,10 @@ describe("extractOauthFromPlaintext", () => {
 		});
 	});
 	it("recognises {tokens.access_token} nested", () => {
-		expect(
-			extractOauthFromPlaintext(Buffer.from('{"tokens":{"access_token":"T-3"}}')),
-		).toEqual({ token: "T-3", email: undefined });
+		expect(extractOauthFromPlaintext(Buffer.from('{"tokens":{"access_token":"T-3"}}'))).toEqual({
+			token: "T-3",
+			email: undefined,
+		});
 	});
 	it("recognises {credentials.access_token} nested", () => {
 		expect(
