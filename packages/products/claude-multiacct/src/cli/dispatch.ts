@@ -27,6 +27,7 @@ import { initCommand } from "./commands/init.ts";
 import { type AccountPorts, accountCommand, makeDefaultTokenReader } from "./commands/account.ts";
 import {
 	collectStatus,
+	type ExecFileFn,
 	type InstallerStatusFn,
 	type InstallerStatusReport,
 	nodeExecFilePort,
@@ -76,6 +77,13 @@ export type DispatchIO = {
 	 * (i.e. outside the bundled entry).
 	 */
 	makeInstallerStatusPort?: () => InstallerStatusFn;
+	/**
+	 * `cma status`/`cma doctor` shell out to `codesign` + `spctl` on
+	 * `/Applications/Claude.app` to read notarization state. Bundled bin/cma
+	 * wires the real port; tests inject a fake so the suite never spawns a
+	 * real subprocess. When undefined the real port is used lazily.
+	 */
+	makeStatusExecFile?: () => ExecFileFn;
 };
 
 /**
@@ -269,7 +277,7 @@ async function buildStatusPorts(io: DispatchIO): Promise<Parameters<typeof colle
 		registryPath,
 		registry,
 		appPath: "/Applications/Claude.app",
-		execFile: nodeExecFilePort(),
+		execFile: (io.makeStatusExecFile ?? nodeExecFilePort)(),
 		installerStatus,
 	};
 }

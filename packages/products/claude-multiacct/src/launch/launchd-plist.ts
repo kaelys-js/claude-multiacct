@@ -71,6 +71,8 @@ ${args}
 \t<string>${xmlEscape(input.stdoutPath)}</string>
 \t<key>StandardErrorPath</key>
 \t<string>${xmlEscape(input.stderrPath)}</string>
+\t<key>SessionCreate</key>
+\t<true/>
 \t<key>EnvironmentVariables</key>
 \t<dict>
 \t\t<key>CLAUDE_MULTIACCT_ENABLE_SHIM</key>
