@@ -9,7 +9,27 @@ __mise_bootstrap() {
     export MISE_CACHE_DIR="$localized_dir/cache"
     export MISE_STATE_DIR="$localized_dir/state"
     export MISE_INSTALL_PATH="$localized_dir/mise-2026.5.0"
-    export MISE_TRUSTED_CONFIG_PATHS="$project_dir${MISE_TRUSTED_CONFIG_PATHS:+:$MISE_TRUSTED_CONFIG_PATHS}"
+    # Trust `$project_dir`'s mise.toml. If we're inside a linked git worktree
+    # (`.git` is a FILE pointing to the main working tree, not a dir), ALSO
+    # trust the enclosing repo's mise.toml — mise's config walk goes upward
+    # from cwd and would otherwise refuse the parent's mise.toml with
+    # "Config files ... are not trusted". This lets `git worktree add`'d
+    # dirs boot on their first post-checkout hook without a manual
+    # `mise trust` step.
+    local trust_paths="$project_dir"
+    if [ -f "$project_dir/.git" ]; then
+        local git_file
+        git_file=$(cat "$project_dir/.git")
+        # Format: `gitdir: /abs/path/to/main-repo/.git/worktrees/<name>`
+        local worktrees_gitdir="${git_file#gitdir: }"
+        # Walk up three levels to reach the main working tree root.
+        local main_worktree
+        main_worktree=$( cd -- "$worktrees_gitdir/../../.." &> /dev/null && pwd )
+        if [ -n "$main_worktree" ] && [ -d "$main_worktree" ]; then
+            trust_paths="$trust_paths:$main_worktree"
+        fi
+    fi
+    export MISE_TRUSTED_CONFIG_PATHS="$trust_paths${MISE_TRUSTED_CONFIG_PATHS:+:$MISE_TRUSTED_CONFIG_PATHS}"
     export MISE_IGNORED_CONFIG_PATHS="$HOME/.config/mise${MISE_IGNORED_CONFIG_PATHS:+:$MISE_IGNORED_CONFIG_PATHS}"
     install() {
         local initial_working_dir="$PWD"
