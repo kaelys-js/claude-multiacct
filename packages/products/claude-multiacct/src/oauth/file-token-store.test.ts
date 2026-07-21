@@ -108,7 +108,9 @@ describe("FileTokenStore", () => {
 describe("isKeychainInteractionError", () => {
 	it("matches the exact macOS error string", () => {
 		expect(
-			isKeychainInteractionError(new Error("SecKeychainItemCreateFromContent (<default>): User interaction is not allowed.")),
+			isKeychainInteractionError(
+				new Error("SecKeychainItemCreateFromContent (<default>): User interaction is not allowed."),
+			),
 		).toBe(true);
 	});
 	it("matches the shorter fragment", () => {
@@ -153,7 +155,9 @@ describe("LayeredTokenStore", () => {
 	it("falls back to secondary on User-interaction-not-allowed primary put failure", async () => {
 		const secondary = await mkStore();
 		const primary = new ThrowingStore(() => {
-			throw new Error("SecKeychainItemCreateFromContent (<default>): User interaction is not allowed.");
+			throw new Error(
+				"SecKeychainItemCreateFromContent (<default>): User interaction is not allowed.",
+			);
 		});
 		const layered = new LayeredTokenStore(primary, secondary.store);
 		await layered.put(UUID_A, "fallback-token");
@@ -190,4 +194,3 @@ describe("LayeredTokenStore", () => {
 		await expect(secondary.store.get(UUID_A)).rejects.toThrow();
 	});
 });
-

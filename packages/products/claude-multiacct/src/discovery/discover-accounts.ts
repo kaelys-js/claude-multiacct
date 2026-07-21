@@ -37,7 +37,12 @@ import { createHash } from "node:crypto";
 import type { AccountUuid } from "../domain/account.ts";
 import type { AccountRegistry } from "../domain/registry.ts";
 import type { TokenStore } from "../ports.ts";
-import { decryptV10, deriveChromiumKey, extractOauthFromPlaintext, isEncrypted } from "./chromium-crypto.ts";
+import {
+	decryptV10,
+	deriveChromiumKey,
+	extractOauthFromPlaintext,
+	isEncrypted,
+} from "./chromium-crypto.ts";
 
 /** Injected side-effect surface — everything the discovery needs. */
 export type DiscoveryPorts = {
@@ -121,7 +126,11 @@ export async function discoverAccounts(ports: DiscoveryPorts): Promise<Discovery
 	// AND the Local Storage LevelDB.
 	const seenThisRun = new Set<string>();
 
-	async function tryRegister(source: string, token: string, email: string | undefined): Promise<void> {
+	async function tryRegister(
+		source: string,
+		token: string,
+		email: string | undefined,
+	): Promise<void> {
 		const hash = sha256Hex(token);
 		if (knownTokenHashes.has(hash)) {
 			outcome.skippedAlreadyRegistered += 1;
@@ -149,7 +158,9 @@ export async function discoverAccounts(ports: DiscoveryPorts): Promise<Discovery
 	const mainPassword = await ports.readKeychainPassword("Claude Safe Storage", "Claude Key");
 	// eslint-disable-next-line no-negated-condition, unicorn/no-negated-condition -- Positive branch (do the scan) is the primary path; the else is the exceptional early-return message. Inverting reads worse.
 	if (mainPassword === undefined) {
-		ports.logger.warn("discovery: no `Claude Safe Storage` key in keychain; skipping main Claude.app scan");
+		ports.logger.warn(
+			"discovery: no `Claude Safe Storage` key in keychain; skipping main Claude.app scan",
+		);
 	} else {
 		const key = deriveChromiumKey(mainPassword);
 		const mainStore = mainAppStoreDir();

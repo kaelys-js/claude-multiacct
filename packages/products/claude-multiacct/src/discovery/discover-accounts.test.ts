@@ -18,11 +18,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { AccountUuid } from "../domain/account.ts";
 import type { AccountRegistry } from "../domain/registry.ts";
 import type { TokenStore } from "../ports.ts";
-import {
-	CHROMIUM_IV,
-	CHROMIUM_V10_PREFIX,
-	deriveChromiumKey,
-} from "./chromium-crypto.ts";
+import { CHROMIUM_IV, CHROMIUM_V10_PREFIX, deriveChromiumKey } from "./chromium-crypto.ts";
 import { deriveLabel, discoverAccounts, type DiscoveryPorts } from "./discover-accounts.ts";
 
 const PASSWORD = "test-safe-storage-key";
@@ -53,7 +49,8 @@ function mkPorts(overrides: Partial<DiscoveryPorts> = {}): DiscoveryPorts {
 		},
 		listCloneApps: () => Promise.resolve([]),
 		provisionOne: ({ token, label }) => {
-			const uuid = `${String(provisioned.length).padStart(8, "0")}-1111-4111-8111-000000000000` as AccountUuid;
+			const uuid =
+				`${String(provisioned.length).padStart(8, "0")}-1111-4111-8111-000000000000` as AccountUuid;
 			provisioned.push({ token, label, uuid });
 			return Promise.resolve({ ok: true, uuid });
 		},
@@ -69,7 +66,9 @@ describe("discoverAccounts", () => {
 		const provisioned: string[] = [];
 		const outcome = await discoverAccounts(
 			mkPorts({
-				iterateLevelDb: async function* (dir) /* eslint-disable-next-line vitest/no-conditional-in-test */ {
+				iterateLevelDb: async function* (
+					dir,
+				) /* eslint-disable-next-line vitest/no-conditional-in-test */ {
 					if (dir.endsWith("Local Storage/leveldb")) {
 						yield {
 							key: Buffer.from("some-key"),
@@ -106,7 +105,9 @@ describe("discoverAccounts", () => {
 	it("does NOT double-register the same token found in both main app and CLI", async () => {
 		const outcome = await discoverAccounts(
 			mkPorts({
-				iterateLevelDb: async function* (dir) /* eslint-disable-next-line vitest/no-conditional-in-test */ {
+				iterateLevelDb: async function* (
+					dir,
+				) /* eslint-disable-next-line vitest/no-conditional-in-test */ {
 					if (dir.endsWith("Local Storage/leveldb")) {
 						yield {
 							key: Buffer.from("k"),
@@ -139,7 +140,9 @@ describe("discoverAccounts", () => {
 		} as AccountRegistry;
 		const outcome = await discoverAccounts(
 			mkPorts({
-				iterateLevelDb: async function* (dir) /* eslint-disable-next-line vitest/no-conditional-in-test */ {
+				iterateLevelDb: async function* (
+					dir,
+				) /* eslint-disable-next-line vitest/no-conditional-in-test */ {
 					if (dir.endsWith("Local Storage/leveldb")) {
 						yield {
 							key: Buffer.from("k"),
@@ -177,7 +180,9 @@ describe("discoverAccounts", () => {
 	it("captures classified provisioning failures without aborting the whole run", async () => {
 		const outcome = await discoverAccounts(
 			mkPorts({
-				iterateLevelDb: async function* (dir) /* eslint-disable-next-line vitest/no-conditional-in-test */ {
+				iterateLevelDb: async function* (
+					dir,
+				) /* eslint-disable-next-line vitest/no-conditional-in-test */ {
 					if (dir.endsWith("Local Storage/leveldb")) {
 						yield { key: Buffer.from("k"), value: encryptForTest('{"access_token":"T-1"}') };
 					}
@@ -203,7 +208,9 @@ describe("discoverAccounts", () => {
 	it("silently skips leveldb entries that are not v10-encrypted", async () => {
 		const outcome = await discoverAccounts(
 			mkPorts({
-				iterateLevelDb: async function* (dir) /* eslint-disable-next-line vitest/no-conditional-in-test */ {
+				iterateLevelDb: async function* (
+					dir,
+				) /* eslint-disable-next-line vitest/no-conditional-in-test */ {
 					if (dir.endsWith("Local Storage/leveldb")) {
 						yield { key: Buffer.from("k1"), value: Buffer.from("plain text") };
 						yield {
@@ -221,7 +228,9 @@ describe("discoverAccounts", () => {
 	it("silently skips v10 entries whose decrypted content isn't OAuth JSON", async () => {
 		const outcome = await discoverAccounts(
 			mkPorts({
-				iterateLevelDb: async function* (dir) /* eslint-disable-next-line vitest/no-conditional-in-test */ {
+				iterateLevelDb: async function* (
+					dir,
+				) /* eslint-disable-next-line vitest/no-conditional-in-test */ {
 					if (dir.endsWith("Local Storage/leveldb")) {
 						yield { key: Buffer.from("k"), value: encryptForTest('{"unrelated":"data"}') };
 					}

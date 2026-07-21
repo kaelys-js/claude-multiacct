@@ -67,7 +67,10 @@ export function deriveChromiumKey(keychainPassword: string): Buffer {
  * @returns {boolean} True if prefix matches.
  */
 export function isEncrypted(buf: Buffer): boolean {
-	return buf.length > CHROMIUM_V10_PREFIX.length && buf.subarray(0, CHROMIUM_V10_PREFIX.length).equals(CHROMIUM_V10_PREFIX);
+	return (
+		buf.length > CHROMIUM_V10_PREFIX.length &&
+		buf.subarray(0, CHROMIUM_V10_PREFIX.length).equals(CHROMIUM_V10_PREFIX)
+	);
 }
 
 /**
@@ -145,9 +148,7 @@ function findTokenIn(obj: Record<string, unknown>): string | undefined {
 
 function findEmailIn(obj: Record<string, unknown>): string | undefined {
 	const direct =
-		pickString(obj, "email") ??
-		pickString(obj, "user_email") ??
-		pickString(obj, "account_email");
+		pickString(obj, "email") ?? pickString(obj, "user_email") ?? pickString(obj, "account_email");
 	if (direct !== undefined) {
 		return direct;
 	}
