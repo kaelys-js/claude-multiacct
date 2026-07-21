@@ -121,27 +121,37 @@ const flag = flagOn(process.env);
 // registry from request 1. Best-effort: any discovery failure is logged
 // + swallowed — the daemon still starts and serves whatever's already
 // in the registry.
-try {
+// Fire-and-forget discovery — do NOT block start(). Under launchd without an
+// active GUI session, keychain reads for the \`Claude Safe Storage\` key can
+// hang indefinitely waiting on a nowhere-to-render password prompt; blocking
+// boot on that means the daemon never serves requests. Run in the background
+// with a 30-second timeout; log outcome/timeout to stderr.
+(async () => {
 	bootLog("discover-run");
-	const { discoverAccounts } = await import("./src/discovery/discover-accounts.ts");
-	const { makeRealDiscoveryPorts } = await import("./src/discovery/real-discovery-ports.ts");
-	const ports = makeRealDiscoveryPorts({ tokenStore, readRegistry, logger: {
-		log: (m) => { try { process.stderr.write("[discovery] " + m + "\\n"); } catch {} },
-		warn: (m) => { try { process.stderr.write("[discovery] " + m + "\\n"); } catch {} },
-	}});
-	const outcome = await discoverAccounts(ports);
+	const timeout = new Promise((_, reject) =>
+		setTimeout(() => reject(new Error("discovery timed out after 30s")), 30_000).unref(),
+	);
 	try {
-		process.stderr.write("[discovery] scanned mainApp=" + outcome.scanned.mainApp
-			+ " cloneApps=" + outcome.scanned.cloneApps
-			+ " cliCredentials=" + outcome.scanned.cliCredentials
-			+ " registered=" + outcome.registered.length
-			+ " skipped=" + outcome.skippedAlreadyRegistered
-			+ " failed=" + outcome.failed.length + "\\n");
-	} catch {}
-	bootLog("discover-done");
-} catch (error) {
-	try { process.stderr.write("[discovery] failed: " + String(error) + "\\n"); } catch {}
-}
+		const { discoverAccounts } = await import("./src/discovery/discover-accounts.ts");
+		const { makeRealDiscoveryPorts } = await import("./src/discovery/real-discovery-ports.ts");
+		const ports = makeRealDiscoveryPorts({ tokenStore, readRegistry, logger: {
+			log: (m) => { try { process.stderr.write("[discovery] " + m + "\\n"); } catch {} },
+			warn: (m) => { try { process.stderr.write("[discovery] " + m + "\\n"); } catch {} },
+		}});
+		const outcome = await Promise.race([discoverAccounts(ports), timeout]);
+		try {
+			process.stderr.write("[discovery] scanned mainApp=" + outcome.scanned.mainApp
+				+ " cloneApps=" + outcome.scanned.cloneApps
+				+ " cliCredentials=" + outcome.scanned.cliCredentials
+				+ " registered=" + outcome.registered.length
+				+ " skipped=" + outcome.skippedAlreadyRegistered
+				+ " failed=" + outcome.failed.length + "\\n");
+		} catch {}
+		bootLog("discover-done");
+	} catch (error) {
+		try { process.stderr.write("[discovery] failed: " + String(error) + "\\n"); } catch {}
+	}
+})();
 
 try {
 	bootLog("start-listen");
