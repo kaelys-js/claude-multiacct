@@ -300,6 +300,9 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 	let addMessage = "";
 	let tokenFormOpen = false;
 	let activeLoginId: string | undefined;
+	// The authorize URL of the in-flight login, surfaced as a clickable link in
+	// the waiting state so the user always has a reliable way to open it.
+	let activeAuthorizeUrl: string | undefined;
 
 	function labelFor(uuid: string | undefined): string {
 		const found = accounts.find((a) => a.uuid === uuid);
@@ -452,6 +455,26 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 			inner.append(
 				statusRow("cmaLoginWaiting", addMessage || "Signing in… complete it in your browser"),
 			);
+			// A real anchor to the authorize URL. `openUrl` (window.open) is fired
+			// automatically on start, but Electron can restrict programmatic opens
+			// (window.prompt is a no-op here, so window.open might be too). A user
+			// click on a genuine <a target="_blank"> is the reliable external-open
+			// path the host app always honors — the guaranteed fallback.
+			if (activeAuthorizeUrl !== undefined) {
+				const link = doc.createElement("a");
+				link.dataset.cmaLoginLink = "";
+				link.href = activeAuthorizeUrl;
+				link.target = "_blank";
+				link.rel = "noopener";
+				link.textContent = "Open the sign-in page";
+				link.style.display = "block";
+				link.style.padding = "6px 10px";
+				link.style.color = "var(--claude-text-100, #f5f4ef)";
+				link.style.textDecoration = "underline";
+				link.style.cursor = "pointer";
+				link.addEventListener("click", (event: Event) => event.stopPropagation());
+				inner.append(link);
+			}
 			inner.append(
 				actionRow("cmaLoginCancel", "Cancel sign-in", () => {
 					// eslint-disable-next-line typescript/no-floating-promises -- fire-and-forget click handler
@@ -631,6 +654,7 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 			return;
 		}
 		activeLoginId = started.data.loginId;
+		activeAuthorizeUrl = started.data.authorizeUrl;
 		addState = "waiting";
 		addMessage = "Signing in… complete it in your browser";
 		tokenFormOpen = false;
@@ -692,6 +716,7 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 	async function cancelLogin(): Promise<void> {
 		const loginId = activeLoginId;
 		activeLoginId = undefined;
+		activeAuthorizeUrl = undefined;
 		addState = "idle";
 		addMessage = "";
 		renderItems();

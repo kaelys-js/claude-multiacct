@@ -656,6 +656,14 @@ describe("mountPicker", () => {
 		await tick();
 		expect(q(doc, "[data-cma-login-waiting]")).not.toBeNull();
 		expect(q(doc, "[data-cma-login-cancel]")).not.toBeNull();
+		// A real clickable anchor to the authorize URL is the reliable fallback
+		// when the host restricts programmatic window.open.
+		const link = q(doc, "[data-cma-login-link]") as HTMLAnchorElement | null;
+		expect(link).not.toBeNull();
+		expect(link!.getAttribute("href")).toBe(
+			"https://claude.com/cai/oauth/authorize?state=s&code_challenge=c",
+		);
+		expect(link!.getAttribute("target")).toBe("_blank");
 	});
 
 	it("surfaces an error in-DOM when the daemon refuses to start the login", async () => {
