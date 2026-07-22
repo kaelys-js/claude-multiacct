@@ -16,8 +16,10 @@
  *   - Otherwise → resolve `parentDir` (env `CMA_WATCHER_PARENT_DIR` for
  *     tests, else the real `~/Library/Application Support/Claude/claude-code/`),
  *     bind `nodeFsPort()` + PR2's real `install()` (with no `shimSourcePath`
- *     so the installer resolves its own default), and forward log lines to
- *     `console.error`.
+ *     so the installer resolves its own default) + the picker extension
+ *     self-heal (`ensureExtension`, bound to the real `extension/installer.ts`
+ *     `install()` against the deployed `dist/extension/` and the daemon's
+ *     `bridge.json` from config), and forward log lines to `console.error`.
  *
  * @module
  */
@@ -32,10 +34,28 @@ const outfile = resolve(pkgRoot, "dist/watcher.js");
 const entryContents = `
 import { join } from "node:path";
 import { homedir } from "node:os";
+import {
+	access,
+	copyFile,
+	lstat,
+	mkdir,
+	readFile,
+	readlink,
+	rm,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
 import { PACKAGE_VERSION } from "./src/index.ts";
 import { runWatcher } from "./src/watcher/watcher.ts";
 import { nodeFsPort } from "./src/watcher/fs-port.ts";
 import { install as installShim, FLAG_ENV_VAR, FLAG_ENABLED_VALUE } from "./src/cli-shim/installer.ts";
+import {
+	install as installExtension,
+	defaultClaudeCacheDir,
+	defaultClaudeCacheCrxPath,
+} from "./src/extension/installer.ts";
+import { read as readConfig, defaultConfigPath } from "./src/cli/config-store.ts";
+import { resolveExtensionDistDir } from "./src/cli/dist-paths.ts";
 
 if (process.env.CMA_WATCHER_SELFTEST === "1") {
 	process.stdout.write(\`cma-watcher selftest OK \${PACKAGE_VERSION}\\n\`);
@@ -46,17 +66,53 @@ const parentDir = process.env.CMA_WATCHER_PARENT_DIR
 	?? join(homedir(), "Library/Application Support/Claude/claude-code");
 const flag = process.env[FLAG_ENV_VAR] === FLAG_ENABLED_VALUE;
 
+// Real fs port for the extension installer (Buffer-based), mirroring
+// wiring.ts::realExtensionFs. The extension dist lives beside this bundle in
+// dist/; import.meta.url resolves to the real dist/watcher.js even via the
+// ~/.claude-multiacct/watcher.js symlink, so resolveExtensionDistDir lands on
+// dist/extension.
+const extensionFs = {
+	mkdir: async (p) => { await mkdir(p, { recursive: true }); },
+	readFile: (p) => readFile(p),
+	writeFile: async (p, d) => { await writeFile(p, d); },
+	rm: async (p, opts) => { await rm(p, opts ?? {}); },
+	symlink: async (target, p) => { await symlink(target, p); },
+	readlink: (p) => readlink(p),
+	lstat: (p) => lstat(p),
+	access: (p) => access(p),
+	cp: (src, dest) => copyFile(src, dest),
+};
+
+const ensureExtension = async () => {
+	const cfg = await readConfig(defaultConfigPath());
+	if (cfg === undefined) {
+		// No config yet → the daemon/extension were never installed; nothing to
+		// heal. Left to the next \`cma install\`.
+		return;
+	}
+	await installExtension({
+		distDir: resolveExtensionDistDir(import.meta.url),
+		bridgeJsonPath: cfg.bridgeJsonPath,
+		fs: extensionFs,
+		flag,
+		claudeCacheDir: defaultClaudeCacheDir(),
+		claudeCacheCrxPath: defaultClaudeCacheCrxPath(),
+		log: (m) => { console.error(m); },
+	});
+};
+
 const summary = await runWatcher({
 	parentDir,
 	fs: nodeFsPort(),
 	install: async (macosDir) => {
 		await installShim(macosDir, {});
 	},
+	ensureExtension,
 	log: (m) => { console.error(m); },
 	flag,
 });
 
-process.stdout.write(\`cma-watcher: installed=\${summary.installed.length} failed=\${summary.failed.length} skipped=\${summary.skipped.length}\\n\`);
+process.stdout.write(\`cma-watcher: installed=\${summary.installed.length} failed=\${summary.failed.length} skipped=\${summary.skipped.length} extension=\${summary.extension.status}\\n\`);
 `;
 
 mkdirSync(dirname(outfile), { recursive: true });
