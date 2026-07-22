@@ -60,6 +60,117 @@ env:
   CI: "true" # pnpm 11: allow non-interactive node_modules rebuild
 
 jobs:
+  preflight:
+    name: preflight
+    # Decide the runner for every downstream job. Runs on the same
+    # SELF_HOSTED_ENABLED selection the real jobs used before, so the decider
+    # itself always lands on a runner this repo can actually provision: the
+    # self-hosted kaelys-mac-mini where SELF_HOSTED_ENABLED is set (the private
+    # repos, where GitHub-hosted runners are spending-limit-blocked), else
+    # GitHub-hosted ubuntu-latest (the public repos with free hosted minutes).
+    # Pinning this job to ubuntu-latest would fail to start on the private
+    # repos and skip the whole pipeline.
+    #
+    # Hosted-first policy: query the account's GitHub Actions billing usage for
+    # the current month; the post-discount netAmount summed over the `actions`
+    # product stays 0 while included minutes remain and goes positive once
+    # overage is billed. netAmount == 0 -> runs_on "ubuntu-latest" (hosted);
+    # otherwise the free kaelys-mac-mini self-hosted runner. The step can never
+    # fail the job: it defaults to self-hosted and only flips to hosted on an
+    # explicit confirmation, always writing an output and exiting 0. hosted_ok
+    # mirrors the decision as a boolean for jobs whose hosted runner is not
+    # ubuntu-latest (e.g. macOS). See docs/self-hosted-runner.md in
+    # kaelys-js-infra for the fleet-wide rationale.
+    runs-on: ${{ vars.SELF_HOSTED_ENABLED == 'true' && fromJSON('["self-hosted","kaelys-mac-mini"]') || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    outputs:
+      runs_on: ${{ steps.pick.outputs.runs_on }}
+      hosted_ok: ${{ steps.pick.outputs.hosted_ok }}
+    steps:
+      - name: Select runner by remaining GitHub-hosted minutes
+        id: pick
+        env:
+          BILLING_READ_TOKEN: ${{ secrets.BILLING_READ_TOKEN }}
+          IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+          SH_ENABLED: ${{ vars.SELF_HOSTED_ENABLED }}
+        run: |
+          # GitHub invokes this step with `bash -e`; clear every abort-on-error
+          # flag so no command can fail the job. A preflight that exits non-zero
+          # would skip every downstream job (needs: preflight) and block the PR,
+          # so this step MUST always emit a runs_on and exit 0. Default to the
+          # free self-hosted runner; only an explicit confirmation flips it.
+          set +e
+          set +u
+          set +o pipefail
+          SELF_HOSTED='["self-hosted","kaelys-mac-mini"]'
+          HOSTED='"ubuntu-latest"'
+          RUNS_ON="$SELF_HOSTED"
+          HOSTED_OK=false
+          finish() {
+            {
+              echo "runs_on=${RUNS_ON}"
+              echo "hosted_ok=${HOSTED_OK}"
+            } >> "$GITHUB_OUTPUT" 2>/dev/null
+            echo "preflight selected: ${RUNS_ON} (hosted_ok=${HOSTED_OK})"
+          }
+          # Runs on ANY exit, including an unexpected crash, so an output is
+          # always written.
+          trap finish EXIT
+          # Fork PRs cannot use self-hosted runners (GitHub refuses to run fork
+          # code on them) and never receive repo secrets, so GitHub-hosted
+          # ubuntu is both the only option and the secure one. Also covers a
+          # missing token. This is the one non-billing path that goes hosted.
+          if [ "${IS_FORK:-}" = "true" ] || [ -z "${BILLING_READ_TOKEN:-}" ]; then
+            RUNS_ON="$HOSTED"
+            HOSTED_OK=true
+            echo "fork PR or no billing token; using GitHub-hosted ubuntu-latest"
+            exit 0
+          fi
+          # If SELF_HOSTED_ENABLED is set, the operator has pinned this repo to
+          # the self-hosted mini because GitHub-hosted runners are blocked or
+          # undesired here — on these private repos the account's hosted-runner
+          # spending limit is reached and hosted jobs fail to start ("The job
+          # was not started because ... your spending limit needs to be
+          # increased"). Hosted is not a safe target regardless of what billing
+          # reports, so stay on the free self-hosted runner. The billing branch
+          # below governs repos where hosted IS available (e.g. public repos
+          # with free hosted minutes).
+          if [ "${SH_ENABLED:-}" = "true" ]; then
+            echo "SELF_HOSTED_ENABLED set; GitHub-hosted runners unavailable here — using self-hosted"
+            exit 0
+          fi
+          year="$(date -u +%Y 2>/dev/null)"
+          month="$(date -u +%-m 2>/dev/null)"
+          [ -n "${year:-}" ] || { echo "date failed; keeping self-hosted"; exit 0; }
+          resp="$(curl -sS -m 30 -w '\n%{http_code}' \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${BILLING_READ_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/users/kaelys-js/settings/billing/usage?year=${year}&month=${month}" \
+            2>/dev/null)"
+          code="$(printf '%s' "${resp:-}" | tail -n1)"
+          body="$(printf '%s' "${resp:-}" | sed '$d')"
+          if [ "${code:-}" != "200" ]; then
+            echo "billing HTTP '${code:-none}'; keeping self-hosted"
+            exit 0
+          fi
+          if ! printf '%s' "${body:-}" | jq -e '.usageItems | type == "array"' >/dev/null 2>&1; then
+            echo "billing response has no usageItems[]; keeping self-hosted"
+            exit 0
+          fi
+          net="$(printf '%s' "${body}" | jq -r '[.usageItems[] | select(.product == "actions") | (.netAmount // 0)] | add // 0' 2>/dev/null)"
+          if ! printf '%s' "${net:-}" | grep -Eq '^-?[0-9]+([.][0-9]+)?$'; then
+            echo "unparsable actions netAmount '${net:-}'; keeping self-hosted"
+            exit 0
+          fi
+          if awk -v n="${net}" 'BEGIN { exit !(n + 0 > 0) }'; then
+            echo "actions netAmount=${net} > 0 — included minutes exhausted; using self-hosted"
+          else
+            RUNS_ON="$HOSTED"
+            HOSTED_OK=true
+            echo "actions netAmount=${net} == 0 — within included minutes; using hosted"
+          fi
+          exit 0
   fixup:
     name: regenerate derived files (Renovate PRs only)
     # Only run for PRs opened by our Renovate GitHub App bot, on same-repo
@@ -67,10 +178,8 @@ jobs:
     if: >
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.user.login == 'kaelys-js-renovate[bot]'
-    # Route to the kaelys-mac-mini self-hosted runner when SELF_HOSTED_ENABLED
-    # is set on the repo; fall back to ubuntu-latest if the mini is down or
-    # the escape hatch is flipped off.
-    runs-on: ${{ vars.SELF_HOSTED_ENABLED == 'true' && fromJSON('["self-hosted","kaelys-mac-mini"]') || 'ubuntu-latest' }}
+    needs: preflight
+    runs-on: ${{ fromJSON(needs.preflight.outputs.runs_on) }}
     timeout-minutes: 15
     steps:
       - name: Mint GitHub App installation token
