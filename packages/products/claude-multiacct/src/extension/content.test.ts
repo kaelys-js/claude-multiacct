@@ -12,7 +12,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { bootContent } from "./content.ts";
 
 const BRIDGE = { port: 9000, secret: "s", version: "v" };
-const ACCOUNTS = [{ uuid: "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa", label: "A", isPrimary: true }];
+const ACCOUNTS = [{ uuid: "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa", label: "A" }];
 
 type FetchResponse = { ok: boolean; status: number; json: () => Promise<unknown> };
 type FetchFn = (url: string, init?: unknown) => Promise<FetchResponse>;
@@ -29,7 +29,8 @@ function makeFetch(bridgeFail = false): ReturnType<typeof vi.fn<FetchFn>> {
 			return Promise.resolve({
 				ok: true,
 				status: 200,
-				json: () => Promise.resolve({ ok: true, accounts: ACCOUNTS }),
+				json: () =>
+					Promise.resolve({ ok: true, accounts: ACCOUNTS, activeUuid: ACCOUNTS[0]?.uuid }),
 			});
 		}
 		if (url.includes("/usage/")) {
@@ -107,6 +108,10 @@ describe("bootContent", () => {
 			setTimeout(resolve, 0);
 		});
 		expect(env.doc.querySelector("[data-cma-picker]")).not.toBeNull();
+		// The runtime-active account from /accounts flows through to the picker:
+		// its row mounts pre-selected and the button reflects it, not a bare hint.
+		expect(env.doc.querySelector('[data-cma-picker-menu] [data-selected="true"]')).not.toBeNull();
+		expect(env.doc.querySelector<HTMLElement>("[data-cma-picker]")?.textContent).toBe("A");
 		handle?.destroy();
 	});
 

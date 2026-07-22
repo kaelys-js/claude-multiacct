@@ -9,10 +9,9 @@
  *
  * # GATED-PR contract
  *
- * Mutating commands (`addAccount`, `removeAccount`, `refreshAccount`,
- * `setPrimary`) return `{skipped: true, ...}` and touch NOTHING when the
- * flag is off. Read-only commands (`listAccounts`, `verifyAccount`) are
- * always allowed.
+ * Mutating commands (`addAccount`, `removeAccount`, `refreshAccount`)
+ * return `{skipped: true, ...}` and touch NOTHING when the flag is off.
+ * Read-only commands (`listAccounts`, `verifyAccount`) are always allowed.
  *
  * # Atomicity mirror
  *
@@ -26,7 +25,7 @@
 
 import * as v from "valibot";
 import { type Account, type AccountUuid, AccountUuidSchema } from "../domain/account.ts";
-import { type AccountRegistry, getPrimary } from "../domain/registry.ts";
+import type { AccountRegistry } from "../domain/registry.ts";
 import type { AtomicRegistryWriter } from "../registry/registry-writer.ts";
 import type { OAuthTokens, ProvisionResult, RefreshResult, VerifyResult } from "../oauth/models.ts";
 import {
@@ -249,16 +248,6 @@ export async function removeAccount(args: {
 		};
 	}
 
-	// PR1 invariant: exactly one primary. Removing the primary requires the
-	// caller to setPrimary first (Rule 12 loud).
-	if (account.isPrimary && reg.accounts.length > 1) {
-		return {
-			ok: false,
-			reason: "registry_write_failed",
-			detail: "refusing to remove primary while other accounts exist; setPrimary first",
-		};
-	}
-
 	const remaining: AccountRegistry = {
 		accounts: reg.accounts.filter((a) => a.uuid !== account.uuid),
 	};
@@ -266,9 +255,8 @@ export async function removeAccount(args: {
 	// Snapshot the token so we can undo.
 	const tokenSnapshot = await args.ports.tokenStore.get(account.uuid);
 
-	// Empty registry after removal → we simply skip the write (an empty
-	// accounts array would fail the PR1 exactly-one-primary check). PR6
-	// will decide whether to delete the file entirely.
+	// Empty registry after removal → we skip the registry write and only drop
+	// the token. PR6 will decide whether to delete the file entirely.
 	if (remaining.accounts.length === 0) {
 		try {
 			await args.ports.tokenStore.delete(account.uuid);
@@ -406,69 +394,6 @@ export async function refreshAccount(args: {
 		// nothing to restore against
 	}
 	return { ok: true, account, tokens: refreshed.tokens };
-}
-
-/** `setPrimary` result. */
-export type SetPrimaryResult =
-	| { ok: true; previousPrimary: Account; newPrimary: Account }
-	| { ok: false; reason: "not_found" | "already_primary" | "registry_write_failed"; detail: string }
-	| SkippedResult;
-
-/**
- * `setPrimary` — flip the `isPrimary` bit atomically. Enforces PR1's
- * exactly-one-primary invariant: the previous primary becomes non-primary
- * in the SAME write, so the invariant never lapses even transiently on disk.
- *
- * @param {object} args - `{ selector, ports, env, overrideFlag }`.
- * @returns {Promise<SetPrimaryResult>} Flip outcome or skip when flag off.
- */
-export async function setPrimary(args: {
-	selector: AccountSelector;
-	ports: CliPorts;
-	env?: Record<string, string | undefined>;
-	overrideFlag?: boolean;
-}): Promise<SetPrimaryResult> {
-	const skip = skippedIfFlagOff(args, "setPrimary");
-	if (skip !== undefined) {
-		return skip;
-	}
-	const reg = await args.ports.readRegistry();
-	if (reg === undefined) {
-		return { ok: false, reason: "not_found", detail: "no registry" };
-	}
-	const target = resolveSelector(reg, args.selector);
-	if (target === undefined) {
-		return {
-			ok: false,
-			reason: "not_found",
-			detail: `no account matches ${selectorLabel(args.selector)}`,
-		};
-	}
-	if (target.isPrimary) {
-		return { ok: false, reason: "already_primary", detail: `${target.label} is already primary` };
-	}
-	const previousPrimary = getPrimary(reg);
-	const next: AccountRegistry = {
-		accounts: reg.accounts.map((a) => ({
-			...a,
-			// Exactly one primary in the same write — invariant never lapses.
-			isPrimary: a.uuid === target.uuid,
-		})),
-	};
-	try {
-		await args.ports.registryWriter.write(next);
-	} catch (error) {
-		return {
-			ok: false,
-			reason: "registry_write_failed",
-			detail: errMsg(error),
-		};
-	}
-	return {
-		ok: true,
-		previousPrimary,
-		newPrimary: { ...target, isPrimary: true },
-	};
 }
 
 /**

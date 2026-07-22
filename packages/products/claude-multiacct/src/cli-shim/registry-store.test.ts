@@ -25,7 +25,6 @@ const validRegistry = {
 		{
 			uuid: UUID_A,
 			label: "Personal",
-			isPrimary: true,
 			subscriptionType: "Pro",
 			rateLimitTier: "tier-2",
 			encryptedTokenRef: "keychain:handle-a",
@@ -33,7 +32,6 @@ const validRegistry = {
 		{
 			uuid: UUID_B,
 			label: "Work",
-			isPrimary: false,
 			subscriptionType: "Pro",
 			rateLimitTier: "tier-2",
 			encryptedTokenRef: "keychain:handle-b",
@@ -110,17 +108,14 @@ describe("readRegistry", () => {
 	it("returns undefined + warns on schema-invalid registry (invariant violation, not runtime crash)", async () => {
 		const dir = await tmp();
 		const p = join(dir, "registry.json");
-		// Two primaries — inverts the exactly-one-primary invariant from PR1's
-		// AccountRegistrySchema. If the shim treated this as fatal, one bad
-		// hand-edit would brick the desktop launcher; the fail-safe design
-		// falls back to primary-passthrough instead.
-		const twoPrimary = {
-			accounts: [
-				{ ...validRegistry.accounts[0], isPrimary: true },
-				{ ...validRegistry.accounts[1], isPrimary: true },
-			],
+		// Duplicate uuids — inverts the unique-uuid invariant in
+		// AccountRegistrySchema. If the shim treated a schema-invalid file as
+		// fatal, one bad hand-edit would brick the desktop launcher; the
+		// fail-safe design falls back to primary-passthrough instead.
+		const dupUuid = {
+			accounts: [validRegistry.accounts[0], { ...validRegistry.accounts[1], uuid: UUID_A }],
 		};
-		await writeFile(p, JSON.stringify(twoPrimary), "utf8");
+		await writeFile(p, JSON.stringify(dupUuid), "utf8");
 		const warn = vi.fn<(message: string) => void>();
 		expect(await readRegistry(p, { warn })).toBeUndefined();
 		expect(warn).toHaveBeenCalledWith(expect.stringMatching(/schema-invalid registry/u));

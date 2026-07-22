@@ -59,8 +59,8 @@ function tick(): Promise<void> {
 }
 
 const ACCOUNTS: PickerAccount[] = [
-	{ uuid: "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa", label: "icloud", isPrimary: true },
-	{ uuid: "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb", label: "gmail", isPrimary: false },
+	{ uuid: "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa", label: "icloud" },
+	{ uuid: "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb", label: "gmail" },
 ];
 
 function mkOpts(env: { doc: Document }, get: FakeGet): UsageMountOptions {
@@ -396,7 +396,7 @@ describe("mountUsage — row interactions", () => {
 		openClaudeMenu(env.doc, env.menuHost);
 		await tick();
 		const rows = env.doc.querySelectorAll<HTMLElement>("[data-cma-account-uuid]");
-		const active = rows[0]!; // icloud is primary → active
+		const active = rows[0]!; // icloud is first in pool order → active by default
 		const inactive = rows[1]!;
 
 		inactive.dispatchEvent(new env.doc.defaultView!.Event("mouseenter"));

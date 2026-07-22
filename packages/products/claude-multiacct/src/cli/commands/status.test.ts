@@ -35,7 +35,6 @@ function registryOf(): AccountRegistry {
 			{
 				uuid: v.parse(AccountUuidSchema, UUID),
 				label: "Personal",
-				isPrimary: true,
 				subscriptionType: "Pro",
 				rateLimitTier: "tier-2",
 				encryptedTokenRef: "keychain:a",
@@ -119,7 +118,6 @@ describe("collectStatus: read-only invariants", () => {
 		expect(report.config.usedDefaults).toBe(false);
 		expect(report.config.enabled).toBe(true);
 		expect(report.registry.count).toBe(1);
-		expect(report.registry.primaryLabel).toBe("Personal");
 		expect(report.registry.labels).toStrictEqual(["Personal"]);
 	});
 
@@ -297,7 +295,6 @@ describe("renderStatus: text output covers every section", () => {
 			registry: {
 				path: "/reg",
 				count: 1,
-				primaryLabel: "Personal",
 				labels: ["Personal"],
 			},
 			claudeApp: {
@@ -335,7 +332,7 @@ describe("renderStatus: text output covers every section", () => {
 				configVersion: 1,
 				usedDefaults: true,
 			},
-			registry: { path: "/reg", count: 0, primaryLabel: undefined, labels: [] },
+			registry: { path: "/reg", count: 0, labels: [] },
 			claudeApp: {
 				appPath: "/x",
 				codesignAuthority: undefined,

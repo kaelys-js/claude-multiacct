@@ -68,6 +68,7 @@ async function scratchPath(): Promise<string> {
 
 const noopDeps = {
 	listAccounts: (): Promise<never[]> => Promise.resolve([]),
+	activeAccountUuid: (): Promise<undefined> => Promise.resolve(undefined),
 	verifyAccount: (): Promise<{ ok: true }> => Promise.resolve({ ok: true }),
 	choiceStore: { write: (): Promise<void> => Promise.resolve() },
 	flagOn: true,
@@ -258,20 +259,23 @@ describe("start", () => {
 					{
 						uuid: "11111111-1111-4111-8111-111111111111",
 						label: "a",
-						isPrimary: true,
 						encryptedTokenRef: "kc:ref",
 						subscriptionType: "pro",
 						rateLimitTier: "tier1",
 					},
 				] as never),
+			// Prove start() threads activeAccountUuid through to the route: the
+			// echoed activeUuid must be this injected value, not noopDeps' undefined.
+			activeAccountUuid: () => Promise.resolve("11111111-1111-4111-8111-111111111111"),
 		});
 		alive.push(s);
 		const res = await fetch(`http://127.0.0.1:${String(s.port)}/accounts`, {
 			headers: { origin: "https://claude.ai", "x-cma-bridge-secret": s.secret },
 		});
 		expect(res.status).toBe(200);
-		const body = (await res.json()) as { accounts: unknown[] };
+		const body = (await res.json()) as { accounts: unknown[]; activeUuid: string };
 		expect(body.accounts).toHaveLength(1);
+		expect(body.activeUuid).toBe("11111111-1111-4111-8111-111111111111");
 	});
 
 	it("OPTIONS preflight from an allowed Origin → 204 with cors headers", async () => {

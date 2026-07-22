@@ -54,7 +54,6 @@ describe("collectDoctor", () => {
 					{
 						uuid: "11111111-1111-4111-8111-111111111111" as never,
 						label: "P",
-						isPrimary: true,
 						subscriptionType: "Pro",
 						rateLimitTier: "tier-2",
 						encryptedTokenRef: "keychain:a",
@@ -98,7 +97,9 @@ describe("collectDoctor", () => {
 		expect(reg?.fix).toContain("cma account add");
 	});
 
-	it("registry with no primary → ERROR (Rule 12: real invariant violation)", async () => {
+	it("populated registry → OK finding reporting the account count", async () => {
+		// The old "no primary → error" branch is gone: there is no stored
+		// primary to be missing. A registry with accounts is simply healthy.
 		const { findings } = await collectDoctor({
 			configPath: "/cfg",
 			config: defaultConfig(),
@@ -108,7 +109,6 @@ describe("collectDoctor", () => {
 					{
 						uuid: "11111111-1111-4111-8111-111111111111" as never,
 						label: "P",
-						isPrimary: false,
 						subscriptionType: "Pro",
 						rateLimitTier: "tier-2",
 						encryptedTokenRef: "keychain:a",
@@ -120,8 +120,8 @@ describe("collectDoctor", () => {
 			installerStatus: INSTALLER_STUB,
 		});
 		const reg = findings.find((f) => f.label === "registry");
-		expect(reg?.tier).toBe("error");
-		expect(reg?.fix).toContain("set-primary");
+		expect(reg?.tier).toBe("ok");
+		expect(reg?.message).toContain("1 account(s)");
 	});
 
 	it("missing Claude.app codesign → ERROR with reinstall fix", async () => {

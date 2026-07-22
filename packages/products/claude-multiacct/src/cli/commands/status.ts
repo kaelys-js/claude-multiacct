@@ -5,7 +5,7 @@
  * Collects:
  *
  *   - `config.json` state (path + parsed contents or defaults);
- *   - registry state (count + primary marker);
+ *   - registry state (account count + labels);
  *   - `/Applications/Claude.app` bundle signing/Gatekeeper info via
  *     `codesign -dv` and `spctl -a -vv`;
  *   - "installed markers in the asar" — always ZERO here; this PR never
@@ -93,7 +93,6 @@ export type StatusReport = {
 	registry: {
 		path: string;
 		count: number;
-		primaryLabel: string | undefined;
 		labels: readonly string[];
 	};
 	claudeApp: {
@@ -144,11 +143,9 @@ export async function collectStatus(ports: StatusPorts): Promise<StatusReport> {
 		configVersion: cfg?.configVersion ?? 1,
 		usedDefaults: cfg === undefined,
 	};
-	const primary = ports.registry?.accounts.find((a) => a.isPrimary);
 	const registrySection: StatusReport["registry"] = {
 		path: ports.registryPath,
 		count: ports.registry?.accounts.length ?? 0,
-		primaryLabel: primary?.label,
 		labels: ports.registry?.accounts.map((a) => a.label) ?? [],
 	};
 
@@ -220,7 +217,6 @@ export function renderStatus(report: StatusReport): string {
 		"=== Registry ===",
 		`  path:    ${reg.path}`,
 		`  count:   ${String(reg.count)}`,
-		...(reg.primaryLabel === undefined ? [] : [`  primary: ${reg.primaryLabel}`]),
 		...reg.labels.map((label) => `   - ${label}`),
 	];
 	const claudeLines = [

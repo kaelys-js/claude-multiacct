@@ -111,7 +111,9 @@ export function mountUsage(opts: UsageMountOptions): UsageHandle {
 	const interval = opts.intervalMs ?? 60_000;
 
 	const usageByAccount = new Map<string, UsageState>();
-	let activeUuid: string | undefined = opts.accounts.find((a) => a.isPrimary)?.uuid;
+	// No stored primary: seed the active account with the first in pool order,
+	// mirroring the domain's runtime active-account fallback.
+	let activeUuid: string | undefined = opts.accounts[0]?.uuid;
 	let destroyed = false;
 	let pollHandle: number | undefined;
 

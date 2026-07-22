@@ -375,7 +375,6 @@ export function topLevelHelp(): string {
 		"  account verify    re-verify a pooled account against its stored token",
 		"  account remove    remove a pooled account",
 		"  account refresh   refresh the OAuth tokens for a pooled account",
-		"  account set-primary   promote a pooled account to primary",
 		"  install           flip config.enabled=true and install shim + agents + extension",
 		"  uninstall         reverse `cma install` (best-effort, per-step)",
 		"  launch            spawn Claude.app after verifying daemon is alive",

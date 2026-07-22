@@ -30,7 +30,6 @@ const registry = v.parse(AccountRegistrySchema, {
 		{
 			uuid: ACCOUNT_A,
 			label: "Personal",
-			isPrimary: true,
 			subscriptionType: "Pro",
 			rateLimitTier: "tier-2",
 			encryptedTokenRef: "keychain:a",
@@ -38,7 +37,6 @@ const registry = v.parse(AccountRegistrySchema, {
 		{
 			uuid: ACCOUNT_B,
 			label: "Work",
-			isPrimary: false,
 			subscriptionType: "Pro",
 			rateLimitTier: "tier-2",
 			encryptedTokenRef: "keychain:b",

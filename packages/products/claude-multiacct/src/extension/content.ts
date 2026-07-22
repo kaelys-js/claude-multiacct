@@ -103,11 +103,15 @@ export async function bootContent(deps: ContentDeps): Promise<{ destroy(): void 
 	let picker: PickerHandle | undefined;
 	let usageAugmenter: UsageHandle | undefined;
 	let accounts: PickerAccount[] = [];
+	let activeUuid: string | undefined;
 
 	async function loadAccounts(): Promise<void> {
-		const res = await client.get<{ ok: boolean; accounts: PickerAccount[] }>("/accounts");
+		const res = await client.get<{ ok: boolean; accounts: PickerAccount[]; activeUuid?: string }>(
+			"/accounts",
+		);
 		if (res.ok && Array.isArray(res.data.accounts)) {
 			({ accounts } = res.data);
+			activeUuid = typeof res.data.activeUuid === "string" ? res.data.activeUuid : undefined;
 		}
 	}
 
@@ -138,11 +142,13 @@ export async function bootContent(deps: ContentDeps): Promise<{ destroy(): void 
 			sessionUuid,
 			doc: deps.doc,
 			accounts,
+			activeUuid,
 			onChoice: (uuid) => {
 				usageAugmenter?.notifyActive(uuid);
 			},
 		});
-		// Pick the initial active account (mirror picker's default: primary).
+		// Seed the usage augmenter with the runtime-active account the picker
+		// pre-selected, so the initial usage row matches the highlighted row.
 		usageAugmenter.notifyActive(picker.currentUuid());
 	}
 

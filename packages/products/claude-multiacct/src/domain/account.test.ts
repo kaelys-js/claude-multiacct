@@ -14,7 +14,6 @@ const VALID_UUID = "11111111-1111-4111-8111-111111111111";
 const validInput = {
 	uuid: VALID_UUID,
 	label: "Personal",
-	isPrimary: true,
 	subscriptionType: "Pro",
 	rateLimitTier: "tier-2",
 	encryptedTokenRef: "keychain:handle-abc",
@@ -51,8 +50,11 @@ describe("AccountSchema — malformed field rejection", () => {
 		expect(() => v.parse(AccountSchema, { ...validInput, label: "" })).toThrow(v.ValiError);
 	});
 
-	it("rejects a non-boolean isPrimary (intent: primary must be a binary flag)", () => {
-		expect(() => v.parse(AccountSchema, { ...validInput, isPrimary: "yes" })).toThrow(v.ValiError);
+	it("rejects a stored isPrimary flag (intent: the active account is derived, never stored)", () => {
+		// The primary flag was removed from the shape. A registry written by an
+		// older build still carries it; strictObject must reject rather than keep
+		// a field nothing reads, so the drift surfaces instead of rotting silently.
+		expect(() => v.parse(AccountSchema, { ...validInput, isPrimary: true })).toThrow(v.ValiError);
 	});
 
 	it("rejects an empty subscriptionType", () => {
@@ -77,8 +79,9 @@ describe("AccountSchema — malformed field rejection", () => {
 	});
 
 	it("rejects an unknown extra key — strictObject invariant", () => {
-		// The adversarial case: a typo like is_primary would otherwise coexist with
-		// isPrimary, and the schema must fail loud instead of silently ignoring it.
-		expect(() => v.parse(AccountSchema, { ...validInput, is_primary: false })).toThrow(v.ValiError);
+		// The adversarial case: a typo like sub_type would otherwise coexist with
+		// subscriptionType, and the schema must fail loud instead of silently
+		// ignoring it.
+		expect(() => v.parse(AccountSchema, { ...validInput, sub_type: "Pro" })).toThrow(v.ValiError);
 	});
 });

@@ -59,18 +59,11 @@ export async function collectDoctor(ports: StatusPorts): Promise<{
 			message: "no accounts configured",
 			fix: "run `cma account add --label=<name>` to add one",
 		});
-	} else if (report.registry.primaryLabel === undefined) {
-		findings.push({
-			label: "registry",
-			tier: "error",
-			message: "no primary account (invariant violation)",
-			fix: "run `cma account set-primary --label=<one>` to elect a primary",
-		});
 	} else {
 		findings.push({
 			label: "registry",
 			tier: "ok",
-			message: `${String(report.registry.count)} account(s), primary=${report.registry.primaryLabel}`,
+			message: `${String(report.registry.count)} account(s)`,
 		});
 	}
 

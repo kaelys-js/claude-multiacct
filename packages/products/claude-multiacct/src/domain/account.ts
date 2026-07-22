@@ -41,13 +41,17 @@ export type AccountUuid = v.InferOutput<typeof AccountUuidSchema>;
  * `Account` — one pooled Anthropic identity.
  *
  * `strictObject` means an unrecognised key fails validation. That is the point:
- * accounts are declared once in a registry file, and a typo like `is_primary`
- * (snake_case) must never silently coexist with the correct `isPrimary`.
+ * accounts are declared once in a registry file, and a typo like
+ * `subscription_type` (snake_case) must never silently coexist with the
+ * correct `subscriptionType`.
+ *
+ * There is no stored "primary" flag. Which account is active is derived at
+ * runtime from Claude.app's current OAuth token (see
+ * `domain/registry.ts::getPrimary`), so no bit on disk can drift from it.
  */
 export const AccountSchema = v.strictObject({
 	uuid: AccountUuidSchema,
 	label: NonEmptyString,
-	isPrimary: v.boolean(),
 	subscriptionType: NonEmptyString,
 	rateLimitTier: NonEmptyString,
 	encryptedTokenRef: NonEmptyString,
