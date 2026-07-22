@@ -12,6 +12,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+	resolveActiveTokenScriptPath,
 	resolveDaemonScriptPath,
 	resolveExtensionDistDir,
 	resolveWatcherScriptPath,
@@ -51,6 +52,20 @@ describe("resolveDaemonScriptPath — bundled + src contexts", () => {
 	it("src/cli/wiring.ts → up-two-levels dist/daemon.js", () => {
 		expect(resolveDaemonScriptPath("file:///opt/pkg/src/cli/wiring.ts")).toBe(
 			"/opt/pkg/dist/daemon.js",
+		);
+	});
+});
+
+describe("resolveActiveTokenScriptPath — bundled + src contexts", () => {
+	it("bundled dist/cma.js → sibling dist/active-token.js", () => {
+		expect(resolveActiveTokenScriptPath("file:///opt/pkg/dist/cma.js")).toBe(
+			"/opt/pkg/dist/active-token.js",
+		);
+	});
+
+	it("src/cli/wiring.ts → up-two-levels dist/active-token.js", () => {
+		expect(resolveActiveTokenScriptPath("file:///opt/pkg/src/cli/wiring.ts")).toBe(
+			"/opt/pkg/dist/active-token.js",
 		);
 	});
 });
