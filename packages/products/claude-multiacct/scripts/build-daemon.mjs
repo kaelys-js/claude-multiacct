@@ -39,14 +39,11 @@ import { SecurityCliMutableTokenStore } from "./src/cli-shim/mutable-token-store
 import { AtomicRegistryWriter, nodeRegistryFsPort } from "./src/registry/registry-writer.ts";
 import { verifyToken } from "./src/oauth/verify.ts";
 import { flagOn } from "./src/oauth/provisioning.ts";
+import { readFile } from "node:fs/promises";
 import {
-	accountTokenShaFrom,
-	currentActiveTokenSha,
-	tokenShasFromStore,
-} from "./src/discovery/active-token.ts";
-import { configJsonPath } from "./src/discovery/discover-accounts.ts";
-import { makeRealDiscoveryPorts } from "./src/discovery/real-discovery-ports.ts";
-import { getPrimary } from "./src/domain/registry.ts";
+	defaultActiveAccountPath,
+	readActiveUuid,
+} from "./src/active-token-agent/active-account-file.ts";
 
 if (process.env.CMA_DAEMON_SELFTEST === "1") {
 	process.stdout.write(\`cma-daemon selftest OK \${PACKAGE_VERSION}\\n\`);
@@ -126,41 +123,33 @@ const listAccounts = async () => {
 	return reg?.accounts ?? [];
 };
 
-// Ports for the runtime active-account derivation. Reuse the discovery
-// bindings (timeout-bounded \`security\` reads + the config.json v10 scanner)
-// so /accounts resolves the active account exactly the way discovery reads
-// Claude.app's credentials. Only the two read ports are exercised here.
-const activeTokenLogger = {
-	log: (m) => { try { process.stderr.write("[active-token] " + m + "\\n"); } catch {} },
-	warn: (m) => { try { process.stderr.write("[active-token] " + m + "\\n"); } catch {} },
-};
-const activeTokenPorts = makeRealDiscoveryPorts({ tokenStore, readRegistry, logger: activeTokenLogger });
-const claudeConfigJsonPath = configJsonPath(
-	(process.env.HOME ?? "") + "/Library/Application Support/Claude",
-);
-
-// Resolve the account Claude.app is currently authenticated as. Runs per
-// /accounts request (never at boot), so the keychain read stays lazy — under a
-// non-GUI launchd context the timeout-bounded read fails closed to undefined
-// rather than hanging start(). Any error → undefined (picker hints the first
-// account instead of mis-marking one).
+// Resolve the account Claude.app is currently authenticated as by reading the
+// gui-session companion's published answer, NOT the keychain. The daemon runs
+// with SessionCreate=true (see launch/launchd-plist.ts) so its own \`security\`
+// reads cannot see the login keychain — neither the \`Claude Safe Storage\` key
+// nor the \`com.claude-multiacct.tokens\` pool items. The
+// \`com.claude-multiacct.active-token\` companion (RunAtLoad + WatchPaths on
+// Claude's config.json, NO SessionCreate) does those reads in the user's aqua
+// session and writes the resolved uuid to \`active-account.json\`. Here we just
+// read that file.
+//
+// Fail-closed: readActiveUuid returns undefined for a missing/torn/unresolved
+// file, and we then fall back to the first account in registry order — the same
+// default getPrimary applies when the live token can't be matched. So a missing
+// companion degrades to the pre-fix behaviour rather than mis-marking a row.
+const activeAccountFilePath = defaultActiveAccountPath();
 const activeAccountUuid = async () => {
 	try {
 		const reg = await readRegistry();
 		if (reg === undefined || reg.accounts.length === 0) return undefined;
-		const activeSha = await currentActiveTokenSha({
-			readKeychainPassword: activeTokenPorts.readKeychainPassword,
-			iterateAppConfigJson: activeTokenPorts.iterateAppConfigJson,
-			configJsonPath: claudeConfigJsonPath,
-		});
-		// Only hash the pool's tokens when there's a live sha to match against.
-		// If the active token is unreadable there's nothing to match, and
-		// getPrimary falls back to the first account — so skip the token-store
-		// reads entirely (they'd otherwise throw on any account missing a
-		// keychain entry, collapsing the fallback to undefined).
-		const shaByUuid = activeSha === undefined ? new Map() : await tokenShasFromStore(reg, tokenStore);
-		const primary = getPrimary(reg, activeSha, accountTokenShaFrom(shaByUuid));
-		return primary?.uuid;
+		const published = await readActiveUuid(activeAccountFilePath, { readFile: (p) => readFile(p, "utf8") });
+		// Only trust a published uuid that still names a pooled account; a stale
+		// file naming a removed account must not win over the first-account
+		// fallback.
+		if (published !== undefined && reg.accounts.some((a) => a.uuid === published)) {
+			return published;
+		}
+		return reg.accounts[0]?.uuid;
 	} catch (error) {
 		try { process.stderr.write("[active-token] resolve failed: " + String(error) + "\\n"); } catch {}
 		return undefined;

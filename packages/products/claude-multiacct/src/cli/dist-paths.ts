@@ -2,8 +2,9 @@
  * `@foundation/claude-multiacct` — bundled-CLI path resolution.
  *
  * The built `dist/cma.js` needs to point real installers at sibling artifacts
- * (`dist/shim.js`, `dist/watcher.js`, `dist/daemon.js`, `dist/extension/`).
- * All four live in the same `dist/` dir the bundle itself lives in, so every
+ * (`dist/shim.js`, `dist/watcher.js`, `dist/daemon.js`, `dist/active-token.js`,
+ * `dist/extension/`). All live in the same `dist/` dir the bundle itself lives
+ * in, so every
  * lookup here is "current file's parent dir + name". The earlier form used
  * `new URL("../../dist/X", import.meta.url)` which was correct from src but
  * off-by-one from bundled context and produced paths like
@@ -74,4 +75,19 @@ export function resolveDaemonScriptPath(callerUrl: string): string {
 		return siblingOfEntry(callerUrl, "daemon.js");
 	}
 	return join(dir, "..", "..", "dist", "daemon.js");
+}
+
+/**
+ * Path to `dist/active-token.js` as a sibling of the entry file. Used to deploy
+ * the gui-session active-token companion into `~/.claude-multiacct/active-token.js`.
+ *
+ * @param {string} callerUrl - `import.meta.url` of the caller.
+ * @returns {string} Absolute path to `dist/active-token.js`.
+ */
+export function resolveActiveTokenScriptPath(callerUrl: string): string {
+	const dir = dirname(fileURLToPath(callerUrl));
+	if (basename(dir) === "dist") {
+		return siblingOfEntry(callerUrl, "active-token.js");
+	}
+	return join(dir, "..", "..", "dist", "active-token.js");
 }
