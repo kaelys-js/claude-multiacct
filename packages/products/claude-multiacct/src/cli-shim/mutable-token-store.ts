@@ -14,7 +14,12 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { AccountUuid } from "../domain/account.ts";
 import type { MutableTokenStore } from "../oauth/token-store-mut.ts";
-import { type ExecFileAsync, KEYCHAIN_SERVICE, SecurityCliTokenStore } from "./token-store.ts";
+import {
+	type ExecFileAsync,
+	KEYCHAIN_SERVICE,
+	parseKeychainServiceAccounts,
+	SecurityCliTokenStore,
+} from "./token-store.ts";
 
 const defaultExecFile: ExecFileAsync = promisify(execFile) as unknown as ExecFileAsync;
 
@@ -34,6 +39,20 @@ export class SecurityCliMutableTokenStore implements MutableTokenStore {
 
 	put(accountUuid: AccountUuid, encryptedTokenRef: string): Promise<void> {
 		return this.base.put(accountUuid, encryptedTokenRef);
+	}
+
+	/**
+	 * Enumerate the account uuids of every token item under THIS tool's
+	 * dedicated keychain service. Reads `security dump-keychain` (attributes
+	 * only — no `-d`, so no secret is decrypted and no prompt is raised) and
+	 * filters to `KEYCHAIN_SERVICE`, so Anthropic's `Claude Safe Storage` item
+	 * is structurally excluded. Used by the orphan-token prune.
+	 *
+	 * @returns {Promise<AccountUuid[]>} Account uuids of this service's items.
+	 */
+	async list(): Promise<AccountUuid[]> {
+		const { stdout } = await this.exec("security", ["dump-keychain"]);
+		return parseKeychainServiceAccounts(stdout, KEYCHAIN_SERVICE);
 	}
 
 	async delete(accountUuid: AccountUuid): Promise<void> {

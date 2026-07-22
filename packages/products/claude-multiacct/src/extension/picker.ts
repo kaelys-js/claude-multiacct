@@ -42,6 +42,13 @@ import type { BridgeClient, BridgeResult } from "./bridge-client.ts";
 export type PickerAccount = {
 	uuid: string;
 	label: string;
+	/**
+	 * How the account entered the pool (from `/accounts`). The `native` account
+	 * is what Claude.app is signed into and the pool's primary — it cannot be
+	 * removed, so its row shows a disabled × with an explanatory tooltip. Absent
+	 * is treated as `explicit` (removable), mirroring the domain's default.
+	 */
+	source?: "native" | "explicit";
 };
 
 export type MountPickerOptions = {
@@ -371,30 +378,47 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 
 			const removeBtn = doc.createElement("button");
 			removeBtn.type = "button";
-			removeBtn.dataset.cmaRemove = account.uuid;
 			removeBtn.className = "cds-reset";
-			removeBtn.setAttribute("aria-label", `Remove ${account.label}`);
 			removeBtn.textContent = "×";
 			styleRemoveButton(removeBtn);
-			removeBtn.addEventListener("mouseenter", () => {
-				removeBtn.style.opacity = "1";
-			});
-			removeBtn.addEventListener("mouseleave", () => {
-				removeBtn.style.opacity = "0.7";
-			});
-			removeBtn.addEventListener("click", (event: Event) => {
-				// Never let the remove click bubble to the row's choose handler.
-				event.stopPropagation();
-				// eslint-disable-next-line typescript/no-floating-promises -- fire-and-forget click handler
-				(async (): Promise<void> => {
-					try {
-						await removeChosen(account);
-					} catch (error: unknown) {
-						// eslint-disable-next-line no-console
-						console.warn("[cma-extension] remove failed:", error);
-					}
-				})();
-			});
+			if (account.source === "native") {
+				// The native account is the pool anchor Claude.app is signed into;
+				// the daemon refuses to remove it (409), so the row shows a disabled
+				// × with a tooltip rather than an actionable control that only errors.
+				removeBtn.dataset.cmaRemoveDisabled = account.uuid;
+				removeBtn.disabled = true;
+				removeBtn.setAttribute(
+					"aria-label",
+					`${account.label} is the primary account and can't be removed`,
+				);
+				removeBtn.title = "Primary account — signed into Claude.app, can't be removed";
+				removeBtn.style.opacity = "0.3";
+				removeBtn.style.cursor = "not-allowed";
+				// Swallow clicks so a stray press never bubbles to the row's choose.
+				removeBtn.addEventListener("click", (event: Event) => event.stopPropagation());
+			} else {
+				removeBtn.dataset.cmaRemove = account.uuid;
+				removeBtn.setAttribute("aria-label", `Remove ${account.label}`);
+				removeBtn.addEventListener("mouseenter", () => {
+					removeBtn.style.opacity = "1";
+				});
+				removeBtn.addEventListener("mouseleave", () => {
+					removeBtn.style.opacity = "0.7";
+				});
+				removeBtn.addEventListener("click", (event: Event) => {
+					// Never let the remove click bubble to the row's choose handler.
+					event.stopPropagation();
+					// eslint-disable-next-line typescript/no-floating-promises -- fire-and-forget click handler
+					(async (): Promise<void> => {
+						try {
+							await removeChosen(account);
+						} catch (error: unknown) {
+							// eslint-disable-next-line no-console
+							console.warn("[cma-extension] remove failed:", error);
+						}
+					})();
+				});
+			}
 			item.append(removeBtn);
 
 			item.addEventListener("click", () => {
@@ -753,10 +777,24 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 		await refetchAccounts();
 	}
 
+	// The label of the account sessions fall back to when `exceptUuid` is
+	// removed: the native (primary) account, else the first other account. Used
+	// in the remove confirmation so the user sees the consequence of removal.
+	function primaryLabelExcept(exceptUuid: string): string {
+		const native = accounts.find((a) => a.source === "native" && a.uuid !== exceptUuid);
+		if (native !== undefined) {
+			return native.label;
+		}
+		const other = accounts.find((a) => a.uuid !== exceptUuid);
+		return other?.label ?? "the primary account";
+	}
+
 	// Per-row remove — confirm, DELETE, then refresh. A declined confirm aborts.
+	// The confirmation states the consequence: sessions pinned to this account
+	// switch to the primary account.
 	async function removeChosen(account: PickerAccount): Promise<void> {
 		const ok = confirmFn(
-			`Remove account "${account.label}"? This deregisters it and deletes its stored token.`,
+			`Sessions using "${account.label}" will switch to "${primaryLabelExcept(account.uuid)}". Remove "${account.label}" and delete its stored token?`,
 		);
 		if (!ok) {
 			return;

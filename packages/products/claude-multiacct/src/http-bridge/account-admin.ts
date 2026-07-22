@@ -23,12 +23,14 @@
  *
  * # Fail-closed removal
  *
- * `removeAccount` (in `cli/commands.ts`) deletes the keychain token BEFORE the
- * registry write and rolls the token back if the registry write fails, so a
+ * `removeAccount` (in `cli/commands.ts`) refuses to remove the native anchor
+ * (`native_protected` → 409), deletes the keychain token BEFORE the registry
+ * write and rolls the token back if the registry write fails, so a
  * failing/locked keychain aborts with `token_store_failed` and the registry is
  * left intact (fail closed). It addresses exactly one uuid, so a removal can
  * never delete more than its target — the guard the legacy over-broad-delete
- * incident demands.
+ * incident demands. On success it repoints every session pinned to the removed
+ * account onto the primary account so none is left dangling.
  *
  * @module
  */
@@ -79,13 +81,20 @@ const PROVISION_STATUS: Record<ProvisionFailKind, number> = {
 	token_store_failed: 500,
 };
 
-/** HTTP status per remove failure reason. */
-const REMOVE_STATUS: Record<"not_found" | "registry_write_failed" | "token_store_failed", number> =
-	{
-		not_found: 404,
-		registry_write_failed: 500,
-		token_store_failed: 500,
-	};
+/**
+ * HTTP status per remove failure reason. `native_protected` is a 409 Conflict:
+ * the request is well-formed and the account exists, but removing the native
+ * anchor is not a permitted state transition (the picker surfaces the detail).
+ */
+const REMOVE_STATUS: Record<
+	"not_found" | "registry_write_failed" | "token_store_failed" | "native_protected",
+	number
+> = {
+	not_found: 404,
+	registry_write_failed: 500,
+	token_store_failed: 500,
+	native_protected: 409,
+};
 
 /**
  * Build the `AddAccountFn` the route injects. Delegates to

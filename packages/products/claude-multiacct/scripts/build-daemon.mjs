@@ -36,6 +36,7 @@ import { FsChoiceStore } from "./src/cli-shim/choice-store.ts";
 import { readRegistry, defaultRegistryPath } from "./src/cli-shim/registry-store.ts";
 import { SecurityCliTokenStore } from "./src/cli-shim/token-store.ts";
 import { SecurityCliMutableTokenStore } from "./src/cli-shim/mutable-token-store.ts";
+import { signalSwap } from "./src/cli-shim/session-pid.ts";
 import { AtomicRegistryWriter, nodeRegistryFsPort } from "./src/registry/registry-writer.ts";
 import { verifyToken } from "./src/oauth/verify.ts";
 import { flagOn } from "./src/oauth/provisioning.ts";
@@ -180,6 +181,11 @@ const cliPorts = {
 	registryWriter: new AtomicRegistryWriter({ path: registryPath, fs: nodeRegistryFsPort() }),
 	readRegistry: () => readRegistry(registryPath),
 	verify: (token) => verifyToken({ token, claudeRealPath, exec: verifyExec }),
+	// Reassignment ports: on a successful remove, removeAccount repoints every
+	// session pinned to the removed account onto the primary (native) account
+	// via this choiceStore and SIGHUPs any live shim so it hot-swaps.
+	choiceStore,
+	signalSwap: (sessionUuid) => signalSwap(sessionUuid),
 };
 const addAccount = makeAddAccount({ cliPorts, env: process.env });
 const removeAccount = makeRemoveAccount({ cliPorts, env: process.env });
