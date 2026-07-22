@@ -45,6 +45,28 @@ function tokenBlob(token: string): Buffer {
 	return v10(JSON.stringify({ access_token: token }));
 }
 
+/** Workspace + audience segments Claude.app uses in every token-cache key. */
+const WS = "b3bf40ff-0e9b-4a5d-b1c1-c701f1eff98a";
+const AUD = "https://api.anthropic.com";
+
+/** Build a real `tokenCacheV2`/`tokenCache` composite key. */
+function cacheKey(accountUuid: string, scope: string): string {
+	return `${accountUuid}:${WS}:${AUD}:${scope}`;
+}
+
+/**
+ * A v10 blob in the real `oauth:tokenCacheV2`/`oauth:tokenCache` MAP shape:
+ * composite key → `{ token, refreshToken, expiresAt, ... }`. Mirrors the live
+ * mini snapshot (one account can appear under several scope sets).
+ */
+function mapBlob(entries: ReadonlyArray<[key: string, token: string]>): Buffer {
+	const obj: Record<string, unknown> = {};
+	for (const [k, token] of entries) {
+		obj[k] = { token, refreshToken: `r-${token}`, expiresAt: 1_787_085_047_899 };
+	}
+	return v10(JSON.stringify(obj));
+}
+
 /** Build ActiveTokenPorts whose config.json yields the given key→blob entries. */
 function makePorts(
 	entries: ReadonlyArray<[string, Buffer]>,
@@ -151,6 +173,87 @@ describe("currentActiveTokenSha", () => {
 	it("returns undefined when no config entry yields a token", async () => {
 		const sha = await currentActiveTokenSha(makePorts([]));
 		expect(sha).toBeUndefined();
+	});
+
+	// The real multi-account shape: oauth:tokenCacheV2 is a MAP holding BOTH
+	// logins, so "prefer V2" can't say which is active. The legacy
+	// oauth:tokenCache slot names the currently-authenticated account, and that
+	// marker must pick the matching V2 entry — exactly the mini census
+	// (active account A ⇒ its claude_code-scoped V2 token).
+	it("selects the active account's V2 token among two, keyed by the legacy oauth:tokenCache marker", async () => {
+		const v2 = mapBlob([
+			[cacheKey(UUID_A, "user:inference user:profile user:sessions:claude_code"), "token-A"],
+			[cacheKey(UUID_B, "user:inference user:profile user:sessions:claude_code"), "token-B"],
+		]);
+		const legacy = mapBlob([[cacheKey(UUID_A, "user:inference user:profile"), "legacy-A"]]);
+		const sha = await currentActiveTokenSha(
+			makePorts([
+				[LEGACY_TOKEN_KEY, legacy],
+				[ACTIVE_TOKEN_KEY, v2],
+			]),
+		);
+		// The marker is account A, so A's V2 token wins — not B's, not A's stale
+		// legacy token. This is the bug the single-object extractor caused: it
+		// yielded undefined and getPrimary fell back to the first account.
+		expect(sha).toBe(sha256Hex("token-A"));
+	});
+
+	it("picks the richest-scope V2 entry for the marked active account", async () => {
+		// An account appears under both a profile-only and a claude_code scope;
+		// resolution must hash the scope the CLI actually uses, or getPrimary
+		// matches the wrong stored token.
+		const v2 = mapBlob([
+			[cacheKey(UUID_B, "user:profile"), "B-profile"],
+			[cacheKey(UUID_B, "user:inference user:sessions:claude_code"), "B-rich"],
+			[cacheKey(UUID_A, "user:profile"), "A-profile"],
+		]);
+		const legacy = mapBlob([[cacheKey(UUID_B, "user:profile"), "legacy-B"]]);
+		const sha = await currentActiveTokenSha(
+			makePorts([
+				[ACTIVE_TOKEN_KEY, v2],
+				[LEGACY_TOKEN_KEY, legacy],
+			]),
+		);
+		expect(sha).toBe(sha256Hex("B-rich"));
+	});
+
+	it("fails closed when V2 holds multiple accounts and no legacy marker resolves them", async () => {
+		// Without a marker there is no defensible way to say which of two logins
+		// is live; undefined lets getPrimary fall back deterministically rather
+		// than highlighting a coin-flip.
+		const v2 = mapBlob([
+			[cacheKey(UUID_A, "user:profile"), "token-A"],
+			[cacheKey(UUID_B, "user:profile"), "token-B"],
+		]);
+		const sha = await currentActiveTokenSha(makePorts([[ACTIVE_TOKEN_KEY, v2]]));
+		expect(sha).toBeUndefined();
+	});
+
+	it("uses the sole V2 account when there is no legacy marker", async () => {
+		// A single-login machine has one V2 account and no ambiguity; resolve it
+		// even though the legacy slot is absent.
+		const v2 = mapBlob([[cacheKey(UUID_A, "user:inference"), "only-A"]]);
+		const sha = await currentActiveTokenSha(makePorts([[ACTIVE_TOKEN_KEY, v2]]));
+		expect(sha).toBe(sha256Hex("only-A"));
+	});
+
+	it("falls back to the legacy marker's own token when V2 lacks that account", async () => {
+		// The active account per the legacy slot isn't in V2 (mid-migration); its
+		// legacy token is still the live one, so return that rather than nothing.
+		const v2 = mapBlob([
+			[cacheKey(UUID_A, "user:profile"), "token-A"],
+			[cacheKey(UUID_B, "user:profile"), "token-B"],
+		]);
+		const legacy = mapBlob([
+			[cacheKey("33333333-3333-4333-8333-333333333333", "user:profile"), "legacy-C"],
+		]);
+		const sha = await currentActiveTokenSha(
+			makePorts([
+				[ACTIVE_TOKEN_KEY, v2],
+				[LEGACY_TOKEN_KEY, legacy],
+			]),
+		);
+		expect(sha).toBe(sha256Hex("legacy-C"));
 	});
 });
 

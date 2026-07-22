@@ -10,7 +10,11 @@
  *     as right now?" sha, sourced exactly the way discovery reads Claude.app's
  *     credentials: decrypt the `oauth:tokenCacheV2` v10 blob from
  *     `~/Library/Application Support/Claude/config.json` with the `Claude Safe
- *     Storage` keychain key, extract the OAuth access token, and hash it.
+ *     Storage` keychain key. That cache is a MAP that on a multi-login machine
+ *     holds every account's token, so "prefer V2" cannot say which is active;
+ *     the legacy `oauth:tokenCache` slot, which Claude.app keeps pointed at the
+ *     one currently-authenticated account, is the marker that picks the right V2
+ *     entry to hash (see `selectActiveSha`).
  *   - `tokenShasFromStore` + `accountTokenShaFrom` produce the per-account
  *     resolver `getPrimary` needs, hashing each account's stored token so the
  *     two sides compare like for like.
@@ -32,8 +36,9 @@ import type { TokenStore } from "../ports.ts";
 import {
 	decryptV10,
 	deriveChromiumKey,
-	extractOauthFromPlaintext,
+	extractOauthEntriesFromPlaintext,
 	isEncrypted,
+	type OauthEntry,
 } from "./chromium-crypto.ts";
 
 /**
@@ -78,37 +83,91 @@ export type ActiveTokenPorts = {
 };
 
 /**
- * Decrypt one v10 blob and pull the OAuth access token out of it, or
- * `undefined` when the blob is not encrypted, will not decrypt, or carries no
+ * Decrypt one v10 blob and enumerate every OAuth entry it carries, or an empty
+ * array when the blob is not encrypted, will not decrypt, or holds no
  * recognisable token. Best-effort by design: config.json holds unrelated v10
  * values too, and one bad blob must not abort the scan.
  *
+ * Map-aware: modern Claude.app writes both `oauth:tokenCache` and
+ * `oauth:tokenCacheV2` as JSON MAPS keyed
+ * `"<accountUuid>:<workspaceUuid>:<audience>:<scopeSet>"` → `{ token, ... }`,
+ * so one blob can carry several accounts. `extractOauthEntriesFromPlaintext`
+ * returns one entry per distinct account (richest scope wins) and still handles
+ * the older single-object shape.
+ *
  * @param {Buffer} value - Decoded v10 blob bytes.
  * @param {Buffer} key - 16-byte AES-128 Safe Storage key.
- * @returns {string | undefined} The access token, or `undefined`.
+ * @returns {OauthEntry[]} Zero or more OAuth entries.
  */
-function tokenFromBlob(value: Buffer, key: Buffer): string | undefined {
+function entriesFromBlob(value: Buffer, key: Buffer): OauthEntry[] {
 	if (!isEncrypted(value)) {
-		return undefined;
+		return [];
 	}
 	let plaintext: Buffer;
 	try {
 		plaintext = decryptV10(value, key);
 	} catch {
-		return undefined;
+		return [];
 	}
-	return extractOauthFromPlaintext(plaintext)?.token;
+	return extractOauthEntriesFromPlaintext(plaintext);
+}
+
+/**
+ * Pick the sha256 of the token Claude.app is CURRENTLY logged in as out of the
+ * decrypted config entries, applying the active-marker rule.
+ *
+ * `oauth:tokenCacheV2` is a multi-account cache: on a machine with two logins it
+ * holds BOTH tokens, so "prefer V2" alone cannot say which is live. The
+ * discriminator is the legacy `oauth:tokenCache` slot, which Claude.app keeps
+ * pointed at the single currently-authenticated account. So:
+ *
+ *   1. The account uuid in the legacy slot is the active marker. If V2 carries
+ *      that account, its (richest-scope) token sha is the answer — this is what
+ *      discovery also stored for that account, so `getPrimary` matches like for
+ *      like.
+ *   2. No marker but V2 holds exactly one account → that account is
+ *      unambiguously active; use it. (Single-login machine, or old single-object
+ *      V2 blob.)
+ *   3. No usable V2 answer but the legacy slot holds exactly one entry → use its
+ *      token. Covers a pre-migration client (legacy only) and the old
+ *      single-object `{ access_token }` shape.
+ *   4. Otherwise undeterminable (several V2 accounts, no marker that resolves) →
+ *      `undefined`, so `getPrimary` falls back deterministically rather than
+ *      highlighting a guess.
+ *
+ * @param {OauthEntry[]} v2 - Entries decrypted from `oauth:tokenCacheV2`.
+ * @param {OauthEntry[]} legacy - Entries decrypted from `oauth:tokenCache`.
+ * @returns {string | undefined} The active token sha256 (hex), or `undefined`.
+ */
+function selectActiveSha(v2: OauthEntry[], legacy: OauthEntry[]): string | undefined {
+	const marker = legacy.find((e) => e.accountUuid !== undefined)?.accountUuid;
+	if (marker !== undefined) {
+		const v2Match = v2.find((e) => e.accountUuid === marker);
+		if (v2Match !== undefined) {
+			return sha256Hex(v2Match.token); // rule 1
+		}
+	}
+	const soleV2 = v2.length === 1 ? v2[0] : undefined;
+	if (soleV2 !== undefined) {
+		return sha256Hex(soleV2.token); // rule 2
+	}
+	const soleLegacy = legacy.length === 1 ? legacy[0] : undefined;
+	if (soleLegacy !== undefined) {
+		return sha256Hex(soleLegacy.token); // rule 3
+	}
+	return undefined; // rule 4 — fail closed
 }
 
 /**
  * Compute the sha256 of the OAuth token Claude.app is currently authenticated
  * as, or `undefined` when it cannot be determined.
  *
- * Prefers the current-scheme `oauth:tokenCacheV2` entry; if only the legacy
- * `oauth:tokenCache` is present it uses that. `undefined` when the Safe Storage
- * key is absent (nothing to decrypt with) or no config entry yields a token —
- * both cases fail closed, letting `getPrimary` fall back to its first-account
- * default rather than guessing.
+ * Decrypts every v10 blob in config.json, then applies the active-marker rule
+ * ({@link selectActiveSha}) over the `oauth:tokenCacheV2` (current, multi-
+ * account) and `oauth:tokenCache` (legacy, single active account) entries.
+ * `undefined` when the Safe Storage key is absent (nothing to decrypt with) or
+ * the entries do not resolve to one live token — both fail closed, letting
+ * `getPrimary` fall back to its first-account default rather than guessing.
  *
  * @param {ActiveTokenPorts} ports - Injected keychain + config.json IO.
  * @returns {Promise<string | undefined>} The active token sha256 (hex), or `undefined`.
@@ -119,21 +178,17 @@ export async function currentActiveTokenSha(ports: ActiveTokenPorts): Promise<st
 		return undefined;
 	}
 	const key = deriveChromiumKey(password);
-	let legacySha: string | undefined;
+	const v2: OauthEntry[] = [];
+	const legacy: OauthEntry[] = [];
 	for await (const entry of ports.iterateAppConfigJson(ports.configJsonPath)) {
-		const token = tokenFromBlob(entry.value, key);
-		if (token !== undefined) {
-			const keyName = entry.key.toString("utf8");
-			if (keyName === ACTIVE_TOKEN_KEY) {
-				// Current scheme wins outright — no need to keep scanning.
-				return sha256Hex(token);
-			}
-			if (keyName === LEGACY_TOKEN_KEY) {
-				legacySha ??= sha256Hex(token);
-			}
+		const keyName = entry.key.toString("utf8");
+		if (keyName === ACTIVE_TOKEN_KEY) {
+			v2.push(...entriesFromBlob(entry.value, key));
+		} else if (keyName === LEGACY_TOKEN_KEY) {
+			legacy.push(...entriesFromBlob(entry.value, key));
 		}
 	}
-	return legacySha;
+	return selectActiveSha(v2, legacy);
 }
 
 /**
