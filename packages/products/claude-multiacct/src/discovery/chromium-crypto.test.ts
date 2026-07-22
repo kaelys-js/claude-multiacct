@@ -23,9 +23,14 @@ import {
 	CHROMIUM_V10_PREFIX,
 	decryptV10,
 	deriveChromiumKey,
+	extractOauthEntriesFromPlaintext,
 	extractOauthFromPlaintext,
 	isEncrypted,
 } from "./chromium-crypto.ts";
+
+// Real accountUuids read (read-only) from the mini's decrypted tokenCacheV2.
+const ACCOUNT_A = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+const ACCOUNT_B = "a473d7bb-17ac-43a7-abc0-a1343d7c2805";
 
 /**
  * Helper — mirror what Chromium does to encrypt (used only in tests).
@@ -157,5 +162,104 @@ describe("extractOauthFromPlaintext", () => {
 	});
 	it("returns undefined for empty JSON object", () => {
 		expect(extractOauthFromPlaintext(Buffer.from("{}"))).toBeUndefined();
+	});
+});
+
+describe("extractOauthEntriesFromPlaintext — tokenCacheV2 map shape", () => {
+	// Real shape: keys are "<accountUuid>:<workspaceUuid>:<audience>:<scopeSet>",
+	// values are { token, refreshToken, expiresAt, ... }. The OAuth token is
+	// `token`, NOT `access_token`. Account B has two entries; the inference-
+	// scoped one must win over the profile-only one. Ordered profile-first so
+	// the test proves the richer entry REPLACES an already-seen profile entry.
+	const REAL_V2_MAP = JSON.stringify({
+		[`${ACCOUNT_A}:ws-a:anthropic:profile inference`]: {
+			token: "tok-A",
+			refreshToken: "ref-A",
+			expiresAt: 1_800_000_000_000,
+			subscriptionType: "pro",
+		},
+		[`${ACCOUNT_B}:ws-b:anthropic:profile`]: {
+			token: "tok-B-profile",
+			refreshToken: "ref-B1",
+			expiresAt: 1_800_000_000_000,
+		},
+		[`${ACCOUNT_B}:ws-b:anthropic:profile inference claude_code`]: {
+			token: "tok-B-inference",
+			refreshToken: "ref-B2",
+			expiresAt: 1_800_000_000_000,
+			rateLimitTier: "default",
+		},
+	});
+
+	it("extracts exactly one entry per distinct account (2 accounts from 3 map entries)", () => {
+		const entries = extractOauthEntriesFromPlaintext(Buffer.from(REAL_V2_MAP));
+		const uuids = new Set(entries.map((e) => e.accountUuid));
+		expect(uuids).toEqual(new Set([ACCOUNT_A, ACCOUNT_B]));
+		expect(entries).toHaveLength(2);
+	});
+
+	it("chooses the inference/claude_code-scoped token for the multi-entry account", () => {
+		const entries = extractOauthEntriesFromPlaintext(Buffer.from(REAL_V2_MAP));
+		const b = entries.find((e) => e.accountUuid === ACCOUNT_B);
+		expect(b?.token).toBe("tok-B-inference");
+	});
+
+	it("derives accountUuid from the first colon-segment and leaves email undefined", () => {
+		const entries = extractOauthEntriesFromPlaintext(Buffer.from(REAL_V2_MAP));
+		const a = entries.find((e) => e.accountUuid === ACCOUNT_A);
+		expect(a).toEqual({ token: "tok-A", accountUuid: ACCOUNT_A, email: undefined });
+	});
+
+	it("keeps the first rich entry when a later profile-only entry arrives for the same account", () => {
+		// inference entry first, profile-only second → the already-rich entry stays.
+		const map = JSON.stringify({
+			[`${ACCOUNT_B}:ws:aud:profile claude_code`]: { token: "rich-first" },
+			[`${ACCOUNT_B}:ws:aud:profile`]: { token: "profile-second" },
+		});
+		const entries = extractOauthEntriesFromPlaintext(Buffer.from(map));
+		expect(entries).toEqual([{ token: "rich-first", accountUuid: ACCOUNT_B, email: undefined }]);
+	});
+
+	it("omits accountUuid when the first key segment is not a UUID", () => {
+		const map = JSON.stringify({ "not-a-uuid:ws:aud:profile": { token: "anon-tok" } });
+		expect(extractOauthEntriesFromPlaintext(Buffer.from(map))).toEqual([
+			{ token: "anon-tok", accountUuid: undefined, email: undefined },
+		]);
+	});
+
+	it("skips map values that are missing / non-string / empty token fields", () => {
+		const map = JSON.stringify({
+			[`${ACCOUNT_A}:ws:aud:profile`]: { token: "keep" },
+			"x:ws:aud:profile": { token: 123 },
+			"y:ws:aud:profile": { token: "" },
+			"z:ws:aud:profile": { refreshToken: "no-token-here" },
+			"nullish:ws:aud:profile": null,
+			"stringy:ws:aud:profile": "not-an-object",
+		});
+		expect(extractOauthEntriesFromPlaintext(Buffer.from(map))).toEqual([
+			{ token: "keep", accountUuid: ACCOUNT_A, email: undefined },
+		]);
+	});
+
+	it("returns nothing for a non-token map (e.g. a dxt allowlist cache)", () => {
+		const map = JSON.stringify({
+			"dxt:allowlist:one": { enabled: true, sha: "abc" },
+			"dxt:allowlist:two": { enabled: false },
+		});
+		expect(extractOauthEntriesFromPlaintext(Buffer.from(map))).toEqual([]);
+	});
+
+	it("falls back to single-object extraction for the V1 (oauth:tokenCache) shape", () => {
+		expect(
+			extractOauthEntriesFromPlaintext(
+				Buffer.from('{"access_token":"T-v1","email":"me@icloud.com"}'),
+			),
+		).toEqual([{ token: "T-v1", accountUuid: undefined, email: "me@icloud.com" }]);
+	});
+
+	it("returns [] for non-JSON, JSON non-objects, and token-less single objects", () => {
+		expect(extractOauthEntriesFromPlaintext(Buffer.from("garbage"))).toEqual([]);
+		expect(extractOauthEntriesFromPlaintext(Buffer.from("123"))).toEqual([]);
+		expect(extractOauthEntriesFromPlaintext(Buffer.from('{"foo":"bar"}'))).toEqual([]);
 	});
 });

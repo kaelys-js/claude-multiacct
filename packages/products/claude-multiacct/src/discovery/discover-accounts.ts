@@ -40,7 +40,9 @@ import type { TokenStore } from "../ports.ts";
 import {
 	decryptV10,
 	deriveChromiumKey,
+	extractOauthEntriesFromPlaintext,
 	extractOauthFromPlaintext,
+	type OauthEntry,
 	isEncrypted,
 } from "./chromium-crypto.ts";
 
@@ -180,8 +182,7 @@ export async function discoverAccounts(ports: DiscoveryPorts): Promise<Discovery
 			// eslint-disable-next-line no-await-in-loop -- sequential per dir; iterateLevelDb is streaming already
 			for await (const entry of ports.iterateLevelDb(dir)) {
 				outcome.scanned.mainApp += 1;
-				const found = tryDecryptAndExtract(entry.value, key);
-				if (found !== undefined) {
+				for (const found of tryDecryptAndExtract(entry.value, key)) {
 					// eslint-disable-next-line no-await-in-loop -- registration is serial by design
 					await tryRegister(`main:${dir}`, found.token, found.email);
 				}
@@ -192,8 +193,7 @@ export async function discoverAccounts(ports: DiscoveryPorts): Promise<Discovery
 		// Scan the same v10 blob shape from there.
 		for await (const entry of ports.iterateAppConfigJson(configJsonPath(mainStore))) {
 			outcome.scanned.mainApp += 1;
-			const found = tryDecryptAndExtract(entry.value, key);
-			if (found !== undefined) {
+			for (const found of tryDecryptAndExtract(entry.value, key)) {
 				// eslint-disable-next-line no-await-in-loop -- registration is serial by design (same as the LevelDB loop above)
 				await tryRegister(`main:${entry.key.toString("utf8")}`, found.token, found.email);
 			}
@@ -213,8 +213,7 @@ export async function discoverAccounts(ports: DiscoveryPorts): Promise<Discovery
 			// eslint-disable-next-line no-await-in-loop -- sequential
 			for await (const entry of ports.iterateLevelDb(dir)) {
 				outcome.scanned.cloneApps += 1;
-				const found = tryDecryptAndExtract(entry.value, key);
-				if (found !== undefined) {
+				for (const found of tryDecryptAndExtract(entry.value, key)) {
 					// eslint-disable-next-line no-await-in-loop -- serial
 					await tryRegister(`clone:${clone.label}:${dir}`, found.token, found.email);
 				}
@@ -223,8 +222,7 @@ export async function discoverAccounts(ports: DiscoveryPorts): Promise<Discovery
 		// eslint-disable-next-line no-await-in-loop -- streaming iterator; sequential is intended
 		for await (const entry of ports.iterateAppConfigJson(configJsonPath(clone.storeDir))) {
 			outcome.scanned.cloneApps += 1;
-			const found = tryDecryptAndExtract(entry.value, key);
-			if (found !== undefined) {
+			for (const found of tryDecryptAndExtract(entry.value, key)) {
 				// eslint-disable-next-line no-await-in-loop -- serial
 				await tryRegister(
 					`clone:${clone.label}:${entry.key.toString("utf8")}`,
@@ -254,28 +252,26 @@ export async function discoverAccounts(ports: DiscoveryPorts): Promise<Discovery
 }
 
 /**
- * Best-effort decrypt + extract in one call. Returns undefined if the
- * value isn't a `v10`-prefixed encrypted blob, or decrypts but isn't a
- * token-bearing JSON.
+ * Best-effort decrypt + extract in one call. Returns an empty array when
+ * the value isn't a `v10`-prefixed encrypted blob, decryption fails, or
+ * the plaintext carries no OAuth token. A single-object blob yields one
+ * entry; a `tokenCacheV2` map yields one entry per distinct account.
  *
- * @param {Buffer} value - LevelDB value bytes.
+ * @param {Buffer} value - LevelDB / config.json value bytes.
  * @param {Buffer} key - 16-byte AES-128 key.
- * @returns {{token: string; email: string | undefined} | undefined} Extracted OAuth data or `undefined` when the value isn't v10-prefixed or the decrypted content isn't token-bearing JSON.
+ * @returns {OauthEntry[]} Zero or more extracted OAuth entries.
  */
-function tryDecryptAndExtract(
-	value: Buffer,
-	key: Buffer,
-): { token: string; email: string | undefined } | undefined {
+function tryDecryptAndExtract(value: Buffer, key: Buffer): OauthEntry[] {
 	if (!isEncrypted(value)) {
-		return undefined;
+		return [];
 	}
 	let plaintext: Buffer;
 	try {
 		plaintext = decryptV10(value, key);
 	} catch {
-		return undefined;
+		return [];
 	}
-	return extractOauthFromPlaintext(plaintext);
+	return extractOauthEntriesFromPlaintext(plaintext);
 }
 
 /**
