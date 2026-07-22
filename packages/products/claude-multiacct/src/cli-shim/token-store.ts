@@ -25,11 +25,52 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { AccountUuid } from "../domain/account.ts";
+import * as v from "valibot";
+import { type AccountUuid, AccountUuidSchema } from "../domain/account.ts";
 import type { TokenStore } from "../ports.ts";
 
 /** Keychain service name — dedicated to this tool, never Anthropic's. */
 export const KEYCHAIN_SERVICE = "com.claude-multiacct.tokens";
+
+/**
+ * Parse the account names of every generic-password item under `service` out
+ * of `security dump-keychain` output.
+ *
+ * `dump-keychain` emits one block per item, each block opening with a
+ * `keychain: "..."` line; within a block the service is `"svce"<blob>="..."`
+ * and the account is `"acct"<blob>="..."`. We keep ONLY the accounts whose
+ * block's `svce` equals `service`, which is the load-bearing safety property:
+ * Anthropic's own `Claude Safe Storage` item lives under a different service
+ * and can never appear in the returned set, so nothing downstream can delete
+ * it. The dump carries NO secret material — `-d` (which would prompt and print
+ * cleartext) is deliberately never passed.
+ *
+ * @param {string} dump - Raw stdout from `security dump-keychain`.
+ * @param {string} service - The service to filter to (e.g. `KEYCHAIN_SERVICE`).
+ * @returns {AccountUuid[]} Validated account uuids for that service, de-duped.
+ */
+export function parseKeychainServiceAccounts(dump: string, service: string): AccountUuid[] {
+	// Split into per-item blocks. Each item starts with a `keychain: "..."`
+	// header line; the leading segment before the first header is discarded.
+	const blocks = dump.split(/^keychain: /mu).slice(1);
+	const svceLiteral = `"svce"<blob>="${service}"`;
+	const seen = new Set<string>();
+	const accounts: AccountUuid[] = [];
+	for (const block of blocks) {
+		const acctMatch = block.includes(svceLiteral) ? /"acct"<blob>="([^"]*)"/u.exec(block) : null;
+		const [, acct] = acctMatch ?? [];
+		// Only surface well-formed, not-yet-seen account uuids; a stray non-uuid
+		// acct under our service is ignored rather than handed to a delete path.
+		if (acct !== undefined && !seen.has(acct)) {
+			seen.add(acct);
+			const parsed = v.safeParse(AccountUuidSchema, acct);
+			if (parsed.success) {
+				accounts.push(parsed.output);
+			}
+		}
+	}
+	return accounts;
+}
 
 /** Minimal `execFile`-shaped call the adapter needs. Test-injectable. */
 export type ExecFileAsync = (

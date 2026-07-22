@@ -12,7 +12,9 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
+import { InMemoryChoiceStore } from "../cli-shim/in-memory-choice-store.ts";
 import type { AccountRegistry } from "../domain/registry.ts";
+import type { SessionAccountChoice } from "../domain/session-choice.ts";
 import type { OAuthTokens, VerifyResult } from "../oauth/models.ts";
 import type { VerifyFn } from "../oauth/provisioning.ts";
 import { assertNotOk, assertOk } from "../oauth/test-utils.ts";
@@ -23,6 +25,7 @@ import {
 	type CliPorts,
 	coerceUuid,
 	listAccounts,
+	reassignSessionsToPrimary,
 	refreshAccount,
 	removeAccount,
 	verifyAccount,
@@ -83,7 +86,17 @@ function makePorts(
 		((): Promise<AccountRegistry | undefined> => Promise.resolve(overrides.registry));
 	const verify =
 		overrides.verify ?? ((): Promise<VerifyResult> => Promise.resolve(okVerify(UUID_C)));
-	return { tokenStore, registryWriter, readRegistry, verify, refresh: overrides.refresh, writes };
+	return {
+		tokenStore,
+		registryWriter,
+		readRegistry,
+		verify,
+		refresh: overrides.refresh,
+		choiceStore: overrides.choiceStore,
+		signalSwap: overrides.signalSwap,
+		clock: overrides.clock,
+		writes,
+	};
 }
 
 describe("addAccount — flag gate (GATED-PR)", () => {
@@ -337,6 +350,157 @@ describe("removeAccount — flag gate + atomicity", () => {
 		const detail = "detail" in r ? r.detail : "";
 		expect(detail).toContain("primary boom");
 		expect(detail).toContain("token restore ALSO failed");
+	});
+});
+
+const SESSION_1 = "aaaaaaa1-1111-4111-8111-111111111111";
+const SESSION_2 = "aaaaaaa2-2222-4222-8222-222222222222";
+const SESSION_3 = "aaaaaaa3-3333-4333-8333-333333333333";
+
+// A registry where UUID_A ("Personal") is the NATIVE anchor and UUID_B ("Work")
+// is explicitly-added. The native/explicit distinction drives both the native
+// guard and the reassignment target.
+function sourcedRegistry(): AccountRegistry {
+	const base = baseRegistry();
+	return {
+		accounts: [
+			{ ...base.accounts[0]!, source: "native" },
+			{ ...base.accounts[1]!, source: "explicit" },
+		],
+	};
+}
+
+function choice(sessionUuid: string, accountUuid: string): SessionAccountChoice {
+	return {
+		sessionUuid,
+		accountUuid: coerceUuid(accountUuid),
+		chosenAt: "2026-07-20T00:00:00.000Z",
+	};
+}
+
+describe("removeAccount — native guard", () => {
+	it("REFUSES to remove a native account → native_protected, nothing mutated", async () => {
+		const ports = makePorts({ registry: sourcedRegistry() });
+		await ports.tokenStore.put(coerceUuid(UUID_A), "keychain:a");
+		const r = await removeAccount({
+			selector: { label: "Personal" },
+			ports,
+			overrideFlag: true,
+		});
+		assertNotOk(r);
+		expect(r.reason).toBe("native_protected");
+		// Fail-closed: no registry write, token untouched.
+		expect(ports.writes).toEqual([]);
+		expect(ports.tokenStore.snapshot()).toEqual({ [UUID_A]: "keychain:a" });
+	});
+
+	it("an account with no explicit source is removable (absent ⇒ explicit)", async () => {
+		// baseRegistry has no `source` on either account → both explicit.
+		const ports = makePorts({ registry: baseRegistry() });
+		const r = await removeAccount({ selector: { label: "Personal" }, ports, overrideFlag: true });
+		assertOk(r);
+	});
+});
+
+describe("removeAccount — session reassignment to primary", () => {
+	it("repoints EVERY session pinned to the removed account onto the native primary", async () => {
+		const choiceStore = new InMemoryChoiceStore();
+		// Two sessions on Work (removed), one already on Personal (native).
+		await choiceStore.write(choice(SESSION_1, UUID_B));
+		await choiceStore.write(choice(SESSION_2, UUID_B));
+		await choiceStore.write(choice(SESSION_3, UUID_A));
+		const signalSwap = vi.fn<(s: string) => Promise<"signalled">>(() =>
+			Promise.resolve("signalled"),
+		);
+		const ports = makePorts({
+			registry: sourcedRegistry(),
+			choiceStore,
+			signalSwap,
+			clock: () => new Date("2026-07-21T12:00:00.000Z"),
+		});
+		const r = await removeAccount({ selector: { label: "Work" }, ports, overrideFlag: true });
+		assertOk(r);
+		expect(new Set(r.reassigned)).toEqual(new Set([SESSION_1, SESSION_2]));
+		const state = await choiceStore.read();
+		// Both Work sessions now point at the native account; the timestamp is the
+		// injected clock; the pre-existing Personal session is untouched.
+		expect(state[SESSION_1]?.accountUuid).toBe(UUID_A);
+		expect(state[SESSION_2]?.accountUuid).toBe(UUID_A);
+		expect(state[SESSION_1]?.chosenAt).toBe("2026-07-21T12:00:00.000Z");
+		expect(state[SESSION_3]?.accountUuid).toBe(UUID_A);
+		// Live shims for exactly the repointed sessions were signalled.
+		expect(signalSwap).toHaveBeenCalledTimes(2);
+		expect(signalSwap).toHaveBeenCalledWith(SESSION_1);
+		expect(signalSwap).toHaveBeenCalledWith(SESSION_2);
+	});
+
+	it("falls back to the first remaining account when no native anchor exists", async () => {
+		const choiceStore = new InMemoryChoiceStore();
+		await choiceStore.write(choice(SESSION_1, UUID_B));
+		// Both explicit — remove Work, primary falls back to Personal (UUID_A).
+		const ports = makePorts({ registry: baseRegistry(), choiceStore });
+		const r = await removeAccount({ selector: { label: "Work" }, ports, overrideFlag: true });
+		assertOk(r);
+		const state = await choiceStore.read();
+		expect(state[SESSION_1]?.accountUuid).toBe(UUID_A);
+	});
+
+	it("returns reassigned:[] when no choiceStore is wired", async () => {
+		const ports = makePorts({ registry: sourcedRegistry() });
+		const r = await removeAccount({ selector: { label: "Work" }, ports, overrideFlag: true });
+		assertOk(r);
+		expect(r.reassigned).toEqual([]);
+	});
+
+	it("empty-pool removal reports reassigned:[]", async () => {
+		const solo: AccountRegistry = { accounts: [baseRegistry().accounts[0]!] };
+		const choiceStore = new InMemoryChoiceStore();
+		const ports = makePorts({ registry: solo, choiceStore });
+		const r = await removeAccount({ selector: { uuid: UUID_A }, ports, overrideFlag: true });
+		assertOk(r);
+		expect(r.reassigned).toEqual([]);
+	});
+
+	it("a failing choiceStore read does NOT un-do the completed removal", async () => {
+		const choiceStore = new InMemoryChoiceStore();
+		vi.spyOn(choiceStore, "read").mockRejectedValueOnce(new Error("dir gone"));
+		const ports = makePorts({ registry: sourcedRegistry(), choiceStore });
+		const r = await removeAccount({ selector: { label: "Work" }, ports, overrideFlag: true });
+		assertOk(r);
+		expect(r.reassigned).toEqual([]);
+		// The removal itself still committed.
+		expect(ports.writes).toHaveLength(1);
+	});
+});
+
+describe("reassignSessionsToPrimary", () => {
+	it("returns [] and writes nothing when no session is pinned to the removed account", async () => {
+		const choiceStore = new InMemoryChoiceStore();
+		await choiceStore.write(choice(SESSION_1, UUID_A));
+		const spy = vi.spyOn(choiceStore, "write");
+		const out = await reassignSessionsToPrimary({
+			removedUuid: coerceUuid(UUID_B),
+			primaryUuid: coerceUuid(UUID_A),
+			choiceStore,
+			clock: () => new Date("2026-07-21T00:00:00.000Z"),
+		});
+		expect(out).toEqual([]);
+		expect(spy).not.toHaveBeenCalled();
+	});
+
+	it("swallows a signalSwap rejection — the sidecar is still repointed", async () => {
+		const choiceStore = new InMemoryChoiceStore();
+		await choiceStore.write(choice(SESSION_1, UUID_B));
+		const out = await reassignSessionsToPrimary({
+			removedUuid: coerceUuid(UUID_B),
+			primaryUuid: coerceUuid(UUID_A),
+			choiceStore,
+			signalSwap: () => Promise.reject(new Error("no pid")),
+			clock: () => new Date("2026-07-21T00:00:00.000Z"),
+		});
+		expect(out).toEqual([SESSION_1]);
+		const state = await choiceStore.read();
+		expect(state[SESSION_1]?.accountUuid).toBe(UUID_A);
 	});
 });
 

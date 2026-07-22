@@ -18,10 +18,12 @@ import {
 	type ExecFileAsync,
 	InMemoryTokenStore,
 	KEYCHAIN_SERVICE,
+	parseKeychainServiceAccounts,
 	SecurityCliTokenStore,
 } from "./token-store.ts";
 
 const UUID_A = "11111111-1111-4111-8111-111111111111" as AccountUuid;
+const UUID_B = "22222222-2222-4222-8222-222222222222";
 const UUID_MISSING = "99999999-9999-4999-8999-999999999999" as AccountUuid;
 
 describe("InMemoryTokenStore", () => {
@@ -96,5 +98,69 @@ describe("SecurityCliTokenStore", () => {
 		const store = new SecurityCliTokenStore();
 		await store.put(UUID_A, "test-real-handle");
 		await expect(store.get(UUID_A)).resolves.toBe("test-real-handle");
+	});
+});
+
+// A realistic `security dump-keychain` fragment: items across two services.
+// Only items under our dedicated service must come back; the `Claude Safe
+// Storage` item (Anthropic's own key) must be excluded — that exclusion is the
+// load-bearing safety property the prune relies on.
+function dumpWith(...blocks: string[]): string {
+	return blocks.join("\n");
+}
+const SAFE_STORAGE_BLOCK = [
+	'keychain: "/Users/x/Library/Keychains/login.keychain-db"',
+	'    class: "genp"',
+	'    "acct"<blob>="Claude Key"',
+	'    "svce"<blob>="Claude Safe Storage"',
+].join("\n");
+function ourBlock(uuid: string): string {
+	return [
+		'keychain: "/Users/x/Library/Keychains/login.keychain-db"',
+		'    class: "genp"',
+		`    "acct"<blob>="${uuid}"`,
+		'    "svce"<blob>="com.claude-multiacct.tokens"',
+	].join("\n");
+}
+
+describe("parseKeychainServiceAccounts", () => {
+	const safeStorageBlock = SAFE_STORAGE_BLOCK;
+
+	it("returns ONLY the accounts under the requested service", () => {
+		const dump = dumpWith(safeStorageBlock, ourBlock(UUID_A), ourBlock(UUID_B));
+		const accounts = parseKeychainServiceAccounts(dump, KEYCHAIN_SERVICE);
+		expect(accounts).toEqual([UUID_A, UUID_B]);
+	});
+
+	it("never returns the Claude Safe Storage item even when it is the only block", () => {
+		expect(parseKeychainServiceAccounts(safeStorageBlock, KEYCHAIN_SERVICE)).toEqual([]);
+	});
+
+	it("de-dupes a repeated account and ignores a non-uuid acct under our service", () => {
+		const dump = dumpWith(
+			ourBlock(UUID_A),
+			ourBlock(UUID_A),
+			[
+				'keychain: "/Users/x/Library/Keychains/login.keychain-db"',
+				'    "acct"<blob>="not-a-uuid"',
+				'    "svce"<blob>="com.claude-multiacct.tokens"',
+			].join("\n"),
+		);
+		expect(parseKeychainServiceAccounts(dump, KEYCHAIN_SERVICE)).toEqual([UUID_A]);
+	});
+
+	it("returns [] for an empty dump", () => {
+		expect(parseKeychainServiceAccounts("", KEYCHAIN_SERVICE)).toEqual([]);
+	});
+
+	it("skips a block for our service that has no acct attribute", () => {
+		const dump = dumpWith(
+			[
+				'keychain: "/Users/x/Library/Keychains/login.keychain-db"',
+				'    "svce"<blob>="com.claude-multiacct.tokens"',
+			].join("\n"),
+			ourBlock(UUID_A),
+		);
+		expect(parseKeychainServiceAccounts(dump, KEYCHAIN_SERVICE)).toEqual([UUID_A]);
 	});
 });

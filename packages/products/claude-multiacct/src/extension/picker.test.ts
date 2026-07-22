@@ -889,6 +889,48 @@ describe("mountPicker", () => {
 		expect(getItems(doc).map((i) => i.dataset.uuid)).toEqual([ACCOUNTS[0]!.uuid]);
 	});
 
+	it("the confirm message states the consequence: sessions switch to the primary", async () => {
+		const client = mockClientWithDel();
+		const messages: string[] = [];
+		const confirm = vi.fn<(m: string) => boolean>((m) => {
+			messages.push(m);
+			return false; // decline — we only care about the prompt text
+		});
+		// Alice is the native primary; removing Bob must name Alice as the target.
+		const withNative: PickerAccount[] = [
+			{ ...ACCOUNTS[0]!, source: "native" },
+			{ ...ACCOUNTS[1]!, source: "explicit" },
+		];
+		mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: withNative, confirm });
+		getButton(doc).click();
+		getRemoveButtons(doc)[0]!.click(); // the sole removable × is Bob's
+		await tick();
+		expect(messages[0]).toContain('Sessions using "Bob"');
+		expect(messages[0]).toContain('switch to "Alice"');
+	});
+
+	it("the native account's row shows a DISABLED × (tooltip) and cannot trigger a DELETE", async () => {
+		const client = mockClientWithDel();
+		const confirm = vi.fn<(m: string) => boolean>(() => true);
+		const withNative: PickerAccount[] = [
+			{ ...ACCOUNTS[0]!, source: "native" },
+			{ ...ACCOUNTS[1]!, source: "explicit" },
+		];
+		mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: withNative, confirm });
+		getButton(doc).click();
+		// Only ONE actionable remove control (Bob's); Alice's is disabled + tagged.
+		expect(getRemoveButtons(doc)).toHaveLength(1);
+		const disabled = getMenu(doc).querySelector<HTMLButtonElement>("[data-cma-remove-disabled]");
+		expect(disabled).not.toBeNull();
+		expect(disabled!.disabled).toBe(true);
+		expect(disabled!.title).toContain("can't be removed");
+		// Clicking the disabled control confirms nothing and deletes nothing.
+		disabled!.click();
+		await tick();
+		expect(confirm).not.toHaveBeenCalled();
+		expect(client.del).not.toHaveBeenCalled();
+	});
+
 	it("remove aborts (no DELETE) when the confirm is declined", async () => {
 		const client = mockClientWithDel();
 		const confirm = vi.fn<(m: string) => boolean>(() => false);

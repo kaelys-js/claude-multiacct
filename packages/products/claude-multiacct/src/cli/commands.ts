@@ -24,8 +24,14 @@
  */
 
 import * as v from "valibot";
-import { type Account, type AccountUuid, AccountUuidSchema } from "../domain/account.ts";
+import {
+	type Account,
+	type AccountUuid,
+	AccountUuidSchema,
+	effectiveSource,
+} from "../domain/account.ts";
 import type { AccountRegistry } from "../domain/registry.ts";
+import type { SessionAccountChoice } from "../domain/session-choice.ts";
 import type { AtomicRegistryWriter } from "../registry/registry-writer.ts";
 import type { OAuthTokens, ProvisionResult, RefreshResult, VerifyResult } from "../oauth/models.ts";
 import {
@@ -37,6 +43,13 @@ import {
 	type VerifyFn,
 } from "../oauth/provisioning.ts";
 import type { MutableTokenStore } from "../oauth/token-store-mut.ts";
+import type { ChoiceStore } from "../ports.ts";
+
+/** Outcome of signalling a live shim to hot-swap after a repoint. */
+export type SwapSignalOutcome = "signalled" | "no-owner" | "stale";
+
+/** Signal the live shim owning `sessionUuid` to hot-swap (SIGHUP its pid). */
+export type SignalSwapPort = (sessionUuid: string) => Promise<SwapSignalOutcome>;
 
 /**
  * Coerce a throwable into a printable string. Single branch for coverage.
@@ -56,6 +69,22 @@ export type CliPorts = {
 	verify: VerifyFn;
 	/** Refresh function — takes the current tokens, returns a new bundle. */
 	refresh?: (tokens: OAuthTokens) => Promise<RefreshResult>;
+	/**
+	 * Session→account sidecar store. When wired, `removeAccount` repoints every
+	 * session pinned to the removed account onto the primary (native) account so
+	 * no session is left pointing at a gone account. Optional: a caller that has
+	 * not wired it (e.g. the CLI before PR6b) simply skips reassignment, and
+	 * stale choices still resolve to primary via `resolveChoice`.
+	 */
+	choiceStore?: ChoiceStore;
+	/**
+	 * Signal a live shim to hot-swap after its session was repointed. Fire-and-
+	 * forget: a shim that can't be signalled reads the repointed sidecar on its
+	 * next spawn. Optional; absent means "no live-swap, sidecar-only repoint".
+	 */
+	signalSwap?: SignalSwapPort;
+	/** Clock for choice timestamps. Defaults to `() => new Date()`. */
+	clock?: () => Date;
 };
 
 /**
@@ -206,21 +235,78 @@ export async function verifyAccount(args: {
 
 /** `removeAccount` result. */
 export type RemoveResult =
-	| { ok: true; removed: Account }
+	| { ok: true; removed: Account; reassigned: string[] }
 	| {
 			ok: false;
-			reason: "not_found" | "registry_write_failed" | "token_store_failed";
+			reason: "not_found" | "registry_write_failed" | "token_store_failed" | "native_protected";
 			detail: string;
 	  }
 	| SkippedResult;
 
 /**
- * `removeAccount` — reverse-atomic mirror of provisioning:
+ * Repoint every session pinned to `removedUuid` onto the primary account.
  *
+ * Reads the whole choice store, rewrites each sidecar whose `accountUuid`
+ * matches the removed account so it points at `primaryUuid`, then fires a
+ * best-effort hot-swap signal at any live shim owning that session. Returns
+ * the session uuids that were repointed. Signal failures are swallowed — the
+ * sidecar is already repointed, so the next shim spawn reads the primary
+ * regardless of whether a live process picked up the SIGHUP now.
+ *
+ * @param {object} args - `{ removedUuid, primaryUuid, choiceStore, signalSwap, clock }`.
+ * @returns {Promise<string[]>} The session uuids repointed to primary.
+ */
+export async function reassignSessionsToPrimary(args: {
+	removedUuid: AccountUuid;
+	primaryUuid: AccountUuid;
+	choiceStore: ChoiceStore;
+	signalSwap?: SignalSwapPort;
+	clock: () => Date;
+}): Promise<string[]> {
+	const state = await args.choiceStore.read();
+	const affected = Object.values(state).filter((c) => c.accountUuid === args.removedUuid);
+	if (affected.length === 0) {
+		return [];
+	}
+	const chosenAt = args.clock().toISOString();
+	// Per-session sidecars are independent files → repoint in parallel; a slow
+	// or failing signal on one session must not hold up the others.
+	const repointed = await Promise.all(
+		affected.map(async (choice): Promise<string> => {
+			const next: SessionAccountChoice = {
+				sessionUuid: choice.sessionUuid,
+				accountUuid: args.primaryUuid,
+				chosenAt,
+			};
+			await args.choiceStore.write(next);
+			if (args.signalSwap !== undefined) {
+				try {
+					await args.signalSwap(choice.sessionUuid);
+				} catch {
+					// Fire-and-forget: the sidecar is already repointed; the next shim
+					// spawn reads primary even if no live process took the SIGHUP now.
+				}
+			}
+			return choice.sessionUuid;
+		}),
+	);
+	return repointed;
+}
+
+/**
+ * `removeAccount` — reverse-atomic mirror of provisioning, made safe:
+ *
+ *   0. REFUSE to remove the native account — it is the account Claude.app is
+ *      itself signed into (the pool anchor); removing it is nonsensical and
+ *      would leave the tool with no base identity.
  *   1. Snapshot the current token in memory.
  *   2. Delete the token from the store.
  *   3. Write the trimmed registry.
  *   4. On registry write fail → restore the token via `put(snapshot)`.
+ *   5. On success, repoint every session pinned to the removed account onto
+ *      the primary (native) account so no session dangles (best-effort; a
+ *      repoint failure never un-does the completed removal, and stale choices
+ *      already resolve to primary).
  *
  * @param {object} args - `{ selector, ports, env, overrideFlag }`.
  * @returns {Promise<RemoveResult>} Remove outcome, or skip when flag off.
@@ -248,6 +334,16 @@ export async function removeAccount(args: {
 		};
 	}
 
+	// Guard the native anchor BEFORE any mutation — you cannot remove the
+	// account Claude.app is signed into. Fail-closed: nothing is touched.
+	if (effectiveSource(account) === "native") {
+		return {
+			ok: false,
+			reason: "native_protected",
+			detail: `cannot remove "${account.label}" — it is the account Claude.app is signed into (the primary account)`,
+		};
+	}
+
 	const remaining: AccountRegistry = {
 		accounts: reg.accounts.filter((a) => a.uuid !== account.uuid),
 	};
@@ -256,7 +352,8 @@ export async function removeAccount(args: {
 	const tokenSnapshot = await args.ports.tokenStore.get(account.uuid);
 
 	// Empty registry after removal → we skip the registry write and only drop
-	// the token. PR6 will decide whether to delete the file entirely.
+	// the token. No sessions can meaningfully reassign (no account remains), so
+	// reassignment is empty. PR6 will decide whether to delete the file entirely.
 	if (remaining.accounts.length === 0) {
 		try {
 			await args.ports.tokenStore.delete(account.uuid);
@@ -267,7 +364,7 @@ export async function removeAccount(args: {
 				detail: errMsg(error),
 			};
 		}
-		return { ok: true, removed: account };
+		return { ok: true, removed: account, reassigned: [] };
 	}
 
 	try {
@@ -301,7 +398,56 @@ export async function removeAccount(args: {
 			detail: `${errMsg(writerError)}${note}`,
 		};
 	}
-	return { ok: true, removed: account };
+
+	// Removal committed. Repoint every session pinned to the gone account onto
+	// the primary (native) account. This is best-effort: the account is already
+	// gone and `resolveChoice` falls back to primary for a stale choice, so a
+	// reassignment failure must NOT turn a completed removal into an error.
+	const reassigned = await reassignAfterRemoval(args.ports, account.uuid, remaining);
+	return { ok: true, removed: account, reassigned };
+}
+
+/**
+ * Pick the primary (native) account out of the trimmed registry and repoint
+ * every session that pointed at the removed account onto it. Swallows any
+ * reassignment error into an empty list — the removal already committed and
+ * stale choices resolve to primary anyway (Rule 12 is honoured by the token/
+ * registry paths, which DO fail loud; this post-commit sweep is deliberately
+ * non-fatal, matching the choice sidecar's soft-fail posture).
+ *
+ * @param {CliPorts} ports - The command ports (choiceStore/signalSwap/clock).
+ * @param {AccountUuid} removedUuid - The uuid just removed.
+ * @param {AccountRegistry} remaining - The registry after removal.
+ * @returns {Promise<string[]>} Session uuids repointed to primary (or `[]`).
+ */
+async function reassignAfterRemoval(
+	ports: CliPorts,
+	removedUuid: AccountUuid,
+	remaining: AccountRegistry,
+): Promise<string[]> {
+	if (ports.choiceStore === undefined) {
+		return [];
+	}
+	// Primary = the native account (always present when one exists, since it
+	// can never be removed); fall back to the first remaining account.
+	const primary =
+		remaining.accounts.find((a) => effectiveSource(a) === "native") ?? remaining.accounts[0];
+	if (primary === undefined) {
+		return [];
+	}
+	try {
+		return await reassignSessionsToPrimary({
+			removedUuid,
+			primaryUuid: primary.uuid,
+			choiceStore: ports.choiceStore,
+			signalSwap: ports.signalSwap,
+			clock: ports.clock ?? ((): Date => new Date()),
+		});
+	} catch {
+		// Post-commit sweep failed (unreadable choice dir, etc.). The removal
+		// stands; stale sidecars resolve to primary. Report nothing repointed.
+		return [];
+	}
 }
 
 /** `refreshAccount` result. */

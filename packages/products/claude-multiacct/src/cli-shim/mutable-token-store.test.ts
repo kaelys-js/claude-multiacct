@@ -104,4 +104,28 @@ describe("SecurityCliMutableTokenStore", () => {
 			"handle-x",
 		]);
 	});
+
+	it("list dumps the keychain (attributes only) and returns this service's account uuids", async () => {
+		// `dump-keychain` WITHOUT `-d`: metadata only, no secret decrypt, no
+		// prompt. The parse keeps only items under our dedicated service.
+		const UUID_B = "22222222-2222-4222-8222-222222222222";
+		const dump = [
+			'keychain: "/Users/x/Library/Keychains/login.keychain-db"',
+			'    "acct"<blob>="Claude Key"',
+			'    "svce"<blob>="Claude Safe Storage"',
+			'keychain: "/Users/x/Library/Keychains/login.keychain-db"',
+			`    "acct"<blob>="${UUID_A}"`,
+			'    "svce"<blob>="com.claude-multiacct.tokens"',
+			'keychain: "/Users/x/Library/Keychains/login.keychain-db"',
+			`    "acct"<blob>="${UUID_B}"`,
+			'    "svce"<blob>="com.claude-multiacct.tokens"',
+			"",
+		].join("\n");
+		const exec = vi.fn<ExecFileAsync>().mockResolvedValue({ stdout: dump, stderr: "" });
+		const store = new SecurityCliMutableTokenStore(exec);
+		const listed = await store.list();
+		expect(exec).toHaveBeenCalledWith("security", ["dump-keychain"]);
+		// Safe Storage is NOT returned; both of our items are.
+		expect(listed).toEqual([UUID_A, UUID_B]);
+	});
 });

@@ -181,6 +181,15 @@ describe("makeRemoveAccount", () => {
 		await expect(tokenStore.get(UUID_A as AccountUuid)).resolves.toBe("token-A");
 	});
 
+	it("native account → 409 native_protected and no write (anchor is not removable)", async () => {
+		const nativeA: Account = { ...account(UUID_A, "native"), source: "native" };
+		const registry: AccountRegistry = { accounts: [nativeA, account(UUID_B, "work")] };
+		const { ports, write } = makePorts({ registry });
+		const outcome = await makeRemoveAccount({ cliPorts: ports, env: ON })(UUID_A);
+		expect(outcome).toMatchObject({ ok: false, status: 409, reason: "native_protected" });
+		expect(write).not.toHaveBeenCalled();
+	});
+
 	it("unknown uuid → 404 not_found and no write", async () => {
 		const registry: AccountRegistry = { accounts: [account(UUID_A, "keep")] };
 		const { ports, write } = makePorts({ registry });
