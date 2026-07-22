@@ -26,7 +26,13 @@
  */
 
 import * as v from "valibot";
-import { type Account, AccountUuidSchema } from "../domain/account.ts";
+import {
+	type Account,
+	type AccountIdentity,
+	type AccountSource,
+	AccountUuidSchema,
+	ClaudeAccountUuidSchema,
+} from "../domain/account.ts";
 import type { AccountRegistry } from "../domain/registry.ts";
 import type { AtomicRegistryWriter } from "../registry/registry-writer.ts";
 import type { ProvisionResult, VerifyResult } from "./models.ts";
@@ -67,6 +73,17 @@ export type ProvisionOptions = {
 	label: string;
 	token: string;
 	ports: ProvisionPorts;
+	/**
+	 * Real identity (email / display name) for the account, when the caller has
+	 * already resolved it (native detection reads it from the profile API). Stored
+	 * verbatim on the account; omitted when unknown.
+	 */
+	identity?: AccountIdentity;
+	/**
+	 * How the account entered the pool. `native` for the Claude.app-signed-in
+	 * account, `explicit` for a user-added one. Defaults to `explicit`.
+	 */
+	source?: AccountSource;
 	/** Env source; defaults to `process.env`. Only the flag is read. */
 	env?: Record<string, string | undefined>;
 	/** Bypass the feature-flag gate (test-only knob). */
@@ -130,6 +147,7 @@ export async function provisionAccount(opts: ProvisionOptions): Promise<Provisio
 	// Step 3 — duplicate checks.
 	const existing = await opts.ports.readRegistry();
 	const accountUuid = v.parse(AccountUuidSchema, verify.accountUuid);
+	const claudeAccountUuid = v.parse(ClaudeAccountUuidSchema, verify.accountUuid);
 	if (existing !== undefined) {
 		if (existing.accounts.some((a) => a.label === opts.label)) {
 			return {
@@ -138,7 +156,13 @@ export async function provisionAccount(opts: ProvisionOptions): Promise<Provisio
 				detail: `label "${opts.label}" is already registered`,
 			};
 		}
-		if (existing.accounts.some((a) => a.uuid === accountUuid)) {
+		// Dedup by the REAL Claude account uuid: one real account is one pool
+		// entry even if its token surfaces in the legacy cache, the V2 cache, and
+		// a CLI slot at once. `uuid` equals `accountUuid` for accounts we
+		// provision, so this also subsumes the local-key collision check.
+		if (
+			existing.accounts.some((a) => a.uuid === accountUuid || a.accountUuid === claudeAccountUuid)
+		) {
 			return {
 				ok: false,
 				kind: "duplicate_uuid",
@@ -155,6 +179,9 @@ export async function provisionAccount(opts: ProvisionOptions): Promise<Provisio
 		subscriptionType: verify.subscriptionType,
 		rateLimitTier: verify.rateLimitTier,
 		encryptedTokenRef: verify.accountUuid,
+		accountUuid: claudeAccountUuid,
+		...(opts.identity === undefined ? {} : { identity: opts.identity }),
+		source: opts.source ?? "explicit",
 	};
 
 	// Step 4a — token store put.

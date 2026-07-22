@@ -11,19 +11,23 @@
 
 import * as v from "valibot";
 import { describe, expect, it } from "vitest";
-import type { Account, AccountUuid } from "./account.ts";
+import type { Account, AccountUuid, ClaudeAccountUuid } from "./account.ts";
 import {
 	type AccountTokenSha,
 	AccountRegistrySchema,
+	byAccountUuid,
 	byUuid,
 	getPooled,
 	getPrimary,
+	resolveActiveByLastKnown,
 } from "./registry.ts";
 
 const UUID_A = "11111111-1111-4111-8111-111111111111";
 const UUID_B = "22222222-2222-4222-8222-222222222222";
 const UUID_C = "33333333-3333-4333-8333-333333333333";
 const UUID_MISSING = "99999999-9999-4999-8999-999999999999";
+const ACCT_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const ACCT_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 
 function account(overrides: Record<string, unknown>): Record<string, unknown> {
 	return {
@@ -99,6 +103,68 @@ describe("AccountRegistrySchema — invariant inversions (the load-bearing tests
 		expect(() => v.parse(AccountRegistrySchema, { ...validRegistry, extras: [] })).toThrow(
 			v.ValiError,
 		);
+	});
+
+	it("rejects duplicate accountUuids (the same real account imported twice)", () => {
+		// This is the exact bug the model fixes: one real account surfacing as
+		// several pool entries. The schema must fail loud when two entries claim
+		// the same real Claude account uuid.
+		const dup = {
+			accounts: [
+				account({ uuid: UUID_A, label: "A", accountUuid: ACCT_A }),
+				account({ uuid: UUID_B, label: "B", accountUuid: ACCT_A }),
+			],
+		};
+		expect(() => v.parse(AccountRegistrySchema, dup)).toThrow(/accountUuids must be unique/u);
+	});
+
+	it("allows multiple entries without accountUuid (pre-migration entries are not policed)", () => {
+		// Uniqueness is enforced only among entries that HAVE an accountUuid; two
+		// legacy entries lacking it must not be treated as a collision.
+		const legacy = {
+			accounts: [account({ uuid: UUID_A, label: "A" }), account({ uuid: UUID_B, label: "B" })],
+		};
+		expect(() => v.parse(AccountRegistrySchema, legacy)).not.toThrow();
+	});
+});
+
+describe("byAccountUuid — dedup lookup by the real Claude account uuid", () => {
+	const parsed = v.parse(AccountRegistrySchema, {
+		accounts: [
+			account({ uuid: UUID_A, label: "A", accountUuid: ACCT_A }),
+			account({ uuid: UUID_B, label: "B", accountUuid: ACCT_B }),
+		],
+	});
+
+	it("finds the account whose accountUuid matches", () => {
+		expect(byAccountUuid(parsed, ACCT_B as ClaudeAccountUuid)?.uuid).toBe(UUID_B);
+	});
+
+	it("returns undefined when no account carries the accountUuid", () => {
+		expect(byAccountUuid(parsed, ACCT_A.replaceAll("a", "c") as ClaudeAccountUuid)).toBeUndefined();
+	});
+});
+
+describe("resolveActiveByLastKnown — active via Claude.app's plaintext marker", () => {
+	const parsed = v.parse(AccountRegistrySchema, {
+		accounts: [
+			account({ uuid: UUID_A, label: "A", accountUuid: ACCT_A }),
+			account({ uuid: UUID_B, label: "B", accountUuid: ACCT_B }),
+		],
+	});
+
+	it("returns the account whose accountUuid equals lastKnownAccountUuid", () => {
+		// The picker must highlight whatever Claude.app is signed into, matched by
+		// the real account uuid — not the first-listed account.
+		expect(resolveActiveByLastKnown(parsed, ACCT_B)?.uuid).toBe(UUID_B);
+	});
+
+	it("returns undefined when the marker names no pooled account (caller falls back)", () => {
+		expect(resolveActiveByLastKnown(parsed, "unknown-account-uuid")).toBeUndefined();
+	});
+
+	it("returns undefined when the marker is absent", () => {
+		expect(resolveActiveByLastKnown(parsed, undefined)).toBeUndefined();
 	});
 });
 

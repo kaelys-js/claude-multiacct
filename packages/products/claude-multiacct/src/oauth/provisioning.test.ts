@@ -162,6 +162,69 @@ describe("provisionAccount — duplicate rejects (PR1 invariants stay unforced-o
 		expect(result.kind).toBe("duplicate_uuid");
 		expect(ports.writes).toEqual([]);
 	});
+
+	it("dedup by REAL accountUuid: a token verifying to an already-pooled accountUuid is rejected even when its local uuid differs", async () => {
+		// The exact bug the model fixes: the same real account surfacing under a
+		// second cache token. Here the existing entry's accountUuid == UUID_A but
+		// its local uuid is UUID_B, and a fresh verify returns accountUuid UUID_A.
+		// Dedup keys on accountUuid, so this must reject rather than duplicate.
+		const preexisting: AccountRegistry = {
+			accounts: [
+				{
+					uuid: UUID_B as AccountRegistry["accounts"][0]["uuid"],
+					label: "Personal",
+					subscriptionType: "Pro",
+					rateLimitTier: "tier-2",
+					encryptedTokenRef: "keychain:a",
+					accountUuid: UUID_A as AccountRegistry["accounts"][0]["accountUuid"],
+				},
+			],
+		};
+		const ports = makePorts({
+			registry: preexisting,
+			verify: () => Promise.resolve(okVerify(UUID_A)),
+		});
+		const result = await provisionAccount({
+			label: "Work",
+			token: "t",
+			ports,
+			overrideFlag: true,
+		});
+		assertNotOk(result);
+		expect(result.kind).toBe("duplicate_uuid");
+		expect(ports.writes).toEqual([]);
+	});
+});
+
+describe("provisionAccount — identity + source on the written account", () => {
+	it("stores accountUuid, the supplied identity, and source=native", async () => {
+		const ports = makePorts({ verify: () => Promise.resolve(okVerify(UUID_A)) });
+		const result = await provisionAccount({
+			label: "icloud",
+			token: "t",
+			identity: { email: "cole@icloud.com", displayName: "Cole" },
+			source: "native",
+			ports,
+			overrideFlag: true,
+		});
+		assertOk(result);
+		expect(result.account.accountUuid).toBe(UUID_A);
+		expect(result.account.identity).toEqual({ email: "cole@icloud.com", displayName: "Cole" });
+		expect(result.account.source).toBe("native");
+	});
+
+	it("defaults source to explicit and omits identity when none is supplied", async () => {
+		const ports = makePorts({ verify: () => Promise.resolve(okVerify(UUID_A)) });
+		const result = await provisionAccount({
+			label: "Personal",
+			token: "t",
+			ports,
+			overrideFlag: true,
+		});
+		assertOk(result);
+		expect(result.account.source).toBe("explicit");
+		expect(result.account).not.toHaveProperty("identity");
+	});
 });
 
 describe("provisionAccount — ATOMICITY (the load-bearing test)", () => {

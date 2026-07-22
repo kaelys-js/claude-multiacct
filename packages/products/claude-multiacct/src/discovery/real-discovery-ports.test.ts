@@ -1,19 +1,17 @@
-/* oxlint-disable vitest/no-conditional-in-test, vitest/require-mock-type-parameters, eslint/require-await, unicorn/no-useless-undefined, typescript/explicit-function-return-type, typescript/consistent-indexed-object-style, typescript/consistent-type-imports, unicorn/prefer-at, unicorn/no-unreadable-array-destructuring, jsdoc/require-jsdoc, jsdoc/require-param, jsdoc/require-returns */
+/* oxlint-disable vitest/no-conditional-in-test, vitest/require-mock-type-parameters, eslint/require-await, unicorn/no-useless-undefined, typescript/explicit-function-return-type, typescript/consistent-indexed-object-style, typescript/consistent-type-imports, unicorn/prefer-at, jsdoc/require-jsdoc, jsdoc/require-param, jsdoc/require-returns, eslint/curly, unicorn/no-await-expression-member, unicorn/no-unreadable-array-destructuring */
 /**
- * Intent: `listClaudeCliServices` used to enumerate every keychain item via
- * `security dump-keychain` and grep the output. Under launchd that call
- * blocks on per-item ACL prompts and hangs the daemon at boot; the fix is
- * to probe a bounded candidate set with `find-generic-password -s <label>`
- * instead. These tests pin the three sources that build that candidate
- * set (registry, canonical unsuffixed service, user-declared arrays) and
- * the 5-second timeout every `security` call now runs under.
- *
- * Adversarial: drop `SECURITY_CALL_TIMEOUT_MS` from the execFile options
- * and the "hard 5s cap" assertion flips red. Drop the registry branch and
- * the "probes labels from registry" assertion flips red.
+ * Intent: the runtime bindings for the native reconcile. The load-bearing pins:
+ * every `security` read runs under the 5-second cap (a dropped timeout hangs the
+ * daemon at boot) and fails soft to undefined; the config.json v10 reader yields
+ * only the encrypted `djEw` values and stays silent on a missing/malformed file
+ * so boot survives; `provisionNative` maps provisionAccount's result and drives
+ * the injected verify with the REAL account uuid (not a random one); and
+ * `detectNative` fails closed when Claude.app's config marker cannot be read.
  */
 
+import { createCipheriv } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
+import { CHROMIUM_IV, CHROMIUM_V10_PREFIX, deriveChromiumKey } from "./chromium-crypto.ts";
 
 type ExecFileCallback = (
 	err: (Error & { code?: number }) | null,
@@ -29,16 +27,15 @@ type ExecFileArgs = [
 
 const execFileSpy = vi.fn();
 const readFileSpy = vi.fn();
-const readdirSpy = vi.fn();
-const statSpy = vi.fn();
 
-// provisionOne wraps the real provisionAccount + a real AtomicRegistryWriter
-// pointed at ~/.config. Mock the provisioning module so the test drives
-// provisionOne's ok/failure mapping (and the syntheticVerify it injects)
-// without ever touching the real registry on disk.
+// provisionNative wraps the real provisionAccount + a real AtomicRegistryWriter
+// pointed at ~/.config. Mock the provisioning module so the test drives the
+// ok/failure mapping and the injected verify without touching the real registry.
 let provisionImpl: (input: {
 	token: string;
 	label: string;
+	identity?: unknown;
+	source?: string;
 	ports: { verify: (token: string) => Promise<unknown> };
 }) => Promise<unknown> = () => Promise.resolve({ ok: false, kind: "unset", detail: "unset" });
 vi.mock("../oauth/provisioning.ts", () => ({
@@ -48,18 +45,10 @@ vi.mock("../oauth/provisioning.ts", () => ({
 
 vi.mock("node:child_process", async () => {
 	const { promisify } = await import("node:util");
-	// The real `execFile` carries a `util.promisify.custom` symbol so
-	// `promisify(execFile)` resolves to `{stdout, stderr}` rather than the
-	// first callback arg. When we mock the module, that symbol is gone —
-	// so we attach our own promisified form that returns the same shape.
 	function mockExecFile(...args: unknown[]): void {
 		execFileSpy(...args);
 		const cb = args[args.length - 1] as ExecFileCallback;
-		const [, , third] = args as ExecFileArgs;
-		const opts =
-			typeof third === "object" && third !== null && !Array.isArray(third) ? third : undefined;
-		const impl = execFileImpl;
-		queueMicrotask(() => impl(args, opts, cb));
+		queueMicrotask(() => execFileImpl(args, cb));
 	}
 	(mockExecFile as unknown as { [k: symbol]: unknown })[promisify.custom] = (
 		file: string,
@@ -81,19 +70,10 @@ vi.mock("node:child_process", async () => {
 
 vi.mock("node:fs/promises", async () => {
 	const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
-	return {
-		...actual,
-		readFile: (path: string, encoding?: string) => readFileSpy(path, encoding),
-		readdir: (path: string) => readdirSpy(path),
-		stat: (path: string) => statSpy(path),
-	};
+	return { ...actual, readFile: (path: string, encoding?: string) => readFileSpy(path, encoding) };
 });
 
-let execFileImpl: (
-	args: unknown[],
-	opts: { timeout?: number } | undefined,
-	cb: ExecFileCallback,
-) => void = (_args, _opts, cb) => {
+let execFileImpl: (args: unknown[], cb: ExecFileCallback) => void = (_args, cb) => {
 	cb(Object.assign(new Error("not found"), { code: 44 }), "", "");
 };
 
@@ -101,540 +81,227 @@ async function importReal(): Promise<typeof import("./real-discovery-ports.ts")>
 	return import("./real-discovery-ports.ts");
 }
 
+const noopLogger = { log: () => {}, warn: () => {} };
+
 function resetMocks(): void {
 	execFileSpy.mockClear();
 	readFileSpy.mockReset();
 	readFileSpy.mockImplementation(() => Promise.reject(new Error("ENOENT")));
-	readdirSpy.mockReset();
-	readdirSpy.mockImplementation(() => Promise.reject(new Error("ENOENT")));
-	statSpy.mockReset();
-	statSpy.mockImplementation(() => Promise.reject(new Error("ENOENT")));
 	provisionImpl = () => Promise.resolve({ ok: false, kind: "unset", detail: "unset" });
-	execFileImpl = (_args, _opts, cb) => {
+	execFileImpl = (_args, cb) => {
 		cb(Object.assign(new Error("not found"), { code: 44 }), "", "");
 	};
 }
 
-const noopLogger = { log: () => {}, warn: () => {} };
-function makePorts(
-	over: Partial<
-		Parameters<typeof import("./real-discovery-ports.ts").makeRealDiscoveryPorts>[0]
-	> = {},
-): Promise<ReturnType<typeof import("./real-discovery-ports.ts").makeRealDiscoveryPorts>> {
-	return importReal().then(({ makeRealDiscoveryPorts }) =>
-		makeRealDiscoveryPorts({
-			tokenStore: { put: async () => {} } as never,
-			readRegistry: async () => undefined,
-			logger: noopLogger,
-			...over,
-		}),
-	);
+async function makeDiscovery(over: Record<string, unknown> = {}) {
+	const { makeRealDiscoveryPorts } = await importReal();
+	return makeRealDiscoveryPorts({
+		tokenStore: { put: async () => {} } as never,
+		readRegistry: async () => undefined,
+		logger: noopLogger,
+		...over,
+	} as never);
 }
 
-describe("makeRealDiscoveryPorts.readKeychainPassword", () => {
+describe("makeActiveTokenPorts.readKeychainPassword", () => {
 	it("caps the security call at 5s (drop the timeout → daemon boot can hang forever)", async () => {
 		resetMocks();
 		let capturedOpts: { timeout?: number } | undefined;
-		execFileImpl = (_args, opts, cb) => {
-			capturedOpts = opts;
+		execFileImpl = (args, cb) => {
+			const [, , third] = args as ExecFileArgs;
+			capturedOpts = third;
 			cb(null, "TOKEN\n", "");
 		};
-		const { makeRealDiscoveryPorts } = await importReal();
-		const ports = makeRealDiscoveryPorts({
-			tokenStore: { put: async () => {} } as never,
-			readRegistry: async () => undefined,
-			logger: { log: () => {}, warn: () => {} },
-		});
-		const value = await ports.readKeychainPassword("Claude Safe Storage", "Claude");
-		expect(value).toBe("TOKEN");
+		const { makeActiveTokenPorts } = await importReal();
+		const ports = makeActiveTokenPorts(noopLogger);
+		expect(await ports.readKeychainPassword("Claude Safe Storage", "Claude Key")).toBe("TOKEN");
 		expect(capturedOpts?.timeout).toBe(5000);
 	});
 
-	it("returns undefined when security fails (missing item, timeout, or ACL denial)", async () => {
+	it("returns undefined and warns when security fails (missing item, timeout, or ACL denial)", async () => {
 		resetMocks();
-		const { makeRealDiscoveryPorts } = await importReal();
-		const ports = makeRealDiscoveryPorts({
-			tokenStore: { put: async () => {} } as never,
-			readRegistry: async () => undefined,
-			logger: { log: () => {}, warn: () => {} },
-		});
-		expect(await ports.readKeychainPassword("missing", "acct")).toBeUndefined();
-	});
-});
-
-describe("makeRealDiscoveryPorts.listClaudeCliServices", () => {
-	it("probes the unsuffixed canonical service even when no other sources contribute", async () => {
-		resetMocks();
-		const probed: string[] = [];
-		execFileImpl = (args, _opts, cb) => {
-			const argv = args[1] as readonly string[];
-			const sIdx = argv.indexOf("-s");
-			if (sIdx >= 0) {
-				probed.push(argv[sIdx + 1] as string);
-			}
-			cb(Object.assign(new Error("not found"), { code: 44 }), "", "");
-		};
-		const { makeRealDiscoveryPorts } = await importReal();
-		const ports = makeRealDiscoveryPorts({
-			tokenStore: { put: async () => {} } as never,
-			readRegistry: async () => undefined,
-			logger: { log: () => {}, warn: () => {} },
-		});
-		const services = await ports.listClaudeCliServices();
-		expect(services).toEqual([]);
-		expect(probed).toContain("Claude Code-credentials");
-	});
-
-	it("probes labels from registry.json (expanded to Claude Code-credentials-<label>)", async () => {
-		resetMocks();
-		const probed = new Set<string>();
-		execFileImpl = (args, _opts, cb) => {
-			const argv = args[1] as readonly string[];
-			const sIdx = argv.indexOf("-s");
-			if (sIdx >= 0) {
-				const svc = argv[sIdx + 1] as string;
-				probed.add(svc);
-				// Simulate "found" only for the registry-derived label so we
-				// can assert the return list includes it.
-				if (svc === "Claude Code-credentials-alice") {
-					cb(null, "somepassword", "");
-					return;
-				}
-			}
-			cb(Object.assign(new Error("not found"), { code: 44 }), "", "");
-		};
-		const { makeRealDiscoveryPorts } = await importReal();
-		const ports = makeRealDiscoveryPorts({
-			tokenStore: { put: async () => {} } as never,
-			readRegistry: async () =>
-				({
-					accounts: [
-						{
-							uuid: "11111111-1111-4111-8111-111111111111",
-							label: "alice",
-							subscriptionType: "u",
-							rateLimitTier: "u",
-							encryptedTokenRef: "r",
-						},
-					],
-				}) as never,
-			logger: { log: () => {}, warn: () => {} },
-		});
-		const services = await ports.listClaudeCliServices();
-		expect(probed.has("Claude Code-credentials-alice")).toBe(true);
-		expect(services).toContain("Claude Code-credentials-alice");
-	});
-
-	it("picks up an `accounts` array of strings from ~/.claude/.credentials.json", async () => {
-		resetMocks();
-		readFileSpy.mockImplementation((path: string) => {
-			if (path.endsWith(".credentials.json")) {
-				return Promise.resolve(JSON.stringify({ accounts: ["gmail"] }));
-			}
-			return Promise.reject(new Error("ENOENT"));
-		});
-		const probed = new Set<string>();
-		execFileImpl = (args, _opts, cb) => {
-			const argv = args[1] as readonly string[];
-			const sIdx = argv.indexOf("-s");
-			if (sIdx >= 0) {
-				probed.add(argv[sIdx + 1] as string);
-			}
-			cb(Object.assign(new Error("not found"), { code: 44 }), "", "");
-		};
-		const { makeRealDiscoveryPorts } = await importReal();
-		const ports = makeRealDiscoveryPorts({
-			tokenStore: { put: async () => {} } as never,
-			readRegistry: async () => undefined,
-			logger: { log: () => {}, warn: () => {} },
-		});
-		await ports.listClaudeCliServices();
-		expect(probed.has("Claude Code-credentials-gmail")).toBe(true);
-	});
-
-	it("does NOT probe arbitrary top-level object keys (settings.json shape must not become a false candidate)", async () => {
-		resetMocks();
-		readFileSpy.mockImplementation((path: string) => {
-			if (path.endsWith("settings.json")) {
-				return Promise.resolve(
-					JSON.stringify({ permissions: { allow: ["Bash(*)"] }, agentPushNotifEnabled: true }),
-				);
-			}
-			return Promise.reject(new Error("ENOENT"));
-		});
-		const probed = new Set<string>();
-		execFileImpl = (args, _opts, cb) => {
-			const argv = args[1] as readonly string[];
-			const sIdx = argv.indexOf("-s");
-			if (sIdx >= 0) {
-				probed.add(argv[sIdx + 1] as string);
-			}
-			cb(Object.assign(new Error("not found"), { code: 44 }), "", "");
-		};
-		const { makeRealDiscoveryPorts } = await importReal();
-		const ports = makeRealDiscoveryPorts({
-			tokenStore: { put: async () => {} } as never,
-			readRegistry: async () => undefined,
-			logger: { log: () => {}, warn: () => {} },
-		});
-		await ports.listClaudeCliServices();
-		// Object keys must not be probed — only the canonical fallback is present.
-		expect(probed.has("Claude Code-credentials-permissions")).toBe(false);
-		expect(probed.has("Claude Code-credentials-agentPushNotifEnabled")).toBe(false);
-	});
-
-	it("warns and continues when a candidate file exists but isn't valid JSON", async () => {
-		resetMocks();
-		readFileSpy.mockImplementation((path: string) => {
-			if (path.endsWith(".credentials.json")) {
-				return Promise.resolve("not-json{{");
-			}
-			return Promise.reject(new Error("ENOENT"));
-		});
 		const warned: string[] = [];
-		const { makeRealDiscoveryPorts } = await importReal();
-		const ports = makeRealDiscoveryPorts({
-			tokenStore: { put: async () => {} } as never,
-			readRegistry: async () => undefined,
-			logger: {
-				log: () => {},
-				warn: (m: string) => {
-					warned.push(m);
-				},
-			},
-		});
-		const services = await ports.listClaudeCliServices();
-		expect(services).toEqual([]);
-		expect(warned.some((m) => m.includes("not valid JSON"))).toBe(true);
+		const { makeActiveTokenPorts } = await importReal();
+		const ports = makeActiveTokenPorts({ warn: (m) => warned.push(m) });
+		expect(await ports.readKeychainPassword("missing", "acct")).toBeUndefined();
+		expect(warned.some((m) => m.includes("readKeychainPassword"))).toBe(true);
+	});
+
+	it("configJsonPath points at Claude's config.json", async () => {
+		const { makeActiveTokenPorts } = await importReal();
+		expect(makeActiveTokenPorts(noopLogger).configJsonPath).toMatch(/Claude\/config\.json$/u);
 	});
 });
 
-describe("makeRealDiscoveryPorts.iterateAppConfigJson", () => {
-	it("yields decoded v10 bytes for each base64-`djEw` string value in config.json", async () => {
+describe("makeActiveTokenPorts.iterateAppConfigJson (config.json v10 reader)", () => {
+	it("yields decoded v10 bytes for each base64-`djEw` string, filtering the rest", async () => {
 		resetMocks();
-		// Raw v10 blob → base64 begins `djEw`. Give two encrypted values +
-		// one non-v10 string that must be filtered out.
 		const blobA = Buffer.concat([Buffer.from("v10"), Buffer.from("cipher-A")]);
 		const blobB = Buffer.concat([Buffer.from("v10"), Buffer.from("cipher-B")]);
-		const config = {
-			locale: "en-US",
-			"oauth:tokenCache": blobA.toString("base64"),
-			"oauth:tokenCacheV2": blobB.toString("base64"),
-			unrelated: "not-encrypted",
-		};
-		readFileSpy.mockImplementation((path: string) =>
-			path.endsWith("/config.json")
-				? Promise.resolve(JSON.stringify(config))
-				: Promise.reject(new Error("ENOENT")),
+		readFileSpy.mockImplementation(() =>
+			Promise.resolve(
+				JSON.stringify({
+					locale: "en-US",
+					counter: 42,
+					blob: null,
+					"oauth:tokenCache": blobA.toString("base64"),
+					"oauth:tokenCacheV2": blobB.toString("base64"),
+					unrelated: "not-encrypted",
+				}),
+			),
 		);
-		const { makeRealDiscoveryPorts } = await importReal();
-		const ports = makeRealDiscoveryPorts({
-			tokenStore: { put: async () => {} } as never,
-			readRegistry: async () => undefined,
-			logger: { log: () => {}, warn: () => {} },
-		});
-		const yields: Array<{ key: string; value: string }> = [];
-		for await (const entry of ports.iterateAppConfigJson("/tmp/x/config.json")) {
-			yields.push({ key: entry.key.toString("utf8"), value: entry.value.toString("binary") });
+		const { makeActiveTokenPorts } = await importReal();
+		const ports = makeActiveTokenPorts(noopLogger);
+		const yields: Array<{ key: string; startsV10: boolean }> = [];
+		for await (const e of ports.iterateAppConfigJson("/tmp/config.json")) {
+			yields.push({
+				key: e.key.toString("utf8"),
+				startsV10: e.value.subarray(0, 3).toString() === "v10",
+			});
 		}
-		expect(yields).toHaveLength(2);
 		expect(yields.map((y) => y.key).toSorted()).toEqual(["oauth:tokenCache", "oauth:tokenCacheV2"]);
-		expect(yields[0]!.value.startsWith("v10")).toBe(true);
+		expect(yields.every((y) => y.startsV10)).toBe(true);
 	});
 
 	it("yields nothing when the file is missing (silent — daemon must still boot)", async () => {
 		resetMocks();
-		const { makeRealDiscoveryPorts } = await importReal();
-		const ports = makeRealDiscoveryPorts({
-			tokenStore: { put: async () => {} } as never,
-			readRegistry: async () => undefined,
-			logger: { log: () => {}, warn: () => {} },
-		});
-		const yields = [];
-		for await (const entry of ports.iterateAppConfigJson("/nope/config.json")) {
-			yields.push(entry);
-		}
-		expect(yields).toEqual([]);
+		const ports = (await importReal()).makeActiveTokenPorts(noopLogger);
+		const out = [];
+		for await (const e of ports.iterateAppConfigJson("/nope/config.json")) out.push(e);
+		expect(out).toEqual([]);
 	});
 
 	it("warns and yields nothing when config.json is malformed JSON", async () => {
 		resetMocks();
 		readFileSpy.mockImplementation(() => Promise.resolve("not-json{{"));
 		const warned: string[] = [];
-		const { makeRealDiscoveryPorts } = await importReal();
-		const ports = makeRealDiscoveryPorts({
-			tokenStore: { put: async () => {} } as never,
-			readRegistry: async () => undefined,
-			logger: {
-				log: () => {},
-				warn: (m: string) => {
-					warned.push(m);
-				},
-			},
-		});
-		const yields = [];
-		for await (const entry of ports.iterateAppConfigJson("/tmp/config.json")) {
-			yields.push(entry);
-		}
-		expect(yields).toEqual([]);
+		const ports = (await importReal()).makeActiveTokenPorts({ warn: (m) => warned.push(m) });
+		const out = [];
+		for await (const e of ports.iterateAppConfigJson("/tmp/config.json")) out.push(e);
+		expect(out).toEqual([]);
 		expect(warned.some((m) => m.includes("is not valid JSON"))).toBe(true);
 	});
 
-	it("filters out non-string and non-`djEw` values (locale / plain strings must not be yielded)", async () => {
-		resetMocks();
-		readFileSpy.mockImplementation(() =>
-			Promise.resolve(
-				JSON.stringify({
-					locale: "en-US",
-					counter: 42,
-					flag: true,
-					blob: null,
-					"oauth:tokenCache": Buffer.concat([Buffer.from("v10"), Buffer.from("cipher")]).toString(
-						"base64",
-					),
-				}),
-			),
-		);
-		const { makeRealDiscoveryPorts } = await importReal();
-		const ports = makeRealDiscoveryPorts({
-			tokenStore: { put: async () => {} } as never,
-			readRegistry: async () => undefined,
-			logger: { log: () => {}, warn: () => {} },
-		});
-		const yields = [];
-		for await (const entry of ports.iterateAppConfigJson("/tmp/config.json")) {
-			yields.push(entry.key.toString("utf8"));
-		}
-		expect(yields).toEqual(["oauth:tokenCache"]);
-	});
-
-	it("yields nothing when the top-level JSON is not an object (e.g. array or scalar)", async () => {
+	it("yields nothing when the top-level JSON is not an object", async () => {
 		resetMocks();
 		readFileSpy.mockImplementation(() => Promise.resolve("[1,2,3]"));
-		const { makeRealDiscoveryPorts } = await importReal();
-		const ports = makeRealDiscoveryPorts({
-			tokenStore: { put: async () => {} } as never,
-			readRegistry: async () => undefined,
-			logger: { log: () => {}, warn: () => {} },
-		});
-		const yields = [];
-		for await (const entry of ports.iterateAppConfigJson("/tmp/config.json")) {
-			yields.push(entry);
-		}
-		expect(yields).toEqual([]);
+		const ports = (await importReal()).makeActiveTokenPorts(noopLogger);
+		const out = [];
+		for await (const e of ports.iterateAppConfigJson("/tmp/config.json")) out.push(e);
+		expect(out).toEqual([]);
 	});
 });
 
-describe("makeRealDiscoveryPorts.readClaudeCliCredential", () => {
-	it("strips the trailing newline security appends", async () => {
+describe("makeRealDiscoveryPorts.provisionNative", () => {
+	it("maps a successful provisionAccount to {ok, uuid} and drives verify with the REAL account uuid", async () => {
 		resetMocks();
-		execFileImpl = (_args, _opts, cb) => {
-			cb(null, "raw-token\n", "");
-		};
-		const ports = await makePorts();
-		const raw = await ports.readClaudeCliCredential("Claude Code-credentials-x");
-		expect(raw).toBe("raw-token");
-	});
-
-	it("returns undefined when security fails (missing slot)", async () => {
-		resetMocks(); // default execFileImpl errors with code 44
-		const ports = await makePorts();
-		expect(await ports.readClaudeCliCredential("Claude Code-credentials-missing")).toBeUndefined();
-	});
-});
-
-describe("makeRealDiscoveryPorts.listClaudeCliServices — label sources", () => {
-	it("keeps a registry label already in canonical form as-is (no double prefix)", async () => {
-		resetMocks();
-		const probed = new Set<string>();
-		execFileImpl = (args, _opts, cb) => {
-			const argv = args[1] as readonly string[];
-			const sIdx = argv.indexOf("-s");
-			if (sIdx >= 0) {
-				probed.add(argv[sIdx + 1] as string);
-			}
-			cb(Object.assign(new Error("not found"), { code: 44 }), "", "");
-		};
-		const ports = await makePorts({
-			readRegistry: async () =>
-				({
-					accounts: [
-						{
-							uuid: "11111111-1111-4111-8111-111111111111",
-							label: "Claude Code-credentials-bob",
-							subscriptionType: "u",
-							rateLimitTier: "u",
-							encryptedTokenRef: "r",
-						},
-					],
-				}) as never,
-		});
-		await ports.listClaudeCliServices();
-		// The label was already fully-qualified → probed verbatim, not re-prefixed.
-		expect(probed.has("Claude Code-credentials-bob")).toBe(true);
-		expect(probed.has("Claude Code-credentials-Claude Code-credentials-bob")).toBe(false);
-	});
-
-	it("accepts a top-level string array and a `credentials` array from the label files", async () => {
-		resetMocks();
-		readFileSpy.mockImplementation((path: string) => {
-			if (path.endsWith(".credentials.json")) {
-				return Promise.resolve(JSON.stringify(["work"]));
-			}
-			if (path.endsWith("settings.json")) {
-				return Promise.resolve(JSON.stringify({ credentials: ["home"] }));
-			}
-			return Promise.reject(new Error("ENOENT"));
-		});
-		const probed = new Set<string>();
-		execFileImpl = (args, _opts, cb) => {
-			const argv = args[1] as readonly string[];
-			const sIdx = argv.indexOf("-s");
-			if (sIdx >= 0) {
-				probed.add(argv[sIdx + 1] as string);
-			}
-			cb(Object.assign(new Error("not found"), { code: 44 }), "", "");
-		};
-		const ports = await makePorts();
-		await ports.listClaudeCliServices();
-		expect(probed.has("Claude Code-credentials-work")).toBe(true);
-		expect(probed.has("Claude Code-credentials-home")).toBe(true);
-	});
-
-	it("warns and continues when the registry read itself throws", async () => {
-		resetMocks();
-		const warned: string[] = [];
-		const ports = await makePorts({
-			readRegistry: () => Promise.reject(new Error("registry corrupt")),
-			logger: { log: () => {}, warn: (m: string) => warned.push(m) },
-		});
-		const services = await ports.listClaudeCliServices();
-		// Registry read failure is non-fatal — the canonical candidate is still probed.
-		expect(services).toEqual([]);
-		expect(warned.some((m) => m.includes("registry read failed"))).toBe(true);
-	});
-});
-
-describe("makeRealDiscoveryPorts.listCloneApps", () => {
-	it("maps `Claude Account <Label>.app` bundles to label + Application Support store dir", async () => {
-		resetMocks();
-		readdirSpy.mockImplementation(() =>
-			Promise.resolve([
-				"Claude Account Gmail.app",
-				"Claude Account Work Space.app",
-				"Safari.app",
-				"not-a-clone",
-			]),
-		);
-		const ports = await makePorts();
-		const clones = await ports.listCloneApps();
-		const labels = clones.map((c) => c.label);
-		expect(labels).toEqual(["gmail", "work-space"]);
-		const gmail = clones.find((c) => c.label === "gmail")!;
-		expect(gmail.bundlePath.endsWith("Claude Account Gmail.app")).toBe(true);
-		expect(gmail.storeDir.endsWith("Application Support/Claude-Gmail")).toBe(true);
-	});
-
-	it("returns [] when the Applications dir cannot be read", async () => {
-		resetMocks(); // readdir rejects by default
-		const ports = await makePorts();
-		expect(await ports.listCloneApps()).toEqual([]);
-	});
-});
-
-async function collectEntries(
-	iter: AsyncIterable<{ key: Buffer; value: Buffer }>,
-): Promise<Array<{ key: Buffer; value: Buffer }>> {
-	const out: Array<{ key: Buffer; value: Buffer }> = [];
-	for await (const e of iter) {
-		out.push(e);
-	}
-	return out;
-}
-
-describe("makeRealDiscoveryPorts.iterateLevelDb + scanV10Values", () => {
-	it("scans .log/.ldb files and yields every embedded v10 blob (two hits → sliced at the next prefix)", async () => {
-		resetMocks();
-		statSpy.mockImplementation(() => Promise.resolve({ isDirectory: () => true }));
-		readdirSpy.mockImplementation(() => Promise.resolve(["000005.log", "CURRENT", "LOCK"]));
-		// Two v10 blobs back to back plus a trailing one; scanV10Values slices the
-		// first up to the second prefix, the last up to EOF.
-		const raw = Buffer.concat([
-			Buffer.from("junk-header"),
-			Buffer.from("v10AAAAAAAA"),
-			Buffer.from("v10BBBBBBBB"),
-		]);
-		readFileSpy.mockImplementation(() => Promise.resolve(raw));
-		const ports = await makePorts();
-		const out = await collectEntries(ports.iterateLevelDb("/store/leveldb"));
-		expect(out).toHaveLength(2);
-		expect(out[0]!.value.subarray(0, 3).toString()).toBe("v10");
-		expect(out[1]!.value.subarray(0, 3).toString()).toBe("v10");
-	});
-
-	it("yields nothing when the file holds no v10 blob", async () => {
-		resetMocks();
-		statSpy.mockImplementation(() => Promise.resolve({ isDirectory: () => true }));
-		readdirSpy.mockImplementation(() => Promise.resolve(["000005.ldb"]));
-		readFileSpy.mockImplementation(() => Promise.resolve(Buffer.from("nothing encrypted here")));
-		const ports = await makePorts();
-		expect(await collectEntries(ports.iterateLevelDb("/store/leveldb"))).toEqual([]);
-	});
-
-	it("returns empty when the path is not a directory", async () => {
-		resetMocks();
-		statSpy.mockImplementation(() => Promise.resolve({ isDirectory: () => false }));
-		const ports = await makePorts();
-		expect(await collectEntries(ports.iterateLevelDb("/store/leveldb"))).toEqual([]);
-	});
-
-	it("returns empty (silent) when the dir is missing", async () => {
-		resetMocks(); // stat rejects by default
-		const ports = await makePorts();
-		expect(await collectEntries(ports.iterateLevelDb("/nope"))).toEqual([]);
-	});
-
-	it("warns and skips a file whose read fails, without aborting the dir walk", async () => {
-		resetMocks();
-		statSpy.mockImplementation(() => Promise.resolve({ isDirectory: () => true }));
-		readdirSpy.mockImplementation(() => Promise.resolve(["bad.log", "good.ldb"]));
-		readFileSpy.mockImplementation((path: string) =>
-			path.endsWith("bad.log")
-				? Promise.reject(new Error("EIO"))
-				: Promise.resolve(Buffer.concat([Buffer.from("v10"), Buffer.from("CIPHERBYTES")])),
-		);
-		const warned: string[] = [];
-		const ports = await makePorts({
-			logger: { log: () => {}, warn: (m: string) => warned.push(m) },
-		});
-		const out = await collectEntries(ports.iterateLevelDb("/store/leveldb"));
-		expect(out).toHaveLength(1);
-		expect(warned.some((m) => m.includes("read") && m.includes("failed"))).toBe(true);
-	});
-});
-
-describe("makeRealDiscoveryPorts.provisionOne", () => {
-	it("maps a successful provisionAccount to {ok, uuid} and invokes the synthetic verify", async () => {
-		resetMocks();
-		let verifiedToken: string | undefined;
+		let seen: { accountUuid?: string; source?: string } = {};
 		provisionImpl = async (input) => {
-			// Exercise the injected syntheticVerify so its uuid/subscription defaults run.
-			const verify = (await input.ports.verify(input.token)) as { accountUuid: string };
-			verifiedToken = input.token;
-			return { ok: true, account: { uuid: verify.accountUuid } };
+			const verified = (await input.ports.verify(input.token)) as { accountUuid: string };
+			seen = { accountUuid: verified.accountUuid, source: input.source };
+			return { ok: true, account: { uuid: verified.accountUuid } };
 		};
-		const ports = await makePorts();
-		const result = await ports.provisionOne({ token: "T-1", label: "gmail" });
-		expect(result.ok).toBe(true);
-		expect(verifiedToken).toBe("T-1");
-		expect((result as { uuid: string }).uuid).toMatch(/^[0-9a-f-]{36}$/u);
+		const ports = await makeDiscovery();
+		const result = await ports.provisionNative({
+			token: "T-1",
+			label: "icloud",
+			accountUuid: "918f32f7-44c2-442e-8d5d-48ca3792ea95" as never,
+			identity: { email: "cole@icloud.com" },
+			subscriptionType: "claude_max",
+			rateLimitTier: "unknown",
+		});
+		expect(result).toEqual({ ok: true, uuid: "918f32f7-44c2-442e-8d5d-48ca3792ea95" });
+		// The verify the native path injects returns the real account uuid, NOT a
+		// freshly-minted random one, and the account is tagged source=native.
+		expect(seen.accountUuid).toBe("918f32f7-44c2-442e-8d5d-48ca3792ea95");
+		expect(seen.source).toBe("native");
 	});
 
 	it("maps a failed provisionAccount to {ok:false, kind, detail} with an empty-string detail fallback", async () => {
 		resetMocks();
-		provisionImpl = () => Promise.resolve({ ok: false, kind: "verify_failed" }); // detail omitted
-		const ports = await makePorts();
-		const result = await ports.provisionOne({ token: "T-2", label: "work" });
-		expect(result).toEqual({ ok: false, kind: "verify_failed", detail: "" });
+		provisionImpl = () => Promise.resolve({ ok: false, kind: "duplicate_uuid" }); // detail omitted
+		const ports = await makeDiscovery();
+		const result = await ports.provisionNative({
+			token: "T-2",
+			label: "work",
+			accountUuid: "22222222-2222-4222-8222-222222222222" as never,
+			identity: {},
+			subscriptionType: "unknown",
+			rateLimitTier: "unknown",
+		});
+		expect(result).toEqual({ ok: false, kind: "duplicate_uuid", detail: "" });
+	});
+});
+
+describe("makeRealDiscoveryPorts.detectNative", () => {
+	it("fails closed to undefined when Claude.app's config.json cannot be read", async () => {
+		resetMocks(); // readFile rejects → no lastKnownAccountUuid → no keychain/network touched
+		const ports = await makeDiscovery();
+		expect(await ports.detectNative()).toBeUndefined();
+		// No keychain read is attempted once the marker is absent.
+		expect(execFileSpy).not.toHaveBeenCalled();
+	});
+
+	it("readRegistry is passed through unchanged", async () => {
+		resetMocks();
+		const reg = { accounts: [] };
+		const ports = await makeDiscovery({ readRegistry: async () => reg });
+		expect(await ports.readRegistry()).toBe(reg);
+	});
+
+	it("resolves the native account end-to-end (marker → keychain decrypt → profile match)", async () => {
+		// Wire the real bindings: config.json (plaintext marker + a V2 v10 blob),
+		// the keychain password (execFile), and the profile API (global fetch). This
+		// exercises the keychain read, the config decrypt, and the profile fetch the
+		// detectNative closures compose.
+		resetMocks();
+		const NATIVE = "918f32f7-44c2-442e-8d5d-48ca3792ea95";
+		const password = "safe-storage-pw";
+		const key = deriveChromiumKey(password);
+		const cache = JSON.stringify({
+			"seg0:ws:https://api.anthropic.com:profile inference": { token: "tok-native" },
+		});
+		const cipher = createCipheriv("aes-128-cbc", key, CHROMIUM_IV);
+		cipher.setAutoPadding(true);
+		const blob = Buffer.concat([
+			CHROMIUM_V10_PREFIX,
+			cipher.update(Buffer.from(cache, "utf8")),
+			cipher.final(),
+		]);
+		readFileSpy.mockImplementation(() =>
+			Promise.resolve(
+				JSON.stringify({
+					lastKnownAccountUuid: NATIVE,
+					"oauth:tokenCacheV2": blob.toString("base64"),
+				}),
+			),
+		);
+		execFileImpl = (_args, cb) => cb(null, `${password}\n`, "");
+		const fetchStub = vi.fn(() =>
+			Promise.resolve({
+				ok: true,
+				status: 200,
+				text: () =>
+					Promise.resolve(
+						JSON.stringify({
+							account: { uuid: NATIVE, email: "cole@icloud.com", display_name: "Cole" },
+						}),
+					),
+			}),
+		);
+		vi.stubGlobal("fetch", fetchStub);
+		try {
+			const ports = await makeDiscovery();
+			const detected = await ports.detectNative();
+			expect(detected?.accountUuid).toBe(NATIVE);
+			expect(detected?.token).toBe("tok-native");
+			expect(detected?.identity).toEqual({ email: "cole@icloud.com", displayName: "Cole" });
+			expect(fetchStub).toHaveBeenCalledWith(
+				"https://api.anthropic.com/api/oauth/profile",
+				expect.objectContaining({ method: "GET" }),
+			);
+		} finally {
+			vi.unstubAllGlobals();
+		}
 	});
 });

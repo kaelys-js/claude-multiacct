@@ -7,7 +7,14 @@
 
 import * as v from "valibot";
 import { describe, expect, it } from "vitest";
-import { AccountSchema, AccountUuidSchema } from "./account.ts";
+import {
+	type Account,
+	AccountIdentitySchema,
+	AccountSchema,
+	AccountUuidSchema,
+	ClaudeAccountUuidSchema,
+	effectiveSource,
+} from "./account.ts";
 
 const VALID_UUID = "11111111-1111-4111-8111-111111111111";
 
@@ -83,5 +90,76 @@ describe("AccountSchema — malformed field rejection", () => {
 		// subscriptionType, and the schema must fail loud instead of silently
 		// ignoring it.
 		expect(() => v.parse(AccountSchema, { ...validInput, sub_type: "Pro" })).toThrow(v.ValiError);
+	});
+});
+
+describe("ClaudeAccountUuidSchema", () => {
+	it("accepts a well-formed uuid (the real account uuid the pool dedups on)", () => {
+		expect(v.parse(ClaudeAccountUuidSchema, VALID_UUID)).toBe(VALID_UUID);
+	});
+
+	it("rejects a non-uuid — a bad dedup key would collide accounts silently", () => {
+		expect(() => v.parse(ClaudeAccountUuidSchema, "sk-ant-oat01")).toThrow(v.ValiError);
+	});
+});
+
+describe("AccountIdentitySchema", () => {
+	it("accepts an email + display name", () => {
+		expect(v.parse(AccountIdentitySchema, { email: "a@b.com", displayName: "A" })).toEqual({
+			email: "a@b.com",
+			displayName: "A",
+		});
+	});
+
+	it("accepts an empty identity (profile may omit both fields)", () => {
+		expect(v.parse(AccountIdentitySchema, {})).toEqual({});
+	});
+
+	it("rejects an empty email string (blank is never a real identity)", () => {
+		expect(() => v.parse(AccountIdentitySchema, { email: "" })).toThrow(v.ValiError);
+	});
+
+	it("rejects an unknown key — strictObject stops a typo'd identity field", () => {
+		expect(() => v.parse(AccountIdentitySchema, { mail: "a@b.com" })).toThrow(v.ValiError);
+	});
+});
+
+describe("AccountSchema — new identity fields", () => {
+	it("accepts an account carrying accountUuid, identity, and source", () => {
+		const full = {
+			...validInput,
+			accountUuid: "22222222-2222-4222-8222-222222222222",
+			identity: { email: "cole@icloud.com", displayName: "Cole" },
+			source: "native",
+		};
+		expect(v.parse(AccountSchema, full)).toMatchObject(full);
+	});
+
+	it("accepts an account WITHOUT the new fields (back-compat: they are optional)", () => {
+		expect(() => v.parse(AccountSchema, validInput)).not.toThrow();
+	});
+
+	it("rejects a malformed accountUuid", () => {
+		expect(() => v.parse(AccountSchema, { ...validInput, accountUuid: "nope" })).toThrow(
+			v.ValiError,
+		);
+	});
+
+	it("rejects an unknown source value", () => {
+		expect(() => v.parse(AccountSchema, { ...validInput, source: "imported" })).toThrow(
+			v.ValiError,
+		);
+	});
+});
+
+describe("effectiveSource", () => {
+	it("returns the stored source when present", () => {
+		const a = v.parse(AccountSchema, { ...validInput, source: "native" }) as Account;
+		expect(effectiveSource(a)).toBe("native");
+	});
+
+	it("defaults to explicit when source is absent (pre-migration entry)", () => {
+		const a = v.parse(AccountSchema, validInput) as Account;
+		expect(effectiveSource(a)).toBe("explicit");
 	});
 });

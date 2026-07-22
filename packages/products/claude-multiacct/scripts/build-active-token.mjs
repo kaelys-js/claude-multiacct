@@ -41,8 +41,7 @@ const entryContents = `
 import { PACKAGE_VERSION } from "./src/index.ts";
 import { readRegistry } from "./src/cli-shim/registry-store.ts";
 import { SecurityCliTokenStore } from "./src/cli-shim/token-store.ts";
-import { makeRealDiscoveryPorts } from "./src/discovery/real-discovery-ports.ts";
-import { configJsonPath } from "./src/discovery/discover-accounts.ts";
+import { makeActiveTokenPorts } from "./src/discovery/real-discovery-ports.ts";
 import { resolveActiveAccount } from "./src/active-token-agent/resolve.ts";
 import {
 	defaultActiveAccountPath,
@@ -68,10 +67,7 @@ const outPath = defaultActiveAccountPath();
 async function main() {
 	const tokenStore = new SecurityCliTokenStore();
 	const logger = { log: logLine, warn: logLine };
-	const activeTokenPorts = makeRealDiscoveryPorts({ tokenStore, readRegistry, logger });
-	const configPath = configJsonPath(
-		(process.env.HOME ?? "") + "/Library/Application Support/Claude",
-	);
+	const activeTokenPorts = makeActiveTokenPorts(logger);
 
 	let record = { activeUuid: null, activeTokenSha: null, computedAt: new Date().toISOString() };
 	try {
@@ -81,11 +77,7 @@ async function main() {
 		} else {
 			const resolved = await resolveActiveAccount({
 				registry,
-				activeTokenPorts: {
-					readKeychainPassword: activeTokenPorts.readKeychainPassword,
-					iterateAppConfigJson: activeTokenPorts.iterateAppConfigJson,
-					configJsonPath: configPath,
-				},
+				activeTokenPorts,
 				tokenStore,
 			});
 			record = { ...resolved, computedAt: new Date().toISOString() };

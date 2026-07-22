@@ -105,6 +105,8 @@ describe("makeAddAccount", () => {
 				subscriptionType: "max",
 				rateLimitTier: "tier2",
 				encryptedTokenRef: UUID_A,
+				accountUuid: UUID_A,
+				source: "explicit",
 			},
 		});
 		// The token flowed to verify (the sign-in-proof seam) and into the store.
