@@ -39,14 +39,85 @@ permissions:
   contents: read
 
 jobs:
+  preflight:
+    name: preflight
+    # Hosted-first runner selection. Query the account's GitHub Actions billing
+    # usage for the current month and prefer GitHub-hosted runners while
+    # included minutes remain: the post-discount netAmount summed over the
+    # `actions` product stays 0 until the free minutes are used up, then goes
+    # positive once overage is billed. While it is 0, runs_on is "ubuntu-latest"
+    # (hosted-first); once minutes are exhausted it flips to the free
+    # kaelys-mac-mini self-hosted runner. Any billing error fails safe to
+    # self-hosted so CI never blocks on the billing API. hosted_ok exposes the
+    # same decision as a boolean for jobs whose hosted runner is not
+    # ubuntu-latest (e.g. macOS). See docs/self-hosted-runner.md in
+    # kaelys-js-infra for the fleet-wide rationale.
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      runs_on: ${{ steps.pick.outputs.runs_on }}
+      hosted_ok: ${{ steps.pick.outputs.hosted_ok }}
+    steps:
+      - name: Select runner by remaining GitHub-hosted minutes
+        id: pick
+        env:
+          BILLING_READ_TOKEN: ${{ secrets.BILLING_READ_TOKEN }}
+        run: |
+          set -uo pipefail
+          SELF_HOSTED='["self-hosted","kaelys-mac-mini"]'
+          HOSTED='"ubuntu-latest"'
+          emit() {
+            {
+              echo "runs_on=$1"
+              echo "hosted_ok=$2"
+            } >> "$GITHUB_OUTPUT"
+            echo "selected runner: $1 (hosted_ok=$2)"
+          }
+          if [ -z "${BILLING_READ_TOKEN:-}" ]; then
+            echo 'no BILLING_READ_TOKEN secret; failing safe to self-hosted'
+            emit "$SELF_HOSTED" false
+            exit 0
+          fi
+          year="$(date -u +%Y)"
+          month="$(date -u +%-m)"
+          resp="$(curl -sS -m 30 -w '\n%{http_code}' \
+            -H 'Accept: application/vnd.github+json' \
+            -H "Authorization: Bearer ${BILLING_READ_TOKEN}" \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/users/kaelys-js/settings/billing/usage?year=${year}&month=${month}")" \
+            || { echo 'billing request failed; failing safe to self-hosted'; emit "$SELF_HOSTED" false; exit 0; }
+          code="$(printf '%s' "$resp" | tail -n1)"
+          body="$(printf '%s' "$resp" | sed '$d')"
+          if [ "$code" != '200' ]; then
+            echo "billing HTTP ${code}; failing safe to self-hosted"
+            emit "$SELF_HOSTED" false
+            exit 0
+          fi
+          if ! printf '%s' "$body" | jq -e '.usageItems | type == "array"' >/dev/null 2>&1; then
+            echo 'billing response has no usageItems[]; failing safe to self-hosted'
+            emit "$SELF_HOSTED" false
+            exit 0
+          fi
+          net="$(printf '%s' "$body" | jq -r '[.usageItems[] | select(.product == "actions") | (.netAmount // 0)] | add // 0')"
+          if ! printf '%s' "$net" | grep -Eq '^-?[0-9]+([.][0-9]+)?$'; then
+            echo "unparsable actions netAmount '${net}'; failing safe to self-hosted"
+            emit "$SELF_HOSTED" false
+            exit 0
+          fi
+          if awk -v n="$net" 'BEGIN { exit !(n + 0 > 0) }'; then
+            echo "actions netAmount=${net} > 0 — included minutes exhausted; using self-hosted"
+            emit "$SELF_HOSTED" false
+          else
+            echo "actions netAmount=${net} == 0 — within included minutes; using hosted"
+            emit "$HOSTED" true
+          fi
   renovate:
     name: renovate
-    # Route to the kaelys-mac-mini self-hosted runner when SELF_HOSTED_ENABLED
-    # is set on the repo; fall back to ubuntu-latest if the mini is down or
-    # the escape hatch is flipped off. renovatebot/github-action is a JS
-    # action that shells out to `docker run ghcr.io/renovatebot/renovate` —
-    # the mac-mini has Docker available and the renovate image is multi-arch.
-    runs-on: ${{ vars.SELF_HOSTED_ENABLED == 'true' && fromJSON('["self-hosted","kaelys-mac-mini"]') || 'ubuntu-latest' }}
+    # renovatebot/github-action is a JS action that shells out to `docker run
+    # ghcr.io/renovatebot/renovate` — the mac-mini has Docker available and the
+    # renovate image is multi-arch.
+    needs: preflight
+    runs-on: ${{ fromJSON(needs.preflight.outputs.runs_on) }}
     timeout-minutes: 30
     steps:
       # Pre-flight FIRST (before checkout): fail loud with a pointer to the
