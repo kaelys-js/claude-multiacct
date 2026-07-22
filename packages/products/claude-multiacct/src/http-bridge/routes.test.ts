@@ -1,3 +1,4 @@
+/* oxlint-disable unicorn/consistent-function-scoping */
 /**
  * Intent: pin the wire-contract shape of every endpoint AND the flag gate
  * on the one mutating route. Adversarial cases:
@@ -23,9 +24,15 @@ import {
 	handleAddAccount,
 	handleHealth,
 	handleListAccounts,
+	handleLoginCancel,
+	handleLoginStart,
+	handleLoginStatus,
 	handleRemoveAccount,
 	handleSetChoice,
 	handleUsage,
+	type LoginCancelFn,
+	type LoginStartFn,
+	type LoginStatusFn,
 	type RemoveAccountFn,
 	type RouteDeps,
 	type SignalSwapFn,
@@ -69,6 +76,9 @@ function makeDeps(overrides: Partial<RouteDeps> = {}): RouteDeps {
 					needsRefresh: false,
 				}),
 			),
+		...(overrides.loginStart === undefined ? {} : { loginStart: overrides.loginStart }),
+		...(overrides.loginStatus === undefined ? {} : { loginStatus: overrides.loginStatus }),
+		...(overrides.loginCancel === undefined ? {} : { loginCancel: overrides.loginCancel }),
 		choiceStore: overrides.choiceStore ?? {
 			write: vi.fn<() => Promise<void>>(() => Promise.resolve()),
 		},
@@ -402,6 +412,132 @@ describe("dispatch (routing table)", () => {
 	});
 	it("returns 404 for wrong methods", async () => {
 		const r = await dispatch({ method: "DELETE", pathname: "/accounts" }, makeDeps());
+		expect(r.status).toBe(404);
+	});
+	it("routes POST /accounts/login/start", async () => {
+		const loginStart: LoginStartFn = () =>
+			Promise.resolve({ ok: true, loginId: acctUuid, authorizeUrl: "https://a/authorize" });
+		const r = await dispatch(
+			{ method: "POST", pathname: "/accounts/login/start" },
+			makeDeps({ loginStart }),
+		);
+		expect(r.status).toBe(200);
+	});
+	it("routes GET /accounts/login/status/:loginId", async () => {
+		const loginStatus: LoginStatusFn = () => ({ ok: true, status: "pending" });
+		const r = await dispatch(
+			{ method: "GET", pathname: `/accounts/login/status/${acctUuid}` },
+			makeDeps({ loginStatus }),
+		);
+		expect(r.status).toBe(200);
+	});
+	it("routes POST /accounts/login/cancel/:loginId", async () => {
+		const loginCancel: LoginCancelFn = () => Promise.resolve({ ok: true, status: "cancelled" });
+		const r = await dispatch(
+			{ method: "POST", pathname: `/accounts/login/cancel/${acctUuid}` },
+			makeDeps({ loginCancel }),
+		);
+		expect(r.status).toBe(200);
+	});
+});
+
+describe("in-app OAuth login routes", () => {
+	it("start: flag off → 403 skipped, no manager call", async () => {
+		const loginStart = vi.fn<LoginStartFn>(() =>
+			Promise.resolve({ ok: true, loginId: acctUuid, authorizeUrl: "x" }),
+		);
+		const r = await handleLoginStart(makeDeps({ flagOn: false, loginStart }));
+		expect(r.status).toBe(403);
+		expect((r.body as { skipped: boolean }).skipped).toBe(true);
+		expect(loginStart).not.toHaveBeenCalled();
+	});
+
+	it("start: manager not wired → 503 login_unavailable", async () => {
+		const r = await handleLoginStart(makeDeps({ flagOn: true }));
+		expect(r.status).toBe(503);
+		expect((r.body as { reason: string }).reason).toBe("login_unavailable");
+	});
+
+	it("start: success → 200 with loginId + authorizeUrl", async () => {
+		const loginStart: LoginStartFn = () =>
+			Promise.resolve({ ok: true, loginId: acctUuid, authorizeUrl: "https://a/authorize?x=1" });
+		const r = await handleLoginStart(makeDeps({ loginStart }));
+		expect(r.status).toBe(200);
+		expect(r.body).toStrictEqual({
+			ok: true,
+			loginId: acctUuid,
+			authorizeUrl: "https://a/authorize?x=1",
+		});
+	});
+
+	it("start: manager failure → mapped status + reason", async () => {
+		const loginStart: LoginStartFn = () =>
+			Promise.resolve({ ok: false, status: 500, reason: "login_start_failed", detail: "boom" });
+		const r = await handleLoginStart(makeDeps({ loginStart }));
+		expect(r.status).toBe(500);
+		expect((r.body as { reason: string }).reason).toBe("login_start_failed");
+	});
+
+	it("status: not wired → 503", async () => {
+		const r = await handleLoginStatus(makeDeps(), acctUuid);
+		expect(r.status).toBe(503);
+	});
+
+	it("status: bad loginId → 400", async () => {
+		const loginStatus: LoginStatusFn = () => ({ ok: true, status: "pending" });
+		const r = await handleLoginStatus(makeDeps({ loginStatus }), "not-a-uuid");
+		expect(r.status).toBe(400);
+	});
+
+	it("status: done → 200 with account + updated + detail passed through", async () => {
+		const loginStatus: LoginStatusFn = () => ({
+			ok: true,
+			status: "done",
+			account: sampleAccount,
+			updated: true,
+			detail: "added",
+		});
+		const r = await handleLoginStatus(makeDeps({ loginStatus }), acctUuid);
+		expect(r.status).toBe(200);
+		expect(r.body).toStrictEqual({
+			ok: true,
+			status: "done",
+			account: sampleAccount,
+			updated: true,
+			detail: "added",
+		});
+	});
+
+	it("status: unknown login → 404", async () => {
+		const loginStatus: LoginStatusFn = () =>
+			({ ok: false, reason: "unknown_login", detail: "no login" }) as ReturnType<LoginStatusFn>;
+		const r = await handleLoginStatus(makeDeps({ loginStatus }), acctUuid);
+		expect(r.status).toBe(404);
+	});
+
+	it("cancel: not wired → 503", async () => {
+		const r = await handleLoginCancel(makeDeps(), acctUuid);
+		expect(r.status).toBe(503);
+	});
+
+	it("cancel: bad loginId → 400", async () => {
+		const loginCancel: LoginCancelFn = () => Promise.resolve({ ok: true, status: "cancelled" });
+		const r = await handleLoginCancel(makeDeps({ loginCancel }), "bad");
+		expect(r.status).toBe(400);
+	});
+
+	it("cancel: success → 200 status + detail", async () => {
+		const loginCancel: LoginCancelFn = () =>
+			Promise.resolve({ ok: true, status: "cancelled", detail: "cancelled by user" });
+		const r = await handleLoginCancel(makeDeps({ loginCancel }), acctUuid);
+		expect(r.status).toBe(200);
+		expect(r.body).toStrictEqual({ ok: true, status: "cancelled", detail: "cancelled by user" });
+	});
+
+	it("cancel: unknown login → 404", async () => {
+		const loginCancel: LoginCancelFn = () =>
+			Promise.resolve({ ok: false, reason: "unknown_login", detail: "no login" });
+		const r = await handleLoginCancel(makeDeps({ loginCancel }), acctUuid);
 		expect(r.status).toBe(404);
 	});
 });

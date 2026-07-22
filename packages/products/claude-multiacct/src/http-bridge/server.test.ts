@@ -282,6 +282,36 @@ describe("start", () => {
 		expect(body.activeUuid).toBe("11111111-1111-4111-8111-111111111111");
 	});
 
+	it("threads the OAuth login ports through to POST /accounts/login/start", async () => {
+		const path = await scratchPath();
+		const s = await start({
+			...noopDeps,
+			bridgeJsonPath: path,
+			loginStart: () =>
+				Promise.resolve({
+					ok: true,
+					loginId: "11111111-1111-4111-8111-111111111111",
+					authorizeUrl: "https://claude.com/cai/oauth/authorize?x=1",
+				}),
+			loginStatus: () => ({ ok: true, status: "pending" }),
+			loginCancel: () => Promise.resolve({ ok: true, status: "cancelled" }),
+		});
+		alive.push(s);
+		const res = await fetch(`http://127.0.0.1:${String(s.port)}/accounts/login/start`, {
+			method: "POST",
+			headers: {
+				origin: "https://claude.ai",
+				"x-cma-bridge-secret": s.secret,
+				"content-type": "application/json",
+			},
+			body: "{}",
+		});
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { ok: boolean; loginId: string; authorizeUrl: string };
+		expect(body.loginId).toBe("11111111-1111-4111-8111-111111111111");
+		expect(body.authorizeUrl).toContain("oauth/authorize");
+	});
+
 	it("OPTIONS preflight from an allowed Origin → 204 with cors headers", async () => {
 		const path = await scratchPath();
 		const s = await start({ ...noopDeps, bridgeJsonPath: path });

@@ -39,6 +39,10 @@ import { SecurityCliMutableTokenStore } from "./src/cli-shim/mutable-token-store
 import { AtomicRegistryWriter, nodeRegistryFsPort } from "./src/registry/registry-writer.ts";
 import { verifyToken } from "./src/oauth/verify.ts";
 import { flagOn } from "./src/oauth/provisioning.ts";
+import { createLoginManager, nodeCallbackServer } from "./src/oauth/login-manager.ts";
+import { exchangeAuthorizationCode } from "./src/oauth/login.ts";
+import { fetchAccountProfile } from "./src/discovery/identity.ts";
+import { registerOrUpdateAccount } from "./src/oauth/register-account.ts";
 import { readFile } from "node:fs/promises";
 import {
 	defaultActiveAccountPath,
@@ -180,6 +184,34 @@ const cliPorts = {
 const addAccount = makeAddAccount({ cliPorts, env: process.env });
 const removeAccount = makeRemoveAccount({ cliPorts, env: process.env });
 
+// In-app OAuth login manager. Construction binds NO socket and touches NO
+// keychain — a loopback listener is bound lazily, only when a /accounts/login/
+// start request arrives. The exchange + profile calls use the global fetch;
+// register-or-update runs through the same cliPorts add/remove uses (dedup by
+// accountUuid, source=explicit). Tokens/codes are never written to stderr.
+bootLog("construct-loginmanager");
+const loginFetch = (url, init) => fetch(url, init);
+const loginManager = createLoginManager({
+	exchangeCode: (args) => exchangeAuthorizationCode({ ...args, fetchImpl: loginFetch }),
+	fetchProfile: (token) => fetchAccountProfile(token, loginFetch),
+	register: ({ profile, token }) => registerOrUpdateAccount({ profile, token, ports: cliPorts }),
+	openCallbackServer: nodeCallbackServer(),
+	logger: {
+		log: (m) => { try { process.stderr.write("[login] " + m + "\\n"); } catch {} },
+		warn: (m) => { try { process.stderr.write("[login] " + m + "\\n"); } catch {} },
+	},
+});
+const loginStart = async () => {
+	try {
+		const { loginId, authorizeUrl } = await loginManager.start();
+		return { ok: true, loginId, authorizeUrl };
+	} catch (error) {
+		return { ok: false, status: 500, reason: "login_start_failed", detail: String(error) };
+	}
+};
+const loginStatus = (loginId) => loginManager.getStatus(loginId);
+const loginCancel = (loginId) => loginManager.cancel(loginId);
+
 const flag = flagOn(process.env);
 
 // Auto-detect accounts BEFORE start() so the daemon serves a populated
@@ -223,6 +255,9 @@ try {
 		activeAccountUuid,
 		addAccount,
 		removeAccount,
+		loginStart,
+		loginStatus,
+		loginCancel,
 		verifyAccount,
 		choiceStore,
 		flagOn: flag,
