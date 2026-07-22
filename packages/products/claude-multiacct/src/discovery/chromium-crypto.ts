@@ -19,9 +19,13 @@
  * projects that decrypt Chrome cookies + the current Chromium source
  * tree.
  *
- * The classifier for OAuth is application-level: we look for JSON blobs
- * with `access_token` / `oauth_access_token` fields in the decrypted
- * plaintext.
+ * The classifier for OAuth is application-level. Two shapes exist:
+ *   - Single-object blobs with `access_token` / `oauth_access_token`
+ *     fields (older `oauth:tokenCache`, CLI keychain slots).
+ *   - The `oauth:tokenCacheV2` MAP, keyed by
+ *     `"<accountUuid>:<workspaceUuid>:<audience>:<scopeSet>"` with
+ *     `{ token, refreshToken, ... }` records. `extractOauthEntriesFromPlaintext`
+ *     handles both and returns an array.
  *
  * @module
  */
@@ -127,6 +131,111 @@ export function extractOauthFromPlaintext(
 	}
 	const email = findEmailIn(obj);
 	return { token, email };
+}
+
+/** One OAuth token extracted from a decrypted blob, with its optional owning account. */
+export type OauthEntry = {
+	token: string;
+	accountUuid: string | undefined;
+	email: string | undefined;
+};
+
+/** RFC 4122 UUID shape (any version). Used to validate the account segment of a cache key. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+
+/**
+ * Map-aware, multi-valued OAuth extraction.
+ *
+ * Modern Claude.app writes `oauth:tokenCacheV2` as a JSON MAP: keys are
+ * composite strings `"<accountUuid>:<workspaceUuid>:<audience>:<scopeSet>"`
+ * and values are records `{ token, refreshToken, expiresAt, ... }`. The
+ * OAuth token is the `token` field (NOT `access_token`), and one account
+ * can appear under several scope sets. This enumerates every entry,
+ * derives the account uuid from the first key segment, and returns at most
+ * one entry per account (preferring an inference / claude_code scoped
+ * entry over a profile-only one).
+ *
+ * Any other shape falls back to the single-object logic
+ * ({@link extractOauthFromPlaintext}) and yields an array of 0 or 1.
+ *
+ * @param {Buffer} plaintext - Decrypted value.
+ * @returns {OauthEntry[]} Zero or more extracted tokens.
+ */
+export function extractOauthEntriesFromPlaintext(plaintext: Buffer): OauthEntry[] {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(plaintext.toString("utf8"));
+	} catch {
+		return [];
+	}
+	if (typeof parsed !== "object" || parsed === null) {
+		return [];
+	}
+	const mapEntries = extractTokenCacheMap(parsed as Record<string, unknown>);
+	if (mapEntries.length > 0) {
+		return mapEntries;
+	}
+	const single = extractOauthFromPlaintext(plaintext);
+	return single === undefined
+		? []
+		: [{ token: single.token, accountUuid: undefined, email: single.email }];
+}
+
+/**
+ * Enumerate a `tokenCacheV2`-style map into per-account OAuth entries.
+ * Returns [] when the object isn't a map of `{ token: string, ... }`
+ * records (so the caller falls back to single-object extraction).
+ *
+ * @param {Record<string, unknown>} obj - Parsed decrypted JSON.
+ * @returns {OauthEntry[]} One entry per distinct account, richest scope wins.
+ */
+function extractTokenCacheMap(obj: Record<string, unknown>): OauthEntry[] {
+	const byAccount = new Map<string, { token: string; rich: boolean }>();
+	const anonymous: OauthEntry[] = [];
+	let sawTokenEntry = false;
+	for (const [key, value] of Object.entries(obj)) {
+		const token = readEntryToken(value);
+		if (token !== undefined) {
+			sawTokenEntry = true;
+			const [first] = key.split(":");
+			const accountUuid = first !== undefined && UUID_RE.test(first) ? first : undefined;
+			if (accountUuid === undefined) {
+				anonymous.push({ token, accountUuid: undefined, email: undefined });
+			} else {
+				const rich = /inference|claude_code/iu.test(key);
+				const existing = byAccount.get(accountUuid);
+				if (existing === undefined || (rich && !existing.rich)) {
+					byAccount.set(accountUuid, { token, rich });
+				}
+			}
+		}
+	}
+	if (!sawTokenEntry) {
+		return [];
+	}
+	const result: OauthEntry[] = [...byAccount].map(([accountUuid, { token }]) => ({
+		token,
+		accountUuid,
+		email: undefined,
+	}));
+	result.push(...anonymous);
+	return result;
+}
+
+/**
+ * Extract a non-empty string `token` field from a single map value.
+ * Returns undefined when the value isn't a record with a usable token
+ * (so the entry is skipped without a `continue`).
+ *
+ * @param {unknown} value - One value from the token-cache map.
+ * @returns {string | undefined} The OAuth token, or undefined.
+ */
+function readEntryToken(value: unknown): string | undefined {
+	if (typeof value !== "object" || value === null) {
+		return undefined;
+	}
+	const { token } = value as Record<string, unknown>;
+	return typeof token === "string" && token.length > 0 ? token : undefined;
 }
 
 function findTokenIn(obj: Record<string, unknown>): string | undefined {

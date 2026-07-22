@@ -539,6 +539,47 @@ describe("discoverAccounts", () => {
 		expect(outcome.skippedAlreadyRegistered).toBe(0);
 	});
 
+	it("registers 2 distinct accounts from a real oauth:tokenCacheV2 map (3 entries, 2 uuids)", async () => {
+		// Ground truth: modern Claude.app writes oauth:tokenCacheV2 as a MAP keyed
+		// by "<accountUuid>:<ws>:<audience>:<scopeSet>" with { token, ... } records.
+		// The old single-object extractor missed this shape entirely, so real
+		// accounts were never auto-detected. Account B appears twice (profile-only
+		// + inference); the inference-scoped token must be the one registered.
+		const accountA = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+		const accountB = "a473d7bb-17ac-43a7-abc0-a1343d7c2805";
+		const v2Map = JSON.stringify({
+			[`${accountA}:ws-a:anthropic:profile inference`]: { token: "real-tok-A" },
+			[`${accountB}:ws-b:anthropic:profile`]: { token: "real-tok-B-profile" },
+			[`${accountB}:ws-b:anthropic:profile inference claude_code`]: {
+				token: "real-tok-B-inference",
+			},
+		});
+		const provisioned: string[] = [];
+		const outcome = await discoverAccounts(
+			mkPorts({
+				iterateAppConfigJson: async function* (path) {
+					// eslint-disable-next-line vitest/no-conditional-in-test
+					if (path.endsWith("/config.json")) {
+						yield { key: Buffer.from("oauth:tokenCacheV2", "utf8"), value: encryptForTest(v2Map) };
+					}
+				},
+				provisionOne: ({ token, label }) => {
+					provisioned.push(token);
+					const uuid =
+						`${String(provisioned.length).padStart(8, "0")}-1111-4111-8111-000000000000` as AccountUuid;
+					return Promise.resolve({ ok: true, uuid, label } as { ok: true; uuid: AccountUuid });
+				},
+			}),
+		);
+		expect(outcome.registered).toHaveLength(2);
+		// Both accounts registered; the map is a single scanned blob.
+		expect(outcome.scanned.mainApp).toBe(1);
+		// Account B's inference-scoped token wins over its profile-only token.
+		expect(provisioned).toContain("real-tok-A");
+		expect(provisioned).toContain("real-tok-B-inference");
+		expect(provisioned).not.toContain("real-tok-B-profile");
+	});
+
 	it("registers tokens from clone apps sharing the parent's keychain key", async () => {
 		const outcome = await discoverAccounts(
 			mkPorts({
