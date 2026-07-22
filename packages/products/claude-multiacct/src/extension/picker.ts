@@ -2,13 +2,26 @@
  * `@foundation/claude-multiacct` — account picker (light DOM, Claude-styled).
  *
  * Renders a button next to Claude's model selector in the Code-tab bottom
- * bar, and a dropdown menu positioned above it. Both use Claude's own
- * Tailwind + design-system classes (light DOM, no shadow) so the visual
- * result matches Claude's native dropdowns exactly — a shadow-DOM version
- * couldn't reach `bg-surface-3` / `rounded-card` / `shadow-panel` / etc.
+ * bar, and a dropdown menu positioned above it. Light DOM (no shadow) so the
+ * menu can reach the page's own theme variables and match Claude's native
+ * dropdown pixel-for-pixel.
  *
- * Class strings captured live from Claude Desktop's user-menu popup on
- * 2026-07-21; a Tailwind rename in Claude would require an update.
+ * The load-bearing surface values (panel background, border, text, radius,
+ * shadow) are the real Claude design-system tokens, referenced as the page's
+ * own CSS variables with resolved-hex fallbacks. Captured live on 2026-07-21
+ * from `/Applications/Claude.app` (`app.asar` extracted with `@electron/asar`):
+ *
+ *   - panel bg   `--claude-background-color: #262624`  window-shared.css:161
+ *   - border     `--claude-border: #eaddd81a`          window-shared.css:162
+ *   - text       `--claude-text-100: #f5f4ef`          window-shared.css:165
+ *   - muted text `--claude-secondary-color: #a6a39a`   window-shared.css:160
+ *   - panel radius `rounded-xl` 0.75rem                index.html:2311
+ *   - item radius  `rounded-lg` 0.5rem                 index.html:2302
+ *   - popover shadow `0px 2px 8px 0px hsl(var(--always-black)/24%)`
+ *                                                      index.html:3996
+ *
+ * (paths relative to `.vite/renderer/main_window/` in the extracted asar).
+ * A Claude token rename would require re-capturing these.
  *
  * @module
  */
@@ -26,6 +39,13 @@ export type MountPickerOptions = {
 	sessionUuid: string | undefined;
 	doc: Document;
 	accounts?: PickerAccount[];
+	/**
+	 * The runtime-derived active account uuid (the account Claude.app is
+	 * currently authenticated as, per `discovery/active-token.ts`'s sha match).
+	 * Pre-selects and highlights that row. Omitted when pre-seeding without a
+	 * known active account; the self-fetch path reads it from `/accounts`.
+	 */
+	activeUuid?: string;
 	onChoice?: (accountUuid: string) => void;
 };
 
@@ -43,6 +63,12 @@ export type PickerHandle = {
 // CSS variables Claude defines on `:root` — that way an unmapped utility
 // class still lands on the right pixels. The utility class strings are kept
 // alongside for future Tailwind-config unification.
+// Row highlight overlays. Claude's dark menus tint rows with a translucent
+// white wash rather than a solid fill, so the panel color still reads through;
+// the selected row sits a touch brighter than a passing hover.
+const SELECTED_BG = "rgba(255, 255, 255, 0.06)";
+const HOVER_BG = "rgba(255, 255, 255, 0.08)";
+
 const BUTTON_CLASSES = "cds-reset";
 const MENU_CLASSES = "cds-reset";
 const MENU_INNER_CLASSES = "";
@@ -83,16 +109,18 @@ function styleMenu(el: HTMLElement): void {
 	el.style.maxWidth = "320px";
 	el.style.width = "17rem";
 	el.style.padding = "4px";
-	el.style.borderRadius = "12px";
-	el.style.border = "1px solid rgba(255, 255, 255, 0.08)";
-	// Claude's `bg-surface-3` is an app-theme dark. Fallback chain covers
-	// the case where the CSS variable isn't defined on the visited page.
-	el.style.background =
-		"var(--surface-3, var(--color-bg-surface-3, var(--background-primary, rgb(30, 30, 32))))";
-	el.style.color = "var(--text-primary, rgb(228, 228, 231))";
-	el.style.boxShadow = "0 10px 30px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.4)";
+	// rounded-xl (0.75rem) — Claude's card/popover radius (index.html:2311).
+	el.style.borderRadius = "0.75rem";
+	// Real Claude tokens, theme-aware via the page's own variables with the
+	// captured dark-theme hex as fallback (window-shared.css:161/162/165).
+	el.style.border = "1px solid var(--claude-border, #eaddd81a)";
+	el.style.background = "var(--claude-background-color, #262624)";
+	el.style.color = "var(--claude-text-100, #f5f4ef)";
+	// Claude's floating-panel shadow: shadow-[0px_2px_8px_0px_hsl(var(--always-black)/24%)]
+	// (index.html:3996). --always-black resolves to black; fall back to rgba.
+	el.style.boxShadow = "0px 2px 8px 0px hsl(var(--always-black, 0 0% 0%) / 0.24)";
 	el.style.fontFamily = "inherit";
-	el.style.fontSize = "13px";
+	el.style.fontSize = "0.875rem";
 	el.style.lineHeight = "1.4";
 }
 
@@ -104,9 +132,10 @@ function styleMenu(el: HTMLElement): void {
  */
 function styleHeader(el: HTMLElement): void {
 	el.style.padding = "6px 10px 4px";
-	el.style.fontSize = "11px";
+	el.style.fontSize = "0.75rem";
 	el.style.fontWeight = "600";
-	el.style.opacity = "0.55";
+	// Claude's muted label color (window-shared.css:160) instead of an opacity hack.
+	el.style.color = "var(--claude-secondary-color, #a6a39a)";
 	el.style.textTransform = "none";
 	el.style.letterSpacing = "0";
 }
@@ -124,13 +153,14 @@ function styleItem(el: HTMLElement, isSelected: boolean): void {
 	el.style.gap = "8px";
 	el.style.padding = "6px 10px";
 	el.style.margin = "0";
-	el.style.borderRadius = "6px";
+	// rounded-lg (0.5rem) — Claude's menu-row radius (index.html:2302).
+	el.style.borderRadius = "0.5rem";
 	el.style.cursor = "default";
 	el.style.userSelect = "none";
 	el.style.outline = "none";
-	el.style.fontSize = "13px";
+	el.style.fontSize = "inherit";
 	el.style.color = "inherit";
-	el.style.background = isSelected ? "rgba(255, 255, 255, 0.06)" : "transparent";
+	el.style.background = isSelected ? SELECTED_BG : "transparent";
 }
 
 /**
@@ -178,7 +208,7 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 	header.textContent = "Account";
 	inner.append(header);
 
-	let currentUuid: string | undefined;
+	let currentUuid: string | undefined = opts.activeUuid;
 	let accounts: PickerAccount[] = opts.accounts ?? [];
 	let destroyed = false;
 
@@ -223,11 +253,11 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 			}
 			item.addEventListener("mouseenter", () => {
 				if (!isSelected) {
-					item.style.background = "rgba(255, 255, 255, 0.08)";
+					item.style.background = HOVER_BG;
 				}
 			});
 			item.addEventListener("mouseleave", () => {
-				item.style.background = isSelected ? "rgba(255, 255, 255, 0.06)" : "transparent";
+				item.style.background = isSelected ? SELECTED_BG : "transparent";
 			});
 
 			const checkSlot = doc.createElement("span");
@@ -349,21 +379,28 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 	opts.doc.defaultView?.addEventListener("scroll", reposition, true);
 	opts.doc.defaultView?.addEventListener("resize", reposition);
 
-	// Initial data: fetch from client if not pre-seeded. No account is marked
-	// selected up front — there is no stored primary, and the runtime-derived
-	// active account is wired in by the picker-styling work that follows. Until
-	// then `currentUuid` stays undefined and the button shows the first
-	// account's label as a hint (see `labelFor`).
+	// Initial data: fetch from client if not pre-seeded. The runtime-derived
+	// active account (`activeUuid` in the `/accounts` response) pre-selects the
+	// matching row. When it is absent or unmatched the domain fell back to the
+	// first account, so `currentUuid` stays undefined and the button shows the
+	// first account's label as a hint (see `labelFor`).
 	if (opts.accounts === undefined) {
 		// eslint-disable-next-line typescript/no-floating-promises -- fire-and-forget initial accounts fetch
 		(async (): Promise<void> => {
 			try {
-				const res = await opts.client.get<{ ok: boolean; accounts: PickerAccount[] }>("/accounts");
+				const res = await opts.client.get<{
+					ok: boolean;
+					accounts: PickerAccount[];
+					activeUuid?: string;
+				}>("/accounts");
 				if (destroyed) {
 					return;
 				}
 				if (res.ok && Array.isArray(res.data.accounts)) {
 					({ accounts } = res.data);
+					if (currentUuid === undefined && typeof res.data.activeUuid === "string") {
+						currentUuid = res.data.activeUuid;
+					}
 					refreshButton();
 					renderItems();
 				} else if (!res.ok) {

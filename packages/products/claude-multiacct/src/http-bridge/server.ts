@@ -57,6 +57,8 @@ export function defaultBridgeJsonPath(): string {
 /** Injected deps `start()` takes. */
 export type StartOptions = {
 	listAccounts: () => Promise<Account[]>;
+	/** Resolve the runtime-active account uuid for `/accounts` (see routes.ts). */
+	activeAccountUuid: () => Promise<string | undefined>;
 	verifyAccount: VerifyAccountFn;
 	choiceStore: Pick<ChoiceStore, "write">;
 	flagOn: boolean;
@@ -291,6 +293,7 @@ export async function start(opts: StartOptions): Promise<StartResult> {
 
 	const routeDeps: RouteDeps = {
 		listAccounts: opts.listAccounts,
+		activeAccountUuid: opts.activeAccountUuid,
 		verifyAccount: opts.verifyAccount,
 		choiceStore: opts.choiceStore,
 		flagOn: opts.flagOn,

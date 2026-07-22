@@ -89,11 +89,15 @@ const verifyAccount = async (uuid) => {
 	return { ok: true, verify, needsRefresh: !verify.ok && verify.kind === "unauthorized" };
 };
 const listAccounts = async () => (await readRegistry())?.accounts ?? [];
+// The real entry derives this from the keychain + config.json; the boot test
+// only cares that start() accepts and stores it, so a stub keeps the mirror
+// runnable without pulling the active-token IO into this harness.
+const activeAccountUuid = async () => undefined;
 const flag = flagOn(process.env);
 
 try {
 	bootLog("start-listen");
-	const { port } = await start({ listAccounts, verifyAccount, choiceStore, flagOn: flag, version: PACKAGE_VERSION });
+	const { port } = await start({ listAccounts, activeAccountUuid, verifyAccount, choiceStore, flagOn: flag, version: PACKAGE_VERSION });
 	bootLog("listening");
 	process.stdout.write(JSON.stringify({ ready: true, port, pid: process.pid }) + "\\n");
 	bootLog("ready");
@@ -170,7 +174,7 @@ describe("daemon boot under launchd-shaped minimal env", () => {
 	it("boot-time throw → try/catch prints `[daemon-boot] fatal:` on stderr + exits 1 (fail loud, not silent hang)", async () => {
 		// Same shape as realEntry but replaces the start() call with a throw.
 		const throwEntry = realEntry.replace(
-			`const { port } = await start({ listAccounts, verifyAccount, choiceStore, flagOn: flag, version: PACKAGE_VERSION });`,
+			`const { port } = await start({ listAccounts, activeAccountUuid, verifyAccount, choiceStore, flagOn: flag, version: PACKAGE_VERSION });`,
 			`throw new Error("simulated boot fault");`,
 		);
 		const throwDaemon = await bundle(throwEntry);

@@ -6,7 +6,8 @@
  *
  *   - `GET /health` — liveness + version, no auth. Used by launchd + the
  *     extension's readiness probe.
- *   - `GET /accounts` — the current pool (read-only, always allowed).
+ *   - `GET /accounts` — the current pool plus the runtime-derived active
+ *     account uuid (read-only, always allowed).
  *   - `GET /usage/:accountUuid` — subscription/tier + last-known usage.
  *     Verifies the stored token against the CLI; read-only.
  *   - `POST /choice/:sessionUuid` — pin an account to a session; the
@@ -59,6 +60,16 @@ export type VerifyAccountFn = (uuid: string) => Promise<{
 export type ListAccountsFn = () => Promise<Account[]>;
 
 /**
+ * Resolve the runtime-active account uuid — the account Claude.app is currently
+ * authenticated as, derived by matching its OAuth token sha against each
+ * account's (`discovery/active-token.ts` + `domain/registry.ts::getPrimary`).
+ * Returns `undefined` when the pool is empty or the active token can't be read
+ * (fail closed; the picker then hints the first account rather than mis-marking
+ * one). Injected so tests never touch the keychain or config.json.
+ */
+export type ActiveAccountUuidFn = () => Promise<string | undefined>;
+
+/**
  * Signal the running shim for `sessionUuid` that its account choice changed
  * so it hot-swaps the child claude with a fresh OAuth token. Returns the
  * outcome of the signal attempt — the daemon logs it but never surfaces it
@@ -70,6 +81,8 @@ export type SignalSwapFn = (sessionUuid: string) => Promise<"signalled" | "no-ow
 /** Injected port bundle every handler takes. */
 export type RouteDeps = {
 	listAccounts: ListAccountsFn;
+	/** Resolve the runtime-active account uuid for `/accounts` (see the type). */
+	activeAccountUuid: ActiveAccountUuidFn;
 	verifyAccount: VerifyAccountFn;
 	choiceStore: Pick<ChoiceStore, "write">;
 	/** True iff `CLAUDE_MULTIACCT_ENABLE_SHIM=1`. Mirrors the shim gate. */
@@ -141,14 +154,17 @@ export function handleHealth(deps: RouteDeps): RouteResult {
 }
 
 /**
- * List accounts — always allowed, read-only.
+ * List accounts — always allowed, read-only. Includes `activeUuid`, the
+ * runtime-derived active account, so the picker highlights the account
+ * Claude.app is currently authenticated as without a stored primary flag.
  *
  * @param {RouteDeps} deps - Injected ports.
- * @returns {Promise<RouteResult>} 200 with the current account pool.
+ * @returns {Promise<RouteResult>} 200 with the pool and the active account uuid.
  */
 export async function handleListAccounts(deps: RouteDeps): Promise<RouteResult> {
 	const accounts = await deps.listAccounts();
-	return { status: 200, body: { ok: true, accounts } };
+	const activeUuid = await deps.activeAccountUuid();
+	return { status: 200, body: { ok: true, accounts, activeUuid } };
 }
 
 /**

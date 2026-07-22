@@ -192,6 +192,70 @@ describe("mountPicker", () => {
 		expect(handle.currentUuid()).toBe(ACCOUNTS[1]?.uuid);
 	});
 
+	it("pre-selects and highlights the runtime-active account from activeUuid", () => {
+		// The whole point of the runtime-primary derivation: the account
+		// Claude.app is logged in as starts highlighted, not the first-account
+		// hint. Drop the `currentUuid = opts.activeUuid` seed and this flips red.
+		const handle = mountPicker({
+			host: body,
+			client: mockClient(),
+			sessionUuid: SESSION,
+			doc,
+			accounts: ACCOUNTS,
+			activeUuid: ACCOUNTS[1]?.uuid,
+		});
+		expect(handle.currentUuid()).toBe(ACCOUNTS[1]?.uuid);
+		expect(getButton(doc).textContent).toBe("Bob");
+		const items = getItems(doc);
+		expect(items[1]?.dataset.selected).toBe("true");
+		expect(items[0]?.dataset.selected).toBeUndefined();
+	});
+
+	it("adopts the runtime-active account from the /accounts response when self-fetching", async () => {
+		const client: BridgeClient = {
+			get: vi.fn<GetFn>(() =>
+				Promise.resolve({
+					ok: true,
+					data: { ok: true, accounts: ACCOUNTS, activeUuid: ACCOUNTS[1]?.uuid },
+				}),
+			),
+			post: vi.fn<PostFn>(),
+		} as unknown as BridgeClient;
+		const handle = mountPicker({ host: body, client, sessionUuid: SESSION, doc });
+		await new Promise<void>((resolve) => {
+			setTimeout(resolve, 0);
+		});
+		// The fetched activeUuid drives the highlight when accounts aren't pre-seeded.
+		expect(handle.currentUuid()).toBe(ACCOUNTS[1]?.uuid);
+		expect(getButton(doc).textContent).toBe("Bob");
+	});
+
+	it("keeps an explicitly-provided activeUuid over the one in the /accounts response", async () => {
+		// Guard branch: a caller-supplied activeUuid must not be overwritten by
+		// the fetched one. Remove the `currentUuid === undefined` guard and the
+		// fetched Alice would clobber the provided Bob, flipping this red.
+		const client: BridgeClient = {
+			get: vi.fn<GetFn>(() =>
+				Promise.resolve({
+					ok: true,
+					data: { ok: true, accounts: ACCOUNTS, activeUuid: ACCOUNTS[0]?.uuid },
+				}),
+			),
+			post: vi.fn<PostFn>(),
+		} as unknown as BridgeClient;
+		const handle = mountPicker({
+			host: body,
+			client,
+			sessionUuid: SESSION,
+			doc,
+			activeUuid: ACCOUNTS[1]?.uuid,
+		});
+		await new Promise<void>((resolve) => {
+			setTimeout(resolve, 0);
+		});
+		expect(handle.currentUuid()).toBe(ACCOUNTS[1]?.uuid);
+	});
+
 	it("without pre-seeded accounts, fetches /accounts and renders the first account's label", async () => {
 		const client = mockClient();
 		mountPicker({ host: body, client, sessionUuid: SESSION, doc });

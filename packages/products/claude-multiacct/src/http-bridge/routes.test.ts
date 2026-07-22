@@ -49,6 +49,7 @@ const okVerify: VerifyResult = {
 function makeDeps(overrides: Partial<RouteDeps> = {}): RouteDeps {
 	return {
 		listAccounts: overrides.listAccounts ?? (() => Promise.resolve([sampleAccount])),
+		activeAccountUuid: overrides.activeAccountUuid ?? (() => Promise.resolve(acctUuid)),
 		verifyAccount:
 			overrides.verifyAccount ??
 			vi.fn<VerifyAccountFn>(() =>
@@ -89,10 +90,21 @@ describe("handleHealth", () => {
 });
 
 describe("handleListAccounts", () => {
-	it("returns the injected accounts list", async () => {
+	it("returns the injected accounts list plus the runtime-active uuid", async () => {
 		const r = await handleListAccounts(makeDeps());
 		expect(r.status).toBe(200);
-		expect(r.body).toEqual({ ok: true, accounts: [sampleAccount] });
+		// activeUuid is what the picker highlights — drop it from the handler and
+		// the picker can no longer pre-select the account Claude.app is logged in as.
+		expect(r.body).toEqual({ ok: true, accounts: [sampleAccount], activeUuid: acctUuid });
+	});
+
+	it("passes through activeUuid: undefined when the active account can't be resolved", async () => {
+		// Fail-closed contract: an unreadable active token must surface as
+		// undefined, not a guessed account. Hard-coding a uuid here would flip red.
+		const r = await handleListAccounts(
+			makeDeps({ activeAccountUuid: () => Promise.resolve(undefined) }),
+		);
+		expect(r.body).toEqual({ ok: true, accounts: [sampleAccount], activeUuid: undefined });
 	});
 });
 
