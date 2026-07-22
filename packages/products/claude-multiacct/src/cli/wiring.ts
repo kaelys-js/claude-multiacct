@@ -68,6 +68,16 @@ import {
 	uninstallAgent as uninstallDaemon,
 } from "../launch/agent-installer.ts";
 import { DAEMON_LABEL, renderDaemonPlist } from "../launch/launchd-plist.ts";
+import {
+	installAgent as installReactProfile,
+	nodeAgentFsPort as reactProfileFsPort,
+	nodeLaunchctlPort as reactProfileLaunchctlPort,
+	uninstallAgent as uninstallReactProfile,
+} from "../react-profile-agent/agent-installer.ts";
+import {
+	REACT_PROFILE_LABEL,
+	renderReactProfilePlist,
+} from "../react-profile-agent/launchd-plist.ts";
 import { launchClaude } from "../launch/wrapper.ts";
 import {
 	installAgent as installWatcher,
@@ -173,7 +183,7 @@ function resolveLegacyFlags(
 }
 
 /**
- * Build the six-step orchestration list bound to real installers.
+ * Build the seven-step orchestration list bound to real installers.
  *
  * @param {WiringDeps} deps - Logger + env.
  * @param {LegacyFlags} legacyFlags - Opt-in flags for the destructive legacy-cleanup step.
@@ -336,6 +346,41 @@ function buildSteps(deps: WiringDeps, legacyFlags: LegacyFlags): readonly Orches
 		},
 	};
 
+	// The auto-apply mechanism: a login agent that runs
+	// `launchctl setenv REACT_PROFILE 1` in the user's gui session so EVERY
+	// Claude launch — dock, Spotlight, `open -a Claude`, not just `cma launch` —
+	// inherits the variable and mounts the picker. Decoupled from Claude.app's
+	// bundle, so a Claude auto-update cannot wipe it. No deployed script: the
+	// program is `/bin/launchctl` itself.
+	const stepReactProfile: OrchestrationStep = {
+		name: "react-profile-env",
+		install: async (flag) => {
+			const body = renderReactProfilePlist({
+				label: REACT_PROFILE_LABEL,
+				programArgs: ["/bin/launchctl", "setenv", "REACT_PROFILE", "1"],
+				stdoutPath: join(homedir(), ".claude-multiacct", "logs", "react-profile-env.out.log"),
+				stderrPath: join(homedir(), ".claude-multiacct", "logs", "react-profile-env.err.log"),
+			});
+			const result = await installReactProfile({
+				launchctl: reactProfileLaunchctlPort(),
+				fs: reactProfileFsPort(),
+				uid,
+				plistBody: body,
+				flag,
+			});
+			return { ok: !("skipped" in result && result.skipped) };
+		},
+		uninstall: async (flag) => {
+			await uninstallReactProfile({
+				launchctl: reactProfileLaunchctlPort(),
+				fs: reactProfileFsPort(),
+				uid,
+				flag,
+			});
+			return { ok: true };
+		},
+	};
+
 	const stepExtension: OrchestrationStep = {
 		name: "extension",
 		install: async (flag) => {
@@ -362,7 +407,15 @@ function buildSteps(deps: WiringDeps, legacyFlags: LegacyFlags): readonly Orches
 		},
 	};
 
-	return [stepLegacyCleanup, stepShim, stepWatcher, stepDaemon, stepActiveToken, stepExtension];
+	return [
+		stepLegacyCleanup,
+		stepShim,
+		stepWatcher,
+		stepDaemon,
+		stepActiveToken,
+		stepReactProfile,
+		stepExtension,
+	];
 }
 
 /**

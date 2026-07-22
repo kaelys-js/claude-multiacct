@@ -20,13 +20,34 @@ import { PACKAGE_VERSION } from "../index.ts";
 
 const pkgRoot = resolve(import.meta.dirname, "..", "..");
 
+// Kept in lockstep with scripts/build-watcher.mjs. The extra extension imports
+// exercise the bundler over the picker self-heal wiring too, so a mis-resolved
+// import trips the "runnable bundle" proof.
 const entryContents = `
 import { join } from "node:path";
 import { homedir } from "node:os";
+import {
+	access,
+	copyFile,
+	lstat,
+	mkdir,
+	readFile,
+	readlink,
+	rm,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
 import { PACKAGE_VERSION } from "./src/index.ts";
 import { runWatcher } from "./src/watcher/watcher.ts";
 import { nodeFsPort } from "./src/watcher/fs-port.ts";
 import { install as installShim, FLAG_ENV_VAR, FLAG_ENABLED_VALUE } from "./src/cli-shim/installer.ts";
+import {
+	install as installExtension,
+	defaultClaudeCacheDir,
+	defaultClaudeCacheCrxPath,
+} from "./src/extension/installer.ts";
+import { read as readConfig, defaultConfigPath } from "./src/cli/config-store.ts";
+import { resolveExtensionDistDir } from "./src/cli/dist-paths.ts";
 
 if (process.env.CMA_WATCHER_SELFTEST === "1") {
 	process.stdout.write(\`cma-watcher selftest OK \${PACKAGE_VERSION}\\n\`);
@@ -37,17 +58,46 @@ const parentDir = process.env.CMA_WATCHER_PARENT_DIR
 	?? join(homedir(), "Library/Application Support/Claude/claude-code");
 const flag = process.env[FLAG_ENV_VAR] === FLAG_ENABLED_VALUE;
 
+const extensionFs = {
+	mkdir: async (p) => { await mkdir(p, { recursive: true }); },
+	readFile: (p) => readFile(p),
+	writeFile: async (p, d) => { await writeFile(p, d); },
+	rm: async (p, opts) => { await rm(p, opts ?? {}); },
+	symlink: async (target, p) => { await symlink(target, p); },
+	readlink: (p) => readlink(p),
+	lstat: (p) => lstat(p),
+	access: (p) => access(p),
+	cp: (src, dest) => copyFile(src, dest),
+};
+
+const ensureExtension = async () => {
+	const cfg = await readConfig(defaultConfigPath());
+	if (cfg === undefined) {
+		return;
+	}
+	await installExtension({
+		distDir: resolveExtensionDistDir(import.meta.url),
+		bridgeJsonPath: cfg.bridgeJsonPath,
+		fs: extensionFs,
+		flag,
+		claudeCacheDir: defaultClaudeCacheDir(),
+		claudeCacheCrxPath: defaultClaudeCacheCrxPath(),
+		log: (m) => { console.error(m); },
+	});
+};
+
 const summary = await runWatcher({
 	parentDir,
 	fs: nodeFsPort(),
 	install: async (macosDir) => {
 		await installShim(macosDir, {});
 	},
+	ensureExtension,
 	log: (m) => { console.error(m); },
 	flag,
 });
 
-process.stdout.write(\`cma-watcher: installed=\${summary.installed.length} failed=\${summary.failed.length} skipped=\${summary.skipped.length}\\n\`);
+process.stdout.write(\`cma-watcher: installed=\${summary.installed.length} failed=\${summary.failed.length} skipped=\${summary.skipped.length} extension=\${summary.extension.status}\\n\`);
 `;
 
 describe("build-watcher: bundled dist/watcher.js is a runnable node script", () => {
