@@ -469,9 +469,18 @@ export function nodeCallbackServer(cfg: NodeCallbackServerDeps = {}): OpenCallba
 		return {
 			port,
 			redirectUri: `http://${host}:${String(port)}${path}`,
+			// Stop accepting new connections and resolve immediately. We do NOT
+			// await the drain callback: `close()` is invoked from inside the
+			// callback handler itself (before its response has flushed), so
+			// awaiting the drain would deadlock — the drain waits for the response,
+			// the response waits for the handler, the handler waits for close.
+			// Idle keep-alive sockets are dropped so the port frees promptly; the
+			// in-flight callback response finishes on its own already-open socket.
 			close: () =>
 				new Promise<void>((resolve) => {
-					server.close(() => resolve());
+					server.close();
+					server.closeIdleConnections();
+					resolve();
 				}),
 		};
 	};

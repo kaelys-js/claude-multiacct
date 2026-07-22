@@ -378,3 +378,30 @@ describe("nodeCallbackServer — real loopback listener", () => {
 		}
 	});
 });
+
+describe("createLoginManager over the REAL loopback listener (no deadlock)", () => {
+	it("start() → browser hits the real loopback redirect → done, no hang", async () => {
+		// Regression pin: the callback closes the listener from INSIDE its own
+		// request handler. If close() awaited the connection drain, this hangs
+		// (the drain waits for the response, the response waits for the handler,
+		// the handler waits for close). The 10s test timeout would trip.
+		const mgr = createLoginManager(happyDeps({ openCallbackServer: nodeCallbackServer() }));
+		const { loginId, authorizeUrl } = await mgr.start();
+		const url = new URL(authorizeUrl);
+		const redirect = url.searchParams.get("redirect_uri") ?? "";
+		const state = url.searchParams.get("state") ?? "";
+
+		// The loopback listener is really up (404 on an unknown path).
+		const base = redirect.replace(/\/callback$/u, "");
+		const probe = await fetch(`${base}/nope`);
+		expect(probe.status).toBe(404);
+
+		// The browser redirect lands with the synthetic code + minted state.
+		const page = await fetch(`${redirect}?code=SYNTH&state=${encodeURIComponent(state)}`);
+		expect(page.status).toBe(200);
+		expect(await page.text()).toContain("Signed in");
+
+		const view = mgr.getStatus(loginId);
+		expect(view).toMatchObject({ ok: true, status: "done" });
+	});
+});
