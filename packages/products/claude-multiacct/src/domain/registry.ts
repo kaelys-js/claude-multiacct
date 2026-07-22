@@ -37,7 +37,12 @@
  */
 
 import * as v from "valibot";
-import { type Account, AccountSchema, type AccountUuid } from "./account.ts";
+import {
+	type Account,
+	AccountSchema,
+	type AccountUuid,
+	type ClaudeAccountUuid,
+} from "./account.ts";
 
 /**
  * `AccountRegistry` — the validated set of pooled accounts.
@@ -58,6 +63,17 @@ export const AccountRegistrySchema = v.pipe(
 		(r) => new Set(r.accounts.map((a) => a.label)).size === r.accounts.length,
 		"AccountRegistry account labels must be unique",
 	),
+	v.check((r) => {
+		// Real Claude account uuids must be unique — one real account is one pool
+		// entry. Only entries that HAVE an accountUuid are policed (pre-migration
+		// entries may lack it); among those present, a collision means the same
+		// account was imported twice (the exact bug this model fixes) and must
+		// fail loud rather than surface a duplicated identity in the picker.
+		const present = r.accounts
+			.map((a) => a.accountUuid)
+			.filter((id): id is ClaudeAccountUuid => id !== undefined);
+		return new Set(present).size === present.length;
+	}, "AccountRegistry account accountUuids must be unique"),
 );
 export type AccountRegistry = v.InferOutput<typeof AccountRegistrySchema>;
 
@@ -140,4 +156,48 @@ export function getPooled(
  */
 export function byUuid(registry: AccountRegistry, uuid: AccountUuid): Account | undefined {
 	return registry.accounts.find((a) => a.uuid === uuid);
+}
+
+/**
+ * Look an account up by its real Claude account uuid. Absent → `undefined`.
+ * This is the dedup + active-resolution key: `accountUuid` is stable across
+ * token rotation and identical for every token of the same account.
+ *
+ * @param {AccountRegistry} registry - A validated registry.
+ * @param {ClaudeAccountUuid} accountUuid - The real Claude account uuid.
+ * @returns {Account | undefined} The matching account, or `undefined`.
+ */
+export function byAccountUuid(
+	registry: AccountRegistry,
+	accountUuid: ClaudeAccountUuid,
+): Account | undefined {
+	return registry.accounts.find((a) => a.accountUuid === accountUuid);
+}
+
+/**
+ * Resolve the active account by Claude.app's plaintext `lastKnownAccountUuid`.
+ *
+ * `lastKnownAccountUuid` is the real account uuid Claude.app records for the
+ * account it is CURRENTLY signed into, written in cleartext to its config.json.
+ * Matching it against each pooled account's `accountUuid` is the authoritative,
+ * keychain-free way to know which account is live — strictly better than hashing
+ * the legacy-cache token slot, which required decrypting the keychain and broke
+ * when the cache held several tokens for one account.
+ *
+ * Returns `undefined` when the marker is absent or names no pooled account, so
+ * the caller applies its own fallback (companion file, then first account)
+ * rather than this function inventing a guess.
+ *
+ * @param {AccountRegistry} registry - A validated registry.
+ * @param {string | undefined} lastKnownAccountUuid - Claude.app's plaintext marker.
+ * @returns {Account | undefined} The matching account, or `undefined`.
+ */
+export function resolveActiveByLastKnown(
+	registry: AccountRegistry,
+	lastKnownAccountUuid: string | undefined,
+): Account | undefined {
+	if (lastKnownAccountUuid === undefined) {
+		return undefined;
+	}
+	return registry.accounts.find((a) => a.accountUuid === lastKnownAccountUuid);
 }

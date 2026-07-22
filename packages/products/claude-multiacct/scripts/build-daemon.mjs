@@ -44,6 +44,11 @@ import {
 	defaultActiveAccountPath,
 	readActiveUuid,
 } from "./src/active-token-agent/active-account-file.ts";
+import {
+	defaultClaudeConfigJsonPath,
+	readLastKnownAccountUuid,
+} from "./src/discovery/claude-config.ts";
+import { resolveActiveByLastKnown } from "./src/domain/registry.ts";
 
 if (process.env.CMA_DAEMON_SELFTEST === "1") {
 	process.stdout.write(\`cma-daemon selftest OK \${PACKAGE_VERSION}\\n\`);
@@ -123,29 +128,30 @@ const listAccounts = async () => {
 	return reg?.accounts ?? [];
 };
 
-// Resolve the account Claude.app is currently authenticated as by reading the
-// gui-session companion's published answer, NOT the keychain. The daemon runs
-// with SessionCreate=true (see launch/launchd-plist.ts) so its own \`security\`
-// reads cannot see the login keychain — neither the \`Claude Safe Storage\` key
-// nor the \`com.claude-multiacct.tokens\` pool items. The
-// \`com.claude-multiacct.active-token\` companion (RunAtLoad + WatchPaths on
-// Claude's config.json, NO SessionCreate) does those reads in the user's aqua
-// session and writes the resolved uuid to \`active-account.json\`. Here we just
-// read that file.
+// Resolve the account Claude.app is currently authenticated as. The PREFERRED
+// signal is Claude.app's own plaintext \`lastKnownAccountUuid\` in config.json —
+// the real account uuid of the account it is signed into RIGHT NOW. It is
+// cleartext, so even this keychain-blind daemon (SessionCreate=true) reads it
+// directly, and it is matched against each pooled account's stored
+// \`accountUuid\`. That is strictly better than the old legacy-cache-token-sha
+// guess, which needed the keychain and broke when the cache held several tokens
+// for one account.
 //
-// Fail-closed: readActiveUuid returns undefined for a missing/torn/unresolved
-// file, and we then fall back to the first account in registry order — the same
-// default getPrimary applies when the live token can't be matched. So a missing
-// companion degrades to the pre-fix behaviour rather than mis-marking a row.
+// Fallback order (each fails closed):
+//   1. lastKnownAccountUuid → matching account.accountUuid.
+//   2. the gui-session companion's published active-account.json (token-sha
+//      match), when it still names a pooled account.
+//   3. first account in registry order.
 const activeAccountFilePath = defaultActiveAccountPath();
+const claudeConfigPath = defaultClaudeConfigJsonPath();
 const activeAccountUuid = async () => {
 	try {
 		const reg = await readRegistry();
 		if (reg === undefined || reg.accounts.length === 0) return undefined;
+		const lastKnown = await readLastKnownAccountUuid(claudeConfigPath);
+		const byLastKnown = resolveActiveByLastKnown(reg, lastKnown);
+		if (byLastKnown !== undefined) return byLastKnown.uuid;
 		const published = await readActiveUuid(activeAccountFilePath, { readFile: (p) => readFile(p, "utf8") });
-		// Only trust a published uuid that still names a pooled account; a stale
-		// file naming a removed account must not win over the first-account
-		// fallback.
 		if (published !== undefined && reg.accounts.some((a) => a.uuid === published)) {
 			return published;
 		}
@@ -199,12 +205,10 @@ const flag = flagOn(process.env);
 		}});
 		const outcome = await Promise.race([discoverAccounts(ports), timeout]);
 		try {
-			process.stderr.write("[discovery] scanned mainApp=" + outcome.scanned.mainApp
-				+ " cloneApps=" + outcome.scanned.cloneApps
-				+ " cliCredentials=" + outcome.scanned.cliCredentials
-				+ " registered=" + outcome.registered.length
-				+ " skipped=" + outcome.skippedAlreadyRegistered
-				+ " failed=" + outcome.failed.length + "\\n");
+			process.stderr.write("[discovery] detected=" + (outcome.detected ? outcome.detected.accountUuid : "none")
+				+ " registered=" + (outcome.registered ? outcome.registered.label : "no")
+				+ " alreadyRegistered=" + outcome.alreadyRegistered
+				+ " failed=" + (outcome.failed ? outcome.failed.kind : "no") + "\\n");
 		} catch {}
 		bootLog("discover-done");
 	} catch (error) {
