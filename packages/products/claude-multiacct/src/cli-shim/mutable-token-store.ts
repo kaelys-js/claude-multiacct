@@ -45,8 +45,42 @@ export class SecurityCliMutableTokenStore implements MutableTokenStore {
 				"-a",
 				accountUuid,
 			]);
-		} catch {
-			// Missing entry → no-op (idempotent per MutableTokenStore contract).
+		} catch (error) {
+			// Distinguish "already gone" from "could not touch the keychain".
+			//
+			//   - A missing item exits 44 (errSecItemNotFound): idempotent no-op
+			//     per the MutableTokenStore contract.
+			//   - Anything else (a locked keychain, a denied ACL) must PROPAGATE.
+			//     `removeAccount` deletes the token before the registry write, so
+			//     a swallowed failure here would leave the registry entry dropped
+			//     while the credential lingers — the opposite of fail-closed. Let
+			//     it throw: `removeAccount` maps it to `token_store_failed` and the
+			//     registry stays intact.
+			if (isItemNotFound(error)) {
+				return;
+			}
+			throw new Error(`TokenStore: keychain delete failed for account ${accountUuid}`, {
+				cause: error,
+			});
 		}
 	}
+}
+
+/**
+ * Is this `security` failure a "no such keychain item" (exit 44 /
+ * errSecItemNotFound)? Match on the exit code first, then the CLI's message as
+ * a fallback, so an already-removed token reads as an idempotent success while
+ * a locked keychain (a different code) does not.
+ *
+ * @param {unknown} error - The value thrown by the injected `exec`.
+ * @returns {boolean} True iff the error means the item was simply absent.
+ */
+function isItemNotFound(error: unknown): boolean {
+	const { code } = error as { code?: number | string };
+	if (code === 44 || code === "44") {
+		return true;
+	}
+	const message = error instanceof Error ? error.message : String(error);
+	const stderr = String((error as { stderr?: unknown }).stderr ?? "");
+	return /could not be found|SecItemNotFound/iu.test(`${message} ${stderr}`);
 }

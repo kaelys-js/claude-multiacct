@@ -67,6 +67,17 @@ describe("bridge-client", () => {
 		expect(calls[0]?.init?.body).toBe(JSON.stringify({ accountUuid: "u" }));
 	});
 
+	it("del issues a DELETE with the secret header and no body (account-remove path)", async () => {
+		const { fn, calls } = makeFetch([{ status: 200, body: { ok: true, removed: { label: "x" } } }]);
+		const client = createBridgeClient({ fetchImpl: fn, extensionUrl: extUrl, config: seeded });
+		const result = await client.del("/accounts/abc");
+		expect(result).toEqual({ ok: true, data: { ok: true, removed: { label: "x" } } });
+		expect(calls[0]?.url).toBe("http://127.0.0.1:9000/accounts/abc");
+		expect(calls[0]?.init?.method).toBe("DELETE");
+		expect(calls[0]?.init?.body).toBeUndefined();
+		expect(calls[0]?.init?.headers?.[BRIDGE_SECRET_HEADER]).toBe("s1");
+	});
+
 	it("refetches bridge.json on 401 and recovers with the rotated secret", async () => {
 		const rotated = { port: 9000, secret: "s2", version: "v" };
 		const { fn, calls } = makeFetch([
