@@ -351,6 +351,23 @@ describe("removeAccount — flag gate + atomicity", () => {
 		expect(detail).toContain("primary boom");
 		expect(detail).toContain("token restore ALSO failed");
 	});
+
+	it("snapshot get FAILURE (keychain-blind daemon) is tolerated — removal still succeeds", async () => {
+		// Reproduces the live 500: the daemon runs SessionCreate=true and cannot
+		// read the token store, so the rollback SNAPSHOT `get` rejects. That must
+		// NOT abort the removal — the snapshot is rollback-only, so a get-failure
+		// is treated as "no snapshot" and the delete + registry write still run.
+		// Before the fix this threw out of removeAccount and the DELETE route 500'd.
+		const store = new InMemoryMutableTokenStore();
+		await store.put(coerceUuid(UUID_B), "keychain:b");
+		vi.spyOn(store, "get").mockRejectedValue(new Error("User interaction is not allowed"));
+		const ports = makePorts({ registry: baseRegistry(), tokenStore: store });
+		const r = await removeAccount({ selector: { label: "Work" }, ports, overrideFlag: true });
+		assertOk(r);
+		// Registry was trimmed (write happened) and the token was deleted.
+		expect(ports.writes).toHaveLength(1);
+		expect(store.snapshot()).toEqual({});
+	});
 });
 
 const SESSION_1 = "aaaaaaa1-1111-4111-8111-111111111111";

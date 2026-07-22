@@ -12,9 +12,9 @@
  *   - `CMA_DAEMON_SELFTEST=1` → print `cma-daemon selftest OK <version>`
  *     and exit 0. Zero disk touch, no socket bind. This is what the build
  *     test execs post-bundle to prove the emitted artifact is runnable.
- *   - Otherwise → build real ports (readRegistry, FsChoiceStore,
- *     SecurityCliTokenStore, verifyToken bound with a spawn-shaped exec),
- *     call `start()`, print `{ready:true,port,pid}` on stdout, and wait.
+ *   - Otherwise → build real ports (readRegistry, FsChoiceStore, the encrypted
+ *     FileTokenStore, verifyToken bound with a spawn-shaped exec), call
+ *     `start()`, print `{ready:true,port,pid}` on stdout, and wait.
  *
  * @module
  */
@@ -34,8 +34,7 @@ import { start } from "./src/http-bridge/server.ts";
 import { makeAddAccount, makeRemoveAccount } from "./src/http-bridge/account-admin.ts";
 import { FsChoiceStore } from "./src/cli-shim/choice-store.ts";
 import { readRegistry, defaultRegistryPath } from "./src/cli-shim/registry-store.ts";
-import { SecurityCliTokenStore } from "./src/cli-shim/token-store.ts";
-import { SecurityCliMutableTokenStore } from "./src/cli-shim/mutable-token-store.ts";
+import { FileTokenStore } from "./src/oauth/file-token-store.ts";
 import { signalSwap } from "./src/cli-shim/session-pid.ts";
 import { AtomicRegistryWriter, nodeRegistryFsPort } from "./src/registry/registry-writer.ts";
 import { verifyToken } from "./src/oauth/verify.ts";
@@ -71,11 +70,13 @@ if (process.env.CMA_DAEMON_SELFTEST === "1") {
 //      process.exit(1). Without this a rejected top-level await under
 //      launchd (KeepAlive=true) just respawns silently.
 //
-// The keychain-touching code (SecurityCliTokenStore.get) MUST stay lazy —
-// only invoked from a /verify request, never at boot. Under a non-GUI
-// launchd context the \`security\` CLI can block on an invisible auth
-// prompt, which is the leading hypothesis for the observed hang. The
-// construction below only stores the exec fn.
+// Per-account tokens no longer live in the login keychain: they live in the
+// encrypted FileTokenStore (see construct-stores below), which needs no
+// \`security\` call, so the daemon adds/reads/deletes tokens directly despite
+// being keychain-blind under SessionCreate=true. The only remaining keychain
+// reads are the discovery path's \`Claude Safe Storage\` decrypt-key + config
+// probes; those are already timeout-bounded and fire-and-forget, never on the
+// boot-blocking path.
 function bootLog(step) {
 	try { process.stderr.write(\`[daemon-boot] step=\${step}\\n\`); } catch {}
 }
@@ -108,8 +109,15 @@ const claudeRealPath = process.env.CMA_CLAUDE_REAL_PATH
 	?? "/Applications/Claude.app/Contents/Resources/app.asar.unpacked/claude-code/claude/claude.app/Contents/MacOS/claude.real";
 
 bootLog("construct-stores");
-// Neither constructor touches the keychain — see the block comment above.
-const tokenStore = new SecurityCliTokenStore();
+// Per-account OAuth tokens live in the ENCRYPTED FILE store, not the login
+// keychain. The daemon runs under launchd \`SessionCreate=true\` and is
+// therefore keychain-blind — a \`security\` read/write/delete either fails
+// ("User interaction is not allowed") or hangs on an invisible ACL prompt.
+// FileTokenStore (AES-256-GCM, 0600, under ~/.config/claude-multiacct/tokens/)
+// needs no keychain call, so the daemon can add, read, and delete tokens
+// directly. The GUI-session shim reads the SAME store. Construction only
+// touches disk lazily (first get/put), so it does not lengthen boot.
+const tokenStore = new FileTokenStore();
 const choiceStore = new FsChoiceStore();
 
 const verifyAccount = async (uuid) => {
@@ -168,16 +176,19 @@ const activeAccountUuid = async () => {
 };
 
 // Pool-mutation ports for POST /accounts + DELETE /accounts/:uuid. Same
-// adapters the CLI's makeCliPorts uses (keychain MutableTokenStore + atomic
+// adapters the CLI's makeCliPorts uses (encrypted FileTokenStore + atomic
 // registry writer + the real verify subprocess), so the bridge provisions and
-// removes accounts exactly the way the cma account add/remove CLI does.
-// Construction touches neither the keychain nor disk — the keychain
-// reads/writes happen only per add/remove request, keeping the boot path free
-// of a blocking security-CLI prompt (see the lazy-keychain note above).
+// removes accounts exactly the way the cma account add/remove CLI does. Token
+// store/read/delete go through the FILE store, never the keychain, so a
+// keychain-blind daemon completes both add and remove.
 bootLog("construct-cliports");
 const registryPath = defaultRegistryPath();
 const cliPorts = {
-	tokenStore: new SecurityCliMutableTokenStore(),
+	// Same keychain-blind-safe FileTokenStore instance the verify/discovery
+	// path uses, so add/remove/read all agree on one AES-256-GCM key + token
+	// tree. POST /accounts + DELETE /accounts/:uuid now store, read, and delete
+	// tokens WITHOUT any keychain call.
+	tokenStore,
 	registryWriter: new AtomicRegistryWriter({ path: registryPath, fs: nodeRegistryFsPort() }),
 	readRegistry: () => readRegistry(registryPath),
 	verify: (token) => verifyToken({ token, claudeRealPath, exec: verifyExec }),

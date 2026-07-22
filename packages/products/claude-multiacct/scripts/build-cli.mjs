@@ -39,7 +39,7 @@ import { PACKAGE_VERSION } from "./src/index.ts";
 import { dispatchCli } from "./src/cli/dispatch.ts";
 import { makeRealInstallPorts, makeRealUninstallPorts, makeRealLaunchPorts, makeRealMigratePorts, makeRealInstallerStatusPort } from "./src/cli/wiring.ts";
 import { AtomicRegistryWriter, nodeRegistryFsPort } from "./src/registry/registry-writer.ts";
-import { SecurityCliMutableTokenStore } from "./src/cli-shim/mutable-token-store.ts";
+import { FileTokenStore } from "./src/oauth/file-token-store.ts";
 import { readRegistry, defaultRegistryPath } from "./src/cli-shim/registry-store.ts";
 
 const execFileP = promisify(execFile);
@@ -116,7 +116,10 @@ const io = {
 	makeCliPorts: async () => {
 		const registryPath = defaultRegistryPath();
 		return {
-			tokenStore: new SecurityCliMutableTokenStore(),
+			// The encrypted file store the daemon + shim also use, so cma account
+			// add/remove writes tokens where the keychain-blind daemon can read
+			// and delete them (and vice-versa).
+			tokenStore: new FileTokenStore(),
 			registryWriter: new AtomicRegistryWriter({
 				path: registryPath,
 				fs: nodeRegistryFsPort(),
