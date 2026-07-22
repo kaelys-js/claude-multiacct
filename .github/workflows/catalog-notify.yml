@@ -49,6 +49,7 @@ jobs:
         id: pick
         env:
           BILLING_READ_TOKEN: ${{ secrets.BILLING_READ_TOKEN }}
+          IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
         run: |
           set -uo pipefail
           SELF_HOSTED='["self-hosted","kaelys-mac-mini"]'
@@ -60,9 +61,13 @@ jobs:
             } >> "$GITHUB_OUTPUT"
             echo "selected runner: $1 (hosted_ok=$2)"
           }
-          if [ -z "${BILLING_READ_TOKEN:-}" ]; then
-            echo 'no BILLING_READ_TOKEN secret; failing safe to self-hosted'
-            emit "$SELF_HOSTED" false
+          # Fork PRs cannot use self-hosted runners (GitHub refuses to run fork
+          # code on them) and never receive repo secrets, so GitHub-hosted
+          # ubuntu is both the only option and the secure one. Short-circuit to
+          # hosted before the billing call — also covers a missing token.
+          if [ "${IS_FORK:-}" = 'true' ] || [ -z "${BILLING_READ_TOKEN:-}" ]; then
+            echo 'fork PR or no billing token; using GitHub-hosted ubuntu-latest'
+            emit "$HOSTED" true
             exit 0
           fi
           year="$(date -u +%Y)"
