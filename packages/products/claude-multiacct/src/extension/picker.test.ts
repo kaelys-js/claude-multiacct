@@ -1,3 +1,4 @@
+/* oxlint-disable vitest/no-conditional-in-test */
 /**
  * Intent: the picker is a light-DOM Claude-styled button + portal menu (see
  * `picker.ts` docstring for why light DOM won over shadow DOM). Every test
@@ -92,6 +93,70 @@ function getAddRow(doc: Document): HTMLElement {
 function getRemoveButtons(doc: Document): HTMLElement[] {
 	return [...getMenu(doc).querySelectorAll<HTMLElement>("[data-cma-remove]")];
 }
+
+function q(doc: Document, sel: string): HTMLElement | null {
+	return getMenu(doc).querySelector<HTMLElement>(sel);
+}
+
+// A path-dispatching bridge client for the OAuth login flow. `statuses` is the
+// queue of `status` values the status endpoint returns (last one repeats);
+// `accountsAfter` is what `/accounts` reports after a successful login.
+function loginClient(cfg: {
+	startResult?: BridgeResult<unknown>;
+	statuses?: string[];
+	accountsAfter?: PickerAccount[];
+	addTokenResult?: BridgeResult<unknown>;
+}): { client: BridgeClient; posts: Array<{ path: string; body: unknown }> } {
+	const posts: Array<{ path: string; body: unknown }> = [];
+	const statuses = [...(cfg.statuses ?? ["done"])];
+	const get = vi.fn<GetFn>((path: string) => {
+		if (path.startsWith("/accounts/login/status/")) {
+			const status = statuses.length > 1 ? statuses.shift() : statuses[0];
+			return Promise.resolve({ ok: true, data: { ok: true, status } });
+		}
+		return Promise.resolve({
+			ok: true,
+			data: { ok: true, accounts: cfg.accountsAfter ?? ACCOUNTS },
+		});
+	});
+	const post = vi.fn<PostFn>((path: string, body: unknown) => {
+		posts.push({ path, body });
+		if (path === "/accounts/login/start") {
+			return Promise.resolve(
+				cfg.startResult ?? {
+					ok: true,
+					data: {
+						ok: true,
+						loginId: "login-1",
+						authorizeUrl: "https://claude.com/cai/oauth/authorize?state=s&code_challenge=c",
+					},
+				},
+			);
+		}
+		if (path.startsWith("/accounts/login/cancel/")) {
+			return Promise.resolve({ ok: true, data: { ok: true } });
+		}
+		return Promise.resolve(cfg.addTokenResult ?? { ok: true, data: { ok: true } });
+	});
+	return {
+		client: {
+			get,
+			post,
+			del: vi.fn<DelFn>(() => Promise.resolve({ ok: true, data: { ok: true } })),
+		} as unknown as BridgeClient,
+		posts,
+	};
+}
+
+// Sleep stub that resolves immediately so the poll loop advances by microtask.
+const noSleep = (): Promise<void> => Promise.resolve();
+
+// Sleep stub that never resolves — parks the poll at its first await so the
+// "waiting" UI stays put while a test inspects or cancels it.
+const parkSleep = (): Promise<void> =>
+	new Promise<void>(() => {
+		/* never resolves — parks the poll */
+	});
 
 const CAROL: PickerAccount = { uuid: "cccccccc-cccc-4ccc-cccc-cccccccccccc", label: "Carol" };
 
@@ -544,79 +609,254 @@ describe("mountPicker", () => {
 		expect(getItems(doc)).toHaveLength(ACCOUNTS.length);
 	});
 
-	it("Add account collects label+token, POSTs /accounts, then refetches the pool", async () => {
-		const client: BridgeClient = {
-			get: vi.fn<GetFn>(() =>
-				Promise.resolve({ ok: true, data: { ok: true, accounts: [...ACCOUNTS, CAROL] } }),
-			),
-			post: vi.fn<PostFn>(() => Promise.resolve({ ok: true, data: { ok: true } })),
-			del: vi.fn<DelFn>(() => Promise.resolve({ ok: true, data: { ok: true } })),
-		} as unknown as BridgeClient;
-		const prompt = vi
-			.fn<(m: string) => string | null>()
-			.mockReturnValueOnce("  Carol  ") // label (trimmed)
-			.mockReturnValueOnce(" sk-ant-oat-tok "); // token (trimmed)
-		mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS, prompt });
+	it("Add account starts an OAuth login: opens the authorize URL, shows a waiting state, then refetches on done", async () => {
+		const { client, posts } = loginClient({
+			statuses: ["pending", "done"],
+			accountsAfter: [...ACCOUNTS, CAROL],
+		});
+		const openUrl = vi.fn<(u: string) => void>();
+		mountPicker({
+			host: body,
+			client,
+			sessionUuid: SESSION,
+			doc,
+			accounts: ACCOUNTS,
+			openUrl,
+			sleep: noSleep,
+		});
 		getButton(doc).click();
 		getAddRow(doc).click();
 		await tick();
-		expect(client.post).toHaveBeenCalledWith("/accounts", {
-			label: "Carol",
-			token: "sk-ant-oat-tok",
-		});
-		// Refetch replaced the pool → Carol's row is now present.
-		expect(client.get).toHaveBeenCalledWith("/accounts");
+		// Started the login and opened the exact authorize URL in the browser.
+		expect(posts[0]?.path).toBe("/accounts/login/start");
+		expect(openUrl).toHaveBeenCalledWith(
+			"https://claude.com/cai/oauth/authorize?state=s&code_challenge=c",
+		);
+		// It never falls back to the dead window.prompt or a token POST.
+		expect(posts.some((p) => p.path === "/accounts")).toBe(false);
+		// Poll ran to `done` and the pool was refetched → Carol appears.
+		await tick();
+		await tick();
 		expect(getItems(doc).map((i) => i.dataset.uuid)).toContain(CAROL.uuid);
 	});
 
-	it("Add account aborts without a POST when the label prompt is cancelled", async () => {
-		const client = mockClientWithDel();
-		const prompt = vi.fn<(m: string) => string | null>().mockReturnValue(null);
-		mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS, prompt });
+	it("shows a waiting row with a cancel control while the sign-in is in flight", async () => {
+		const { client } = loginClient({ statuses: ["pending"] });
+		mountPicker({
+			host: body,
+			client,
+			sessionUuid: SESSION,
+			doc,
+			accounts: ACCOUNTS,
+			openUrl: vi.fn<(url: string) => void>(),
+			sleep: parkSleep, // poll parks so the waiting UI stays put
+		});
 		getButton(doc).click();
 		getAddRow(doc).click();
 		await tick();
-		expect(client.post).not.toHaveBeenCalled();
+		expect(q(doc, "[data-cma-login-waiting]")).not.toBeNull();
+		expect(q(doc, "[data-cma-login-cancel]")).not.toBeNull();
 	});
 
-	it("Add account aborts when the token prompt is blank (no empty-token write)", async () => {
-		const client = mockClientWithDel();
-		const prompt = vi
-			.fn<(m: string) => string | null>()
-			.mockReturnValueOnce("Carol")
-			.mockReturnValueOnce("   ");
-		mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS, prompt });
+	it("surfaces an error in-DOM when the daemon refuses to start the login", async () => {
+		const { client } = loginClient({
+			startResult: { ok: false, kind: "unexpected", detail: "flag off" },
+		});
+		mountPicker({
+			host: body,
+			client,
+			sessionUuid: SESSION,
+			doc,
+			accounts: ACCOUNTS,
+			openUrl: vi.fn<(url: string) => void>(),
+			sleep: noSleep,
+		});
 		getButton(doc).click();
 		getAddRow(doc).click();
 		await tick();
-		expect(client.post).not.toHaveBeenCalled();
+		expect(q(doc, "[data-cma-add-error]")?.textContent).toContain("Could not start sign-in");
 	});
 
-	it("Add account logs a warning and does not refetch when the POST fails", async () => {
-		const get = vi.fn<GetFn>(() =>
-			Promise.resolve({ ok: true, data: { ok: true, accounts: ACCOUNTS } }),
-		);
-		const client: BridgeClient = {
-			get,
-			post: vi.fn<PostFn>(() => Promise.resolve({ ok: false, kind: "unexpected", detail: "409" })),
+	it("cancel-sign-in tells the daemon to close the listener and returns to idle", async () => {
+		const { client, posts } = loginClient({ statuses: ["pending"] });
+		mountPicker({
+			host: body,
+			client,
+			sessionUuid: SESSION,
+			doc,
+			accounts: ACCOUNTS,
+			openUrl: vi.fn<(url: string) => void>(),
+			sleep: parkSleep,
+		});
+		getButton(doc).click();
+		getAddRow(doc).click();
+		await tick();
+		q(doc, "[data-cma-login-cancel]")?.click();
+		await tick();
+		expect(posts.some((p) => p.path.startsWith("/accounts/login/cancel/"))).toBe(true);
+		// Back to the idle "+ Add account" entry.
+		expect(q(doc, "[data-cma-add-account]")).not.toBeNull();
+		expect(q(doc, "[data-cma-login-waiting]")).toBeNull();
+	});
+
+	it("shows an error when the poll reports the sign-in failed", async () => {
+		const client = {
+			get: vi.fn<GetFn>((path: string) =>
+				path.startsWith("/accounts/login/status/")
+					? Promise.resolve({
+							ok: true,
+							data: { ok: true, status: "error", detail: "token exchange failed" },
+						})
+					: Promise.resolve({ ok: true, data: { ok: true, accounts: ACCOUNTS } }),
+			),
+			post: vi.fn<PostFn>(() =>
+				Promise.resolve({
+					ok: true,
+					data: { ok: true, loginId: "l1", authorizeUrl: "https://claude.com/x" },
+				}),
+			),
 			del: vi.fn<DelFn>(),
 		} as unknown as BridgeClient;
-		const prompt = vi
-			.fn<(m: string) => string | null>()
-			.mockReturnValueOnce("Carol")
-			.mockReturnValueOnce("tok");
+		mountPicker({
+			host: body,
+			client,
+			sessionUuid: SESSION,
+			doc,
+			accounts: ACCOUNTS,
+			openUrl: vi.fn<(url: string) => void>(),
+			sleep: noSleep,
+		});
+		getButton(doc).click();
+		getAddRow(doc).click();
+		await tick();
+		await tick();
+		expect(q(doc, "[data-cma-add-error]")?.textContent).toContain("token exchange failed");
+	});
+
+	it("shows an error when the status poll request itself fails", async () => {
+		const client = {
+			get: vi.fn<GetFn>((path: string) =>
+				path.startsWith("/accounts/login/status/")
+					? Promise.resolve({ ok: false, kind: "network", detail: "x" })
+					: Promise.resolve({ ok: true, data: { ok: true, accounts: ACCOUNTS } }),
+			),
+			post: vi.fn<PostFn>(() =>
+				Promise.resolve({
+					ok: true,
+					data: { ok: true, loginId: "l1", authorizeUrl: "https://claude.com/x" },
+				}),
+			),
+			del: vi.fn<DelFn>(),
+		} as unknown as BridgeClient;
+		mountPicker({
+			host: body,
+			client,
+			sessionUuid: SESSION,
+			doc,
+			accounts: ACCOUNTS,
+			openUrl: vi.fn<(url: string) => void>(),
+			sleep: noSleep,
+		});
+		getButton(doc).click();
+		getAddRow(doc).click();
+		await tick();
+		await tick();
+		expect(q(doc, "[data-cma-add-error]")?.textContent).toContain("Lost contact");
+	});
+
+	it("times out in-DOM when no terminal status arrives before the deadline", async () => {
+		const { client } = loginClient({ statuses: ["pending"] });
+		mountPicker({
+			host: body,
+			client,
+			sessionUuid: SESSION,
+			doc,
+			accounts: ACCOUNTS,
+			openUrl: vi.fn<(url: string) => void>(),
+			sleep: noSleep,
+			pollTimeoutMs: 0, // deadline already past → immediate timeout branch
+		});
+		getButton(doc).click();
+		getAddRow(doc).click();
+		await tick();
+		expect(q(doc, "[data-cma-add-error]")?.textContent).toContain("timed out");
+	});
+
+	it("recovers from a throw while starting the login (actionRow try/catch)", async () => {
+		const client = {
+			get: vi.fn<GetFn>(() =>
+				Promise.resolve({ ok: true, data: { ok: true, accounts: ACCOUNTS } }),
+			),
+			post: vi.fn<PostFn>(() => Promise.reject(new Error("start exploded"))),
+			del: vi.fn<DelFn>(),
+		} as unknown as BridgeClient;
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 		try {
-			mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS, prompt });
+			mountPicker({
+				host: body,
+				client,
+				sessionUuid: SESSION,
+				doc,
+				accounts: ACCOUNTS,
+				openUrl: vi.fn<(url: string) => void>(),
+				sleep: noSleep,
+			});
 			getButton(doc).click();
 			getAddRow(doc).click();
 			await tick();
-			expect(warn).toHaveBeenCalledWith(
-				expect.stringContaining("add account failed"),
-				"unexpected",
-				"409",
-			);
-			expect(get).not.toHaveBeenCalled();
+			expect(q(doc, "[data-cma-add-error]")?.textContent).toContain("Could not start sign-in");
+			expect(warn).toHaveBeenCalledWith("[cma-extension] start login failed:", expect.anything());
+		} finally {
+			warn.mockRestore();
+		}
+	});
+
+	it("token fallback: reveals an in-DOM form, submits a pasted token to /accounts, refetches", async () => {
+		const { client, posts } = loginClient({ accountsAfter: [...ACCOUNTS, CAROL] });
+		mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS });
+		getButton(doc).click();
+		q(doc, "[data-cma-add-token]")?.click();
+		const labelInput = q(doc, "[data-cma-token-label]") as HTMLInputElement;
+		const tokenInput = q(doc, "[data-cma-token-input]") as HTMLInputElement;
+		expect(labelInput).not.toBeNull();
+		labelInput.value = "Carol";
+		tokenInput.value = "  sk-ant-oat-tok  ";
+		q(doc, "[data-cma-token-submit]")?.click();
+		await tick();
+		const addPost = posts.find((p) => p.path === "/accounts");
+		expect(addPost?.body).toStrictEqual({ label: "Carol", token: "sk-ant-oat-tok" });
+		expect(getItems(doc).map((i) => i.dataset.uuid)).toContain(CAROL.uuid);
+	});
+
+	it("token fallback: empty token shows an error and posts nothing", async () => {
+		const { client, posts } = loginClient({});
+		mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS });
+		getButton(doc).click();
+		q(doc, "[data-cma-add-token]")?.click();
+		const tokenInput = q(doc, "[data-cma-token-input]") as HTMLInputElement;
+		tokenInput.value = "   ";
+		q(doc, "[data-cma-token-submit]")?.click();
+		await tick();
+		expect(posts.some((p) => p.path === "/accounts")).toBe(false);
+		expect(q(doc, "[data-cma-add-error]")?.textContent).toContain("Paste a token first");
+	});
+
+	it("token fallback: a rejected token surfaces an error and derives a default label when none given", async () => {
+		const { client, posts } = loginClient({
+			addTokenResult: { ok: false, kind: "unexpected", detail: "bad token" },
+		});
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS });
+			getButton(doc).click();
+			q(doc, "[data-cma-add-token]")?.click();
+			(q(doc, "[data-cma-token-input]") as HTMLInputElement).value = "sk-ant-tok";
+			q(doc, "[data-cma-token-submit]")?.click();
+			await tick();
+			const addPost = posts.find((p) => p.path === "/accounts");
+			expect(addPost).toBeDefined();
+			expect((addPost!.body as { label: string }).label).toMatch(/^Pasted \d{4}-/u);
+			expect(q(doc, "[data-cma-add-error]")?.textContent).toContain("Token was rejected");
 		} finally {
 			warn.mockRestore();
 		}
@@ -702,7 +942,7 @@ describe("mountPicker", () => {
 		}
 	});
 
-	it("refetch after a mutation swallows a failed /accounts response (menu unchanged)", async () => {
+	it("refetch after the token fallback swallows a failed /accounts response (menu unchanged)", async () => {
 		// The refetch GET fails; the menu must keep its current rows rather than
 		// blanking. Exercises the `!res.ok` guard in refetchAccounts.
 		const client: BridgeClient = {
@@ -710,13 +950,11 @@ describe("mountPicker", () => {
 			post: vi.fn<PostFn>(() => Promise.resolve({ ok: true, data: { ok: true } })),
 			del: vi.fn<DelFn>(),
 		} as unknown as BridgeClient;
-		const prompt = vi
-			.fn<(m: string) => string | null>()
-			.mockReturnValueOnce("Carol")
-			.mockReturnValueOnce("tok");
-		mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS, prompt });
+		mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS });
 		getButton(doc).click();
-		getAddRow(doc).click();
+		q(doc, "[data-cma-add-token]")?.click();
+		(q(doc, "[data-cma-token-input]") as HTMLInputElement).value = "tok";
+		q(doc, "[data-cma-token-submit]")?.click();
 		await tick();
 		// POST succeeded, refetch failed → rows are still the original two.
 		expect(getItems(doc)).toHaveLength(ACCOUNTS.length);
@@ -730,13 +968,11 @@ describe("mountPicker", () => {
 			post: vi.fn<PostFn>(() => Promise.resolve({ ok: true, data: { ok: true } })),
 			del: vi.fn<DelFn>(),
 		} as unknown as BridgeClient;
-		const prompt = vi
-			.fn<(m: string) => string | null>()
-			.mockReturnValueOnce("Carol")
-			.mockReturnValueOnce("tok");
-		mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS, prompt });
+		mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS });
 		getButton(doc).click();
-		getAddRow(doc).click();
+		q(doc, "[data-cma-add-token]")?.click();
+		(q(doc, "[data-cma-token-input]") as HTMLInputElement).value = "tok";
+		q(doc, "[data-cma-token-submit]")?.click();
 		await tick();
 		expect(getItems(doc)).toHaveLength(ACCOUNTS.length);
 	});
@@ -753,20 +989,17 @@ describe("mountPicker", () => {
 			post: vi.fn<PostFn>(() => Promise.resolve({ ok: true, data: { ok: true } })),
 			del: vi.fn<DelFn>(),
 		} as unknown as BridgeClient;
-		const prompt = vi
-			.fn<(m: string) => string | null>()
-			.mockReturnValueOnce("Carol")
-			.mockReturnValueOnce("tok");
 		const handle = mountPicker({
 			host: body,
 			client,
 			sessionUuid: SESSION,
 			doc,
 			accounts: ACCOUNTS,
-			prompt,
 		});
 		getButton(doc).click();
-		getAddRow(doc).click();
+		q(doc, "[data-cma-add-token]")?.click();
+		(q(doc, "[data-cma-token-input]") as HTMLInputElement).value = "tok";
+		q(doc, "[data-cma-token-submit]")?.click();
 		await tick(); // POST resolves, refetch GET is now pending
 		handle.destroy();
 		resolveGet?.({ ok: true, data: { ok: true, accounts: [...ACCOUNTS, CAROL] } });
@@ -775,27 +1008,57 @@ describe("mountPicker", () => {
 		expect(doc.body.querySelector("[data-cma-picker]")).toBeNull();
 	});
 
-	it("falls back to the document's window.prompt/confirm when none are injected", async () => {
-		// Default collectors: prompt drives Add, confirm drives remove. Spying on
-		// the jsdom window proves `defaultPrompt`/`defaultConfirm` are wired.
-		const client = mockClientWithDel();
+	it("defaults openUrl to window.open and confirm to window.confirm when none are injected", async () => {
+		// Proves `defaultOpenUrl` (Add → OAuth) and `defaultConfirm` (remove) are
+		// wired to the document view. There is no window.prompt path any more.
+		const { client } = loginClient({ statuses: ["pending"] });
 		const win = doc.defaultView!;
-		const promptSpy = vi.spyOn(win, "prompt").mockReturnValue(null); // cancels add
+		const openSpy = vi.spyOn(win, "open").mockReturnValue(null);
 		const confirmSpy = vi.spyOn(win, "confirm").mockReturnValue(false); // cancels remove
 		try {
-			mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS });
+			mountPicker({
+				host: body,
+				client,
+				sessionUuid: SESSION,
+				doc,
+				accounts: ACCOUNTS,
+				sleep: parkSleep,
+			});
 			getButton(doc).click();
 			getAddRow(doc).click();
 			getRemoveButtons(doc)[0]!.click();
 			await tick();
-			expect(promptSpy).toHaveBeenCalled();
+			expect(openSpy).toHaveBeenCalledWith(
+				"https://claude.com/cai/oauth/authorize?state=s&code_challenge=c",
+				"_blank",
+				"noopener",
+			);
 			expect(confirmSpy).toHaveBeenCalled();
-			expect(client.post).not.toHaveBeenCalled();
 			expect(client.del).not.toHaveBeenCalled();
 		} finally {
-			promptSpy.mockRestore();
+			openSpy.mockRestore();
 			confirmSpy.mockRestore();
 		}
+	});
+
+	it("defaults sleep to setTimeout when none is injected (poll advances on real timers)", async () => {
+		const { client } = loginClient({ statuses: ["done"], accountsAfter: [...ACCOUNTS, CAROL] });
+		mountPicker({
+			host: body,
+			client,
+			sessionUuid: SESSION,
+			doc,
+			accounts: ACCOUNTS,
+			openUrl: vi.fn<(url: string) => void>(),
+			pollIntervalMs: 1, // real 1ms sleep via defaultSleep
+		});
+		getButton(doc).click();
+		getAddRow(doc).click();
+		// Wait past the 1ms poll interval + microtasks.
+		await new Promise((resolve) => {
+			setTimeout(resolve, 25);
+		});
+		expect(getItems(doc).map((i) => i.dataset.uuid)).toContain(CAROL.uuid);
 	});
 
 	it("swallows a throw from the remove DELETE via the row-level try/catch", async () => {
@@ -814,30 +1077,6 @@ describe("mountPicker", () => {
 			getRemoveButtons(doc)[0]!.click();
 			await tick();
 			expect(warn).toHaveBeenCalledWith("[cma-extension] remove failed:", expect.anything());
-		} finally {
-			warn.mockRestore();
-		}
-	});
-
-	it("swallows a throw from the add POST via the add-row try/catch", async () => {
-		const client: BridgeClient = {
-			get: vi.fn<GetFn>(() =>
-				Promise.resolve({ ok: true, data: { ok: true, accounts: ACCOUNTS } }),
-			),
-			post: vi.fn<PostFn>(() => Promise.reject(new Error("post exploded"))),
-			del: vi.fn<DelFn>(),
-		} as unknown as BridgeClient;
-		const prompt = vi
-			.fn<(m: string) => string | null>()
-			.mockReturnValueOnce("Carol")
-			.mockReturnValueOnce("tok");
-		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-		try {
-			mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS, prompt });
-			getButton(doc).click();
-			getAddRow(doc).click();
-			await tick();
-			expect(warn).toHaveBeenCalledWith("[cma-extension] add failed:", expect.anything());
 		} finally {
 			warn.mockRestore();
 		}

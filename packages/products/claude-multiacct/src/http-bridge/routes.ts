@@ -117,6 +117,29 @@ export type ActiveAccountUuidFn = () => Promise<string | undefined>;
  */
 export type SignalSwapFn = (sessionUuid: string) => Promise<"signalled" | "no-owner" | "stale">;
 
+/**
+ * Start an in-app OAuth login: bind a loopback listener + build the authorize
+ * URL the picker opens in the browser. Injected so the route stays pure — the
+ * real orchestration (PKCE, listener, code→token→profile→register) lives in
+ * `oauth/login-manager.ts`. Success carries the `loginId` the picker polls and
+ * the `authorizeUrl` it opens; failure carries an HTTP status.
+ */
+export type LoginStartFn = () => Promise<
+	| { ok: true; loginId: string; authorizeUrl: string }
+	| { ok: false; status: number; reason: string; detail: string }
+>;
+
+/** A login's progress as seen by the picker (no secrets). */
+export type LoginStatusResult =
+	| { ok: true; status: string; account?: Account; updated?: boolean; detail?: string }
+	| { ok: false; reason: string; detail: string };
+
+/** Poll the progress of an in-app login by its `loginId`. */
+export type LoginStatusFn = (loginId: string) => LoginStatusResult | Promise<LoginStatusResult>;
+
+/** Cancel a pending in-app login by its `loginId` (closes its loopback listener). */
+export type LoginCancelFn = (loginId: string) => Promise<LoginStatusResult>;
+
 /** Injected port bundle every handler takes. */
 export type RouteDeps = {
 	listAccounts: ListAccountsFn;
@@ -126,6 +149,16 @@ export type RouteDeps = {
 	addAccount: AddAccountFn;
 	/** Deregister an account by uuid. Flag-gated, fail-closed, target-only. */
 	removeAccount: RemoveAccountFn;
+	/**
+	 * Start an in-app OAuth login. Flag-gated (it mutates the pool on
+	 * completion). Optional so a daemon that has not wired the login manager
+	 * simply reports the feature as unavailable (503) rather than crashing.
+	 */
+	loginStart?: LoginStartFn;
+	/** Poll a login's status. Optional (see `loginStart`); read-only. */
+	loginStatus?: LoginStatusFn;
+	/** Cancel a pending login. Optional (see `loginStart`); closes its listener. */
+	loginCancel?: LoginCancelFn;
 	verifyAccount: VerifyAccountFn;
 	choiceStore: Pick<ChoiceStore, "write">;
 	/** True iff `CLAUDE_MULTIACCT_ENABLE_SHIM=1`. Mirrors the shim gate. */
@@ -281,6 +314,109 @@ export async function handleRemoveAccount(deps: RouteDeps, uuid: string): Promis
 }
 
 /**
+ * Start an in-app OAuth login. **Requires the feature flag on** — flag-off
+ * returns 403 `{ok:false, skipped:true, reason:"flag-off"}` so the endpoint
+ * stays inert (binds no listener) with the flag off, mirroring `handleAddAccount`.
+ * If the daemon has not wired the login manager, returns 503 `login_unavailable`.
+ * On success returns 200 `{ok, loginId, authorizeUrl}`; the picker opens the URL
+ * and polls `GET /accounts/login/status/:loginId`.
+ *
+ * @param {RouteDeps} deps - Injected ports.
+ * @returns {Promise<RouteResult>} 200 with the authorize URL, or 403/500/503.
+ */
+export async function handleLoginStart(deps: RouteDeps): Promise<RouteResult> {
+	if (!deps.flagOn) {
+		return { status: 403, body: { ok: false, skipped: true, reason: "flag-off" } };
+	}
+	if (deps.loginStart === undefined) {
+		return {
+			status: 503,
+			body: { ok: false, reason: "login_unavailable", detail: "login manager not wired" },
+		};
+	}
+	const outcome = await deps.loginStart();
+	if (!outcome.ok) {
+		return {
+			status: outcome.status,
+			body: { ok: false, reason: outcome.reason, detail: outcome.detail },
+		};
+	}
+	return {
+		status: 200,
+		body: { ok: true, loginId: outcome.loginId, authorizeUrl: outcome.authorizeUrl },
+	};
+}
+
+/**
+ * Poll an in-app login's status — read-only, always allowed. 404s an unknown
+ * `loginId`; 503s when the login manager is not wired.
+ *
+ * @param {RouteDeps} deps - Injected ports.
+ * @param {string} loginId - Login id from the path.
+ * @returns {Promise<RouteResult>} 200 with the status, or 400/404/503.
+ */
+export async function handleLoginStatus(deps: RouteDeps, loginId: string): Promise<RouteResult> {
+	if (deps.loginStatus === undefined) {
+		return {
+			status: 503,
+			body: { ok: false, reason: "login_unavailable", detail: "login manager not wired" },
+		};
+	}
+	const parsed = v.safeParse(UuidSchema, loginId);
+	if (!parsed.success) {
+		return badRequest(parsed.issues, "path :loginId");
+	}
+	const result = await deps.loginStatus(parsed.output);
+	if (!result.ok) {
+		return { status: 404, body: { ok: false, reason: result.reason, detail: result.detail } };
+	}
+	return {
+		status: 200,
+		body: {
+			ok: true,
+			status: result.status,
+			...(result.account === undefined ? {} : { account: result.account }),
+			...(result.updated === undefined ? {} : { updated: result.updated }),
+			...(result.detail === undefined ? {} : { detail: result.detail }),
+		},
+	};
+}
+
+/**
+ * Cancel a pending in-app login — closes its loopback listener. Read/teardown
+ * only (does not mutate the pool), so it is not flag-gated. 404s an unknown
+ * `loginId`; 503s when the login manager is not wired.
+ *
+ * @param {RouteDeps} deps - Injected ports.
+ * @param {string} loginId - Login id from the path.
+ * @returns {Promise<RouteResult>} 200 with the final status, or 400/404/503.
+ */
+export async function handleLoginCancel(deps: RouteDeps, loginId: string): Promise<RouteResult> {
+	if (deps.loginCancel === undefined) {
+		return {
+			status: 503,
+			body: { ok: false, reason: "login_unavailable", detail: "login manager not wired" },
+		};
+	}
+	const parsed = v.safeParse(UuidSchema, loginId);
+	if (!parsed.success) {
+		return badRequest(parsed.issues, "path :loginId");
+	}
+	const result = await deps.loginCancel(parsed.output);
+	if (!result.ok) {
+		return { status: 404, body: { ok: false, reason: result.reason, detail: result.detail } };
+	}
+	return {
+		status: 200,
+		body: {
+			ok: true,
+			status: result.status,
+			...(result.detail === undefined ? {} : { detail: result.detail }),
+		},
+	};
+}
+
+/**
  * Verify one account (by uuid) — always allowed, read-only.
  *
  * @param {RouteDeps} deps - Injected ports.
@@ -377,6 +513,17 @@ export async function dispatch(req: RouteRequest, deps: RouteDeps): Promise<Rout
 	}
 	if (req.method === "POST" && req.pathname === "/accounts") {
 		return await handleAddAccount(deps, req.body);
+	}
+	if (req.method === "POST" && req.pathname === "/accounts/login/start") {
+		return await handleLoginStart(deps);
+	}
+	if (req.method === "GET" && req.pathname.startsWith("/accounts/login/status/")) {
+		const loginId = req.pathname.slice("/accounts/login/status/".length);
+		return await handleLoginStatus(deps, loginId);
+	}
+	if (req.method === "POST" && req.pathname.startsWith("/accounts/login/cancel/")) {
+		const loginId = req.pathname.slice("/accounts/login/cancel/".length);
+		return await handleLoginCancel(deps, loginId);
 	}
 	if (req.method === "DELETE" && req.pathname.startsWith("/accounts/")) {
 		const uuid = req.pathname.slice("/accounts/".length);

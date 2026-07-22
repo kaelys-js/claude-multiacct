@@ -7,11 +7,15 @@
  * dropdown pixel-for-pixel.
  *
  * The menu also carries pool management: each account row has a small remove
- * control (`DELETE /accounts/:uuid`), and a trailing "Add account" row
- * provisions a new account (`POST /accounts`) after collecting a label and the
- * OAuth token
- * the user obtained by signing in to Claude. Both re-fetch `/accounts` on
- * success so the menu reflects the new pool without a page reload.
+ * control (`DELETE /accounts/:uuid`), and a trailing "+ Add account" row runs a
+ * real in-app OAuth sign-in — it asks the daemon to start a login
+ * (`POST /accounts/login/start`), opens the returned Anthropic authorize URL in
+ * the browser, shows an in-DOM "signing in…" state, and polls
+ * `GET /accounts/login/status/:loginId` until the account registers. Electron's
+ * renderer has NO `window.prompt`, so there is no prompt-a-token path; an
+ * explicit in-DOM token-paste form (`POST /accounts`) is offered as a fallback.
+ * Every success re-fetches `/accounts` so the menu reflects the new pool without
+ * a page reload.
  *
  * The load-bearing surface values (panel background, border, text, radius,
  * shadow) are the real Claude design-system tokens, referenced as the page's
@@ -55,11 +59,20 @@ export type MountPickerOptions = {
 	activeUuid?: string;
 	onChoice?: (accountUuid: string) => void;
 	/**
-	 * Collect free-text input for "Add account" (label, then token). Returns
-	 * the entered string or `null` when the user cancels. Defaults to the
-	 * document's `window.prompt`; injected so tests never open a real dialog.
+	 * Open the Anthropic authorize URL in the user's browser. Defaults to the
+	 * document view's `window.open(url, "_blank", "noopener")`. Injected so tests
+	 * never open a real browser window and can assert the exact URL.
 	 */
-	prompt?: (message: string) => string | null;
+	openUrl?: (url: string) => void;
+	/**
+	 * Sleep between login-status polls. Defaults to a real `setTimeout`. Injected
+	 * so tests drive the poll loop deterministically without wall-clock waits.
+	 */
+	sleep?: (ms: number) => Promise<void>;
+	/** Poll interval while waiting for the browser sign-in (default 1500ms). */
+	pollIntervalMs?: number;
+	/** Give up waiting for sign-in after this long (default 5 minutes). */
+	pollTimeoutMs?: number;
 	/**
 	 * Confirm a destructive remove. Returns true to proceed. Defaults to the
 	 * document's `window.confirm`; injected so tests never open a real dialog.
@@ -216,19 +229,32 @@ function styleRemoveButton(el: HTMLElement): void {
 export function mountPicker(opts: MountPickerOptions): PickerHandle {
 	const { doc } = opts;
 
-	// Dialog collectors. Default to the document's own window prompt/confirm
-	// (the content script always has one); tests inject fakes. `defaultView`
-	// is non-null for both the extension document and jsdom, so the cast spends
-	// no runtime branch on the null case.
+	// Browser + dialog ports. Default to the document view's own
+	// `window.open`/`window.confirm` (the content script always has a view);
+	// tests inject fakes. `defaultView` is non-null for both the extension
+	// document and jsdom, so the cast spends no runtime branch on the null case.
+	//
+	// There is NO `window.prompt` here: Electron's renderer has no `prompt`, so
+	// the old prompt-a-token add path was a silent no-op. Adding an account now
+	// runs a real OAuth sign-in (see `startLogin`), with an in-DOM token-paste
+	// form as an explicit fallback (see `renderTokenForm`).
 	const view = doc.defaultView as Window & typeof globalThis;
-	function defaultPrompt(message: string): string | null {
-		return view.prompt(message);
+	function defaultOpenUrl(url: string): void {
+		view.open(url, "_blank", "noopener");
 	}
 	function defaultConfirm(message: string): boolean {
 		return view.confirm(message);
 	}
-	const promptFn = opts.prompt ?? defaultPrompt;
+	function defaultSleep(ms: number): Promise<void> {
+		return new Promise((resolve) => {
+			view.setTimeout(resolve, ms);
+		});
+	}
+	const openUrlFn = opts.openUrl ?? defaultOpenUrl;
 	const confirmFn = opts.confirm ?? defaultConfirm;
+	const sleepFn = opts.sleep ?? defaultSleep;
+	const pollIntervalMs = opts.pollIntervalMs ?? 1500;
+	const pollTimeoutMs = opts.pollTimeoutMs ?? 300_000;
 
 	const button = doc.createElement("button");
 	button.type = "button";
@@ -268,6 +294,12 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 	let currentUuid: string | undefined = opts.activeUuid;
 	let accounts: PickerAccount[] = opts.accounts ?? [];
 	let destroyed = false;
+	// Add-account area state. `waiting` while the browser sign-in is in flight;
+	// `error` shows `addMessage`; `tokenFormOpen` reveals the paste fallback.
+	let addState: "idle" | "waiting" | "error" = "idle";
+	let addMessage = "";
+	let tokenFormOpen = false;
+	let activeLoginId: string | undefined;
 
 	function labelFor(uuid: string | undefined): string {
 		const found = accounts.find((a) => a.uuid === uuid);
@@ -376,33 +408,139 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 			inner.append(item);
 		}
 
-		// Trailing "Add account" row — provisions a new pooled account.
-		const addRow = doc.createElement("div");
-		addRow.setAttribute("role", "menuitem");
-		addRow.setAttribute("tabindex", "-1");
-		addRow.dataset.cmaAddAccount = "";
-		addRow.className = MENU_ITEM_CLASSES;
-		styleItem(addRow, false);
-		addRow.style.color = "var(--claude-secondary-color, #a6a39a)";
-		addRow.textContent = "+ Add account";
-		addRow.addEventListener("mouseenter", () => {
-			addRow.style.background = HOVER_BG;
+		renderAddArea();
+	}
+
+	// A muted, non-selectable status line (used for "waiting", errors, hints).
+	function statusRow(dataAttr: string, text: string): HTMLDivElement {
+		const row = doc.createElement("div");
+		row.setAttribute("role", "presentation");
+		row.dataset[dataAttr] = "";
+		styleItem(row, false);
+		row.style.color = "var(--claude-secondary-color, #a6a39a)";
+		row.style.cursor = "default";
+		row.textContent = text;
+		return row;
+	}
+
+	// A clickable menu row with the shared hover behavior.
+	function actionRow(dataAttr: string, text: string, onClick: () => void): HTMLDivElement {
+		const row = doc.createElement("div");
+		row.setAttribute("role", "menuitem");
+		row.setAttribute("tabindex", "-1");
+		row.dataset[dataAttr] = "";
+		row.className = MENU_ITEM_CLASSES;
+		styleItem(row, false);
+		row.style.color = "var(--claude-secondary-color, #a6a39a)";
+		row.textContent = text;
+		row.addEventListener("mouseenter", () => {
+			row.style.background = HOVER_BG;
 		});
-		addRow.addEventListener("mouseleave", () => {
-			addRow.style.background = "transparent";
+		row.addEventListener("mouseleave", () => {
+			row.style.background = "transparent";
 		});
-		addRow.addEventListener("click", () => {
+		row.addEventListener("click", onClick);
+		return row;
+	}
+
+	// The add-account area. Three visual states: idle (the "+ Add account"
+	// OAuth entry plus the token-paste fallback toggle), waiting (a live
+	// "signing in…" line with a cancel control), and error (an inline message
+	// above the idle entries). Rendered fresh on every `renderItems`.
+	function renderAddArea(): void {
+		if (addState === "waiting") {
+			inner.append(
+				statusRow("cmaLoginWaiting", addMessage || "Signing in… complete it in your browser"),
+			);
+			inner.append(
+				actionRow("cmaLoginCancel", "Cancel sign-in", () => {
+					// eslint-disable-next-line typescript/no-floating-promises -- fire-and-forget click handler
+					(async (): Promise<void> => {
+						await cancelLogin();
+					})();
+				}),
+			);
+			return;
+		}
+
+		if (addState === "error") {
+			inner.append(statusRow("cmaAddError", addMessage));
+		}
+
+		inner.append(
+			actionRow("cmaAddAccount", "+ Add account", () => {
+				// eslint-disable-next-line typescript/no-floating-promises -- fire-and-forget click handler
+				(async (): Promise<void> => {
+					try {
+						await startLogin();
+					} catch (error: unknown) {
+						addState = "error";
+						addMessage = "Could not start sign-in.";
+						renderItems();
+						// eslint-disable-next-line no-console
+						console.warn("[cma-extension] start login failed:", error);
+					}
+				})();
+			}),
+		);
+
+		if (tokenFormOpen) {
+			renderTokenForm();
+		} else {
+			inner.append(
+				actionRow("cmaAddToken", "Add via token instead", () => {
+					tokenFormOpen = true;
+					addState = "idle";
+					renderItems();
+					positionMenu();
+				}),
+			);
+		}
+	}
+
+	// Explicit fallback: an in-DOM token-paste form (Electron has no
+	// window.prompt, so the collector must be real DOM). Label + token inputs
+	// POST straight to /accounts, the same provisioning path the OAuth flow ends
+	// in. This is a fallback IN ADDITION to the OAuth login, never instead of it.
+	function renderTokenForm(): void {
+		const form = doc.createElement("div");
+		form.dataset.cmaTokenForm = "";
+		form.style.display = "flex";
+		form.style.flexDirection = "column";
+		form.style.gap = "4px";
+		form.style.padding = "6px 10px";
+
+		const labelInput = doc.createElement("input");
+		labelInput.dataset.cmaTokenLabel = "";
+		labelInput.type = "text";
+		labelInput.placeholder = "Label (optional)";
+		labelInput.style.width = "100%";
+		labelInput.style.boxSizing = "border-box";
+
+		const tokenInput = doc.createElement("input");
+		tokenInput.dataset.cmaTokenInput = "";
+		tokenInput.type = "password";
+		tokenInput.placeholder = "Paste OAuth token";
+		tokenInput.style.width = "100%";
+		tokenInput.style.boxSizing = "border-box";
+
+		const submit = doc.createElement("button");
+		submit.type = "button";
+		submit.dataset.cmaTokenSubmit = "";
+		submit.className = "cds-reset";
+		submit.textContent = "Add";
+		submit.addEventListener("click", (event: Event) => {
+			event.stopPropagation();
 			// eslint-disable-next-line typescript/no-floating-promises -- fire-and-forget click handler
 			(async (): Promise<void> => {
-				try {
-					await addNew();
-				} catch (error: unknown) {
-					// eslint-disable-next-line no-console
-					console.warn("[cma-extension] add failed:", error);
-				}
+				await submitToken(labelInput.value, tokenInput.value);
 			})();
 		});
-		inner.append(addRow);
+
+		// Clicks inside the form must not bubble to the outside-close handler.
+		form.addEventListener("click", (event: Event) => event.stopPropagation());
+		form.append(labelInput, tokenInput, submit);
+		inner.append(form);
 	}
 
 	function positionMenu(): void {
@@ -476,27 +614,117 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 		renderItems();
 	}
 
-	// "Add account" — collect a label and the OAuth token the user obtained by
-	// signing in to Claude, POST them, then refresh the pool. A cancelled or
-	// empty prompt aborts without a request (Rule 12: no silent empty writes).
-	async function addNew(): Promise<void> {
-		closeMenu();
-		const labelRaw = promptFn("New account label:");
-		const label = labelRaw === null ? "" : labelRaw.trim();
-		if (label === "") {
+	// "+ Add account" — start a real OAuth sign-in. Ask the daemon to bind a
+	// loopback listener + build the authorize URL, open that URL in the browser,
+	// then poll the daemon until the sign-in completes and refresh the pool.
+	async function startLogin(): Promise<void> {
+		type StartData = { ok: boolean; loginId?: string; authorizeUrl?: string };
+		const started: BridgeResult<StartData> = await opts.client.post("/accounts/login/start", {});
+		if (
+			!started.ok ||
+			typeof started.data.loginId !== "string" ||
+			typeof started.data.authorizeUrl !== "string"
+		) {
+			addState = "error";
+			addMessage = "Could not start sign-in. Is the pool feature enabled?";
+			renderItems();
 			return;
 		}
-		const tokenRaw = promptFn("Paste the OAuth token for this account (sign in to Claude first):");
-		const token = tokenRaw === null ? "" : tokenRaw.trim();
+		activeLoginId = started.data.loginId;
+		addState = "waiting";
+		addMessage = "Signing in… complete it in your browser";
+		tokenFormOpen = false;
+		renderItems();
+		positionMenu();
+		openUrlFn(started.data.authorizeUrl);
+		await pollLogin(started.data.loginId);
+	}
+
+	// Poll the login's status until it leaves `pending`/`exchanging`, the caller
+	// cancels (activeLoginId cleared), the picker is destroyed, or the deadline
+	// passes. On `done` refresh the pool; on `error`/`cancelled` surface it.
+	async function pollLogin(loginId: string): Promise<void> {
+		type StatusData = { ok: boolean; status?: string; detail?: string };
+		const deadline = Date.now() + pollTimeoutMs;
+		while (Date.now() < deadline) {
+			// eslint-disable-next-line no-await-in-loop -- polling is sequential by design: wait, check, repeat
+			await sleepFn(pollIntervalMs);
+			if (destroyed || activeLoginId !== loginId) {
+				return;
+			}
+			// eslint-disable-next-line no-await-in-loop -- one status probe per interval; must be serial
+			const res: BridgeResult<StatusData> = await opts.client.get(
+				`/accounts/login/status/${loginId}`,
+			);
+			if (!res.ok) {
+				addState = "error";
+				addMessage = "Lost contact with the sign-in.";
+				activeLoginId = undefined;
+				renderItems();
+				return;
+			}
+			const { status } = res.data;
+			if (status === "done") {
+				activeLoginId = undefined;
+				addState = "idle";
+				addMessage = "";
+				// eslint-disable-next-line no-await-in-loop -- terminal branch; loop exits right after
+				await refetchAccounts();
+				return;
+			}
+			if (status === "error" || status === "cancelled") {
+				activeLoginId = undefined;
+				addState = "error";
+				addMessage = res.data.detail ?? `Sign-in ${status}.`;
+				renderItems();
+				return;
+			}
+		}
+		// Deadline passed with no terminal status.
+		addState = "error";
+		addMessage = "Sign-in timed out.";
+		activeLoginId = undefined;
+		renderItems();
+	}
+
+	// Cancel a pending sign-in: tell the daemon to close its listener, then
+	// return the add area to idle. Clearing `activeLoginId` stops any live poll.
+	async function cancelLogin(): Promise<void> {
+		const loginId = activeLoginId;
+		activeLoginId = undefined;
+		addState = "idle";
+		addMessage = "";
+		renderItems();
+		positionMenu();
+		if (loginId !== undefined) {
+			await opts.client.post(`/accounts/login/cancel/${loginId}`, {});
+		}
+	}
+
+	// Fallback path: submit a hand-pasted OAuth token to /accounts. Empty token
+	// aborts without a request (Rule 12: no silent empty writes).
+	async function submitToken(labelRaw: string, tokenRaw: string): Promise<void> {
+		const token = tokenRaw.trim();
 		if (token === "") {
+			addState = "error";
+			addMessage = "Paste a token first.";
+			renderItems();
 			return;
 		}
+		const label =
+			labelRaw.trim() === "" ? `Pasted ${new Date().toISOString().slice(0, 10)}` : labelRaw.trim();
 		const result: BridgeResult<unknown> = await opts.client.post("/accounts", { label, token });
 		if (!result.ok) {
+			addState = "error";
+			addMessage = "Token was rejected.";
+			renderItems();
 			// eslint-disable-next-line no-console
-			console.warn("[cma-extension] add account failed:", result.kind, result.detail);
+			console.warn("[cma-extension] add account (token) failed:", result.kind, result.detail);
 			return;
 		}
+		tokenFormOpen = false;
+		addState = "idle";
+		addMessage = "";
 		await refetchAccounts();
 	}
 

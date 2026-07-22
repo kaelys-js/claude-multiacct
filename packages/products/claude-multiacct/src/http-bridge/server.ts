@@ -33,6 +33,9 @@ import { atomicWriteJson } from "./atomic-json.ts";
 import {
 	type AddAccountFn,
 	dispatch,
+	type LoginCancelFn,
+	type LoginStartFn,
+	type LoginStatusFn,
 	type RemoveAccountFn,
 	type RouteDeps,
 	type RouteResult,
@@ -65,6 +68,12 @@ export type StartOptions = {
 	addAccount: AddAccountFn;
 	/** Deregister an account (`DELETE /accounts/:uuid`). See `account-admin.ts`. */
 	removeAccount: RemoveAccountFn;
+	/** Start an in-app OAuth login (`POST /accounts/login/start`). Optional. */
+	loginStart?: LoginStartFn;
+	/** Poll a login (`GET /accounts/login/status/:loginId`). Optional. */
+	loginStatus?: LoginStatusFn;
+	/** Cancel a login (`POST /accounts/login/cancel/:loginId`). Optional. */
+	loginCancel?: LoginCancelFn;
 	verifyAccount: VerifyAccountFn;
 	choiceStore: Pick<ChoiceStore, "write">;
 	flagOn: boolean;
@@ -302,6 +311,9 @@ export async function start(opts: StartOptions): Promise<StartResult> {
 		activeAccountUuid: opts.activeAccountUuid,
 		addAccount: opts.addAccount,
 		removeAccount: opts.removeAccount,
+		...(opts.loginStart === undefined ? {} : { loginStart: opts.loginStart }),
+		...(opts.loginStatus === undefined ? {} : { loginStatus: opts.loginStatus }),
+		...(opts.loginCancel === undefined ? {} : { loginCancel: opts.loginCancel }),
 		verifyAccount: opts.verifyAccount,
 		choiceStore: opts.choiceStore,
 		flagOn: opts.flagOn,
