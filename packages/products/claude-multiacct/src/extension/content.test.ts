@@ -12,7 +12,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { bootContent } from "./content.ts";
 
 const BRIDGE = { port: 9000, secret: "s", version: "v" };
-const ACCOUNTS = [{ uuid: "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa", label: "A", isPrimary: true }];
+const ACCOUNTS = [{ uuid: "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa", label: "A" }];
 
 type FetchResponse = { ok: boolean; status: number; json: () => Promise<unknown> };
 type FetchFn = (url: string, init?: unknown) => Promise<FetchResponse>;

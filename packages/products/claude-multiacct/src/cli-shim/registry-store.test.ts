@@ -25,7 +25,6 @@ const validRegistry = {
 		{
 			uuid: UUID_A,
 			label: "Personal",
-			isPrimary: true,
 			subscriptionType: "Pro",
 			rateLimitTier: "tier-2",
 			encryptedTokenRef: "keychain:handle-a",
@@ -33,7 +32,6 @@ const validRegistry = {
 		{
 			uuid: UUID_B,
 			label: "Work",
-			isPrimary: false,
 			subscriptionType: "Pro",
 			rateLimitTier: "tier-2",
 			encryptedTokenRef: "keychain:handle-b",

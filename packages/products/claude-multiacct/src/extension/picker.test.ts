@@ -3,8 +3,8 @@
  * `picker.ts` docstring for why light DOM won over shadow DOM). Every test
  * here pins one load-bearing behaviour of that surface:
  *
- *  - Button label mirrors the current pick (or the primary, or the "…"
- *    fallback when neither is present).
+ *  - Button label mirrors the current pick (or, before any pick, the first
+ *    account as a hint, or the "…" fallback when the pool is empty).
  *  - Clicking a menu item POSTs the choice to `/choice/<sessionUuid>` and
  *    calls `onChoice`; a POST failure reverts the optimistic label.
  *  - Menu open/close toggles on the button, closes on outside click.
@@ -26,8 +26,8 @@ type GetFn = (path: string) => Promise<BridgeResult<unknown>>;
 type PostFn = (path: string, body: unknown) => Promise<BridgeResult<unknown>>;
 
 const ACCOUNTS: PickerAccount[] = [
-	{ uuid: "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa", label: "Alice", isPrimary: true },
-	{ uuid: "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb", label: "Bob", isPrimary: false },
+	{ uuid: "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa", label: "Alice" },
+	{ uuid: "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb", label: "Bob" },
 ];
 
 function mkDom(): { doc: Document; body: HTMLElement } {
@@ -76,7 +76,7 @@ describe("mountPicker", () => {
 		({ doc, body } = mkDom());
 	});
 
-	it("renders the primary account label by default on the light-DOM button", () => {
+	it("renders the first account's label as a hint by default on the light-DOM button", () => {
 		mountPicker({
 			host: body,
 			client: mockClient(),
@@ -105,7 +105,7 @@ describe("mountPicker", () => {
 		expect(menu.hidden).toBe(true);
 	});
 
-	it("clicking a non-primary item POSTs the choice with the session uuid and body", async () => {
+	it("clicking a menu item POSTs the choice with the session uuid and body", async () => {
 		const client = mockClient();
 		mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS });
 		getButton(doc).click();
@@ -158,7 +158,41 @@ describe("mountPicker", () => {
 		expect(getMenu(doc).hidden).toBe(true);
 	});
 
-	it("without pre-seeded accounts, fetches /accounts and renders the primary label", async () => {
+	it("closes the menu on a click outside the button and menu", () => {
+		mountPicker({
+			host: body,
+			client: mockClient(),
+			sessionUuid: SESSION,
+			doc,
+			accounts: ACCOUNTS,
+		});
+		getButton(doc).click();
+		expect(getMenu(doc).hidden).toBe(false);
+		// A capture-phase document click whose target is neither the button nor
+		// inside the menu must close the menu (the outside-click dismissal).
+		const outside = doc.createElement("div");
+		body.append(outside);
+		outside.dispatchEvent(new doc.defaultView!.Event("click", { bubbles: true }));
+		expect(getMenu(doc).hidden).toBe(true);
+	});
+
+	it("exposes the current pick via currentUuid() — undefined before any pick, set after", async () => {
+		const handle = mountPicker({
+			host: body,
+			client: mockClient(),
+			sessionUuid: SESSION,
+			doc,
+			accounts: ACCOUNTS,
+		});
+		// No stored primary: nothing is selected until the user picks.
+		expect(handle.currentUuid()).toBeUndefined();
+		getButton(doc).click();
+		getItems(doc)[1]?.click();
+		await Promise.resolve();
+		expect(handle.currentUuid()).toBe(ACCOUNTS[1]?.uuid);
+	});
+
+	it("without pre-seeded accounts, fetches /accounts and renders the first account's label", async () => {
 		const client = mockClient();
 		mountPicker({ host: body, client, sessionUuid: SESSION, doc });
 		await new Promise<void>((resolve) => {
@@ -202,7 +236,7 @@ describe("mountPicker", () => {
 		expect(doc.body.querySelector("[data-cma-picker]")).toBeNull();
 	});
 
-	it("label falls back to '…' when there is neither a current pick nor a primary", () => {
+	it("label falls back to '…' when there is no current pick and the pool is empty", () => {
 		mountPicker({ host: body, client: mockClient(), sessionUuid: SESSION, doc, accounts: [] });
 		expect(getButton(doc).textContent).toBe("…");
 	});
@@ -293,7 +327,11 @@ describe("mountPicker", () => {
 			doc,
 			accounts: ACCOUNTS,
 		});
-		const [selected, other] = getItems(doc); // Alice is primary → selected
+		// Nothing is selected up front (no stored primary); pick Alice so the
+		// selected-row styling is live for the hover assertions below.
+		getButton(doc).click();
+		getItems(doc)[0]?.click();
+		const [selected, other] = getItems(doc); // Alice is now the current pick
 		other!.dispatchEvent(new doc.defaultView!.Event("mouseenter"));
 		expect(other!.style.background).toBe("rgba(255, 255, 255, 0.08)");
 		other!.dispatchEvent(new doc.defaultView!.Event("mouseleave"));
@@ -343,11 +381,13 @@ describe("mountPicker", () => {
 		}
 	});
 
-	it("reverts to an empty label (previous ?? '') when the POST fails and there was no prior pick", async () => {
-		// No primary in the account list → currentUuid starts undefined. A failed
-		// POST must revert to `previous ?? ""`, exercising the undefined-previous side.
-		const noPrimary: PickerAccount[] = [
-			{ uuid: "cccccccc-cccc-4ccc-cccc-cccccccccccc", label: "Carol", isPrimary: false },
+	it("reverts to an empty pick (previous ?? '') when the POST fails and there was no prior pick", async () => {
+		// Nothing is pre-selected (no stored primary), so `currentUuid` starts
+		// undefined even though the button hints the sole account's label. A
+		// failed POST must revert to `previous ?? ""`, exercising the
+		// undefined-previous side of the revert.
+		const single: PickerAccount[] = [
+			{ uuid: "cccccccc-cccc-4ccc-cccc-cccccccccccc", label: "Carol" },
 		];
 		const onChoice = vi.fn<(uuid: string) => void>();
 		mountPicker({
@@ -355,17 +395,18 @@ describe("mountPicker", () => {
 			client: mockClient({ ok: false, kind: "network" }),
 			sessionUuid: SESSION,
 			doc,
-			accounts: noPrimary,
+			accounts: single,
 			onChoice,
 		});
-		expect(getButton(doc).textContent).toBe("…");
+		// The button hints the first account's label; no row is selected yet.
+		expect(getButton(doc).textContent).toBe("Carol");
 		getButton(doc).click();
 		getItems(doc)[0]?.click();
 		await new Promise<void>((resolve) => {
 			setTimeout(resolve, 0);
 		});
-		// Reverted: label back to the "…" fallback and onChoice called with "".
-		expect(getButton(doc).textContent).toBe("…");
+		// Reverted: label back to the hint and onChoice called with "" (no prior pick).
+		expect(getButton(doc).textContent).toBe("Carol");
 		expect(onChoice).toHaveBeenLastCalledWith("");
 	});
 });

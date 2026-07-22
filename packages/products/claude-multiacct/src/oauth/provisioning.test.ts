@@ -125,7 +125,6 @@ describe("provisionAccount — duplicate rejects (PR1 invariants stay unforced-o
 			{
 				uuid: UUID_A as AccountRegistry["accounts"][0]["uuid"],
 				label: "Personal",
-				isPrimary: true,
 				subscriptionType: "Pro",
 				rateLimitTier: "tier-2",
 				encryptedTokenRef: "keychain:a",
@@ -273,7 +272,7 @@ describe("provisionAccount — ATOMICITY (the load-bearing test)", () => {
 });
 
 describe("provisionAccount — happy path", () => {
-	it("first account into empty pool becomes primary (PR1 invariant)", async () => {
+	it("first account into empty pool is written with no stored primary flag", async () => {
 		const ports = makePorts();
 		const result = await provisionAccount({
 			label: "Personal",
@@ -282,21 +281,22 @@ describe("provisionAccount — happy path", () => {
 			overrideFlag: true,
 		});
 		assertOk(result);
-		expect(result.account.isPrimary).toBe(true);
+		// No primary flag is set on add; the active account is derived at runtime.
+		expect(result.account).not.toHaveProperty("isPrimary");
 		expect(result.account.uuid).toBe(UUID_A);
 		expect(result.account.label).toBe("Personal");
 		expect(result.account.encryptedTokenRef).toBe(UUID_A);
 		expect(ports.writes).toHaveLength(1);
+		expect(ports.writes[0]?.accounts[0]).not.toHaveProperty("isPrimary");
 		expect(ports.tokenStore.snapshot()[UUID_A]).toBe("t");
 	});
 
-	it("second account added to existing pool is non-primary by default", async () => {
+	it("second account appends to the pool, still with no stored primary flag", async () => {
 		const existing: AccountRegistry = {
 			accounts: [
 				{
 					uuid: UUID_A as AccountRegistry["accounts"][0]["uuid"],
 					label: "Personal",
-					isPrimary: true,
 					subscriptionType: "Pro",
 					rateLimitTier: "tier-2",
 					encryptedTokenRef: "keychain:a",
@@ -314,7 +314,7 @@ describe("provisionAccount — happy path", () => {
 			overrideFlag: true,
 		});
 		assertOk(result);
-		expect(result.account.isPrimary).toBe(false);
+		expect(result.account).not.toHaveProperty("isPrimary");
 		expect(ports.writes[0]?.accounts).toHaveLength(2);
 	});
 });

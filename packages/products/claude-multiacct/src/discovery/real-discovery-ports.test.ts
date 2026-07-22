@@ -212,7 +212,6 @@ describe("makeRealDiscoveryPorts.listClaudeCliServices", () => {
 						{
 							uuid: "11111111-1111-4111-8111-111111111111",
 							label: "alice",
-							isPrimary: true,
 							subscriptionType: "u",
 							rateLimitTier: "u",
 							encryptedTokenRef: "r",
@@ -463,7 +462,6 @@ describe("makeRealDiscoveryPorts.listClaudeCliServices — label sources", () =>
 						{
 							uuid: "11111111-1111-4111-8111-111111111111",
 							label: "Claude Code-credentials-bob",
-							isPrimary: true,
 							subscriptionType: "u",
 							rateLimitTier: "u",
 							encryptedTokenRef: "r",

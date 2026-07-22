@@ -2,12 +2,10 @@
  * Intent: `AccountRegistrySchema` encodes two invariants the router cannot
  * recover from — unique uuids, unique labels — and each adversarial test
  * inverts one and asserts the schema rejects; a schema that cannot fail on a
- * duplicate-uuid fixture is not enforcing anything. The exactly-one-primary
- * invariant was REMOVED: the active account is derived at runtime, so the
- * schema must tolerate zero or many stored `isPrimary` flags (a registry that
- * lost its primary to a hand-edit still has to load to be repaired). The helper
- * tests then pin the derivation the picker depends on: the account whose OAuth
- * token sha256 matches Claude.app's current token is active, with a
+ * duplicate-uuid fixture is not enforcing anything. There is no stored primary
+ * flag on an account at all: the active account is derived at runtime, so the
+ * helper tests pin the derivation the picker depends on. The account whose
+ * OAuth token sha256 matches Claude.app's current token is active, with a
  * deterministic first-account fallback when no match can be made.
  */
 
@@ -31,7 +29,6 @@ function account(overrides: Record<string, unknown>): Record<string, unknown> {
 	return {
 		uuid: UUID_A,
 		label: "Personal",
-		isPrimary: true,
 		subscriptionType: "Pro",
 		rateLimitTier: "tier-2",
 		encryptedTokenRef: "keychain:handle",
@@ -41,9 +38,9 @@ function account(overrides: Record<string, unknown>): Record<string, unknown> {
 
 const validRegistry = {
 	accounts: [
-		account({ uuid: UUID_A, label: "Personal", isPrimary: true }),
-		account({ uuid: UUID_B, label: "Work", isPrimary: false }),
-		account({ uuid: UUID_C, label: "Client", isPrimary: false }),
+		account({ uuid: UUID_A, label: "Personal" }),
+		account({ uuid: UUID_B, label: "Work" }),
+		account({ uuid: UUID_C, label: "Client" }),
 	],
 };
 
@@ -56,49 +53,34 @@ function shaResolver(unreadable: readonly string[] = []): AccountTokenSha {
 }
 
 describe("AccountRegistrySchema — positive", () => {
-	it("accepts a registry with a stored primary and unique keys", () => {
+	it("accepts a registry with unique keys", () => {
 		expect(() => v.parse(AccountRegistrySchema, validRegistry)).not.toThrow();
 	});
 
 	it("accepts a single-account registry", () => {
-		const single = { accounts: [account({ isPrimary: true })] };
+		const single = { accounts: [account({})] };
 		expect(() => v.parse(AccountRegistrySchema, single)).not.toThrow();
 	});
 
-	it("accepts a ZERO-primary registry (active account is derived, not stored)", () => {
-		// Before runtime derivation this was rejected. It must now load: a
-		// hand-edit that clears every isPrimary leaves a valid pool whose active
-		// account is decided by Claude.app's live token, not by the missing flag.
-		const zeroPrimary = {
-			accounts: [
-				account({ uuid: UUID_A, label: "A", isPrimary: false }),
-				account({ uuid: UUID_B, label: "B", isPrimary: false }),
-			],
-		};
-		expect(() => v.parse(AccountRegistrySchema, zeroPrimary)).not.toThrow();
+	it("accepts an empty registry (a pool can legitimately have no accounts)", () => {
+		// With no exactly-one-primary invariant to force, an empty pool is a
+		// valid state the reader must load rather than reject.
+		expect(() => v.parse(AccountRegistrySchema, { accounts: [] })).not.toThrow();
 	});
 
-	it("accepts a TWO-primary registry (stored isPrimary is a hint, not enforced)", () => {
-		// Two stored primaries no longer make resolution non-deterministic:
-		// getPrimary ignores the flag and matches the live token, so the schema
-		// tolerates it rather than refusing to load the file.
-		const twoPrimary = {
-			accounts: [
-				account({ uuid: UUID_A, label: "A", isPrimary: true }),
-				account({ uuid: UUID_B, label: "B", isPrimary: true }),
-			],
-		};
-		expect(() => v.parse(AccountRegistrySchema, twoPrimary)).not.toThrow();
+	it("rejects a stored primary flag — strictObject, no such field", () => {
+		// The primary flag was removed from the account shape. A registry file
+		// that still carries `isPrimary` (e.g. written by an older build) must
+		// fail loud so the drift is visible, not silently retained.
+		const stale = { accounts: [{ ...account({}), isPrimary: true }] };
+		expect(() => v.parse(AccountRegistrySchema, stale)).toThrow(v.ValiError);
 	});
 });
 
 describe("AccountRegistrySchema — invariant inversions (the load-bearing tests)", () => {
 	it("rejects duplicate uuids (collision would overwrite per-account state)", () => {
 		const dupUuid = {
-			accounts: [
-				account({ uuid: UUID_A, label: "A", isPrimary: true }),
-				account({ uuid: UUID_A, label: "B", isPrimary: false }),
-			],
+			accounts: [account({ uuid: UUID_A, label: "A" }), account({ uuid: UUID_A, label: "B" })],
 		};
 		expect(() => v.parse(AccountRegistrySchema, dupUuid)).toThrow(/uuids must be unique/u);
 	});
@@ -106,8 +88,8 @@ describe("AccountRegistrySchema — invariant inversions (the load-bearing tests
 	it("rejects duplicate labels (picker would be ambiguous)", () => {
 		const dupLabel = {
 			accounts: [
-				account({ uuid: UUID_A, label: "Same", isPrimary: true }),
-				account({ uuid: UUID_B, label: "Same", isPrimary: false }),
+				account({ uuid: UUID_A, label: "Same" }),
+				account({ uuid: UUID_B, label: "Same" }),
 			],
 		};
 		expect(() => v.parse(AccountRegistrySchema, dupLabel)).toThrow(/labels must be unique/u);

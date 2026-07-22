@@ -9,13 +9,12 @@
  *     token anywhere and this test goes red.
  *   - Non-TTY without `--stdin` → hard error, exit 2 (Rule 12).
  *   - `--stdin` mode reads one line off stdin instead of prompting.
- *   - First `add` after empty registry → returned account is primary
- *     (auto — via PR4's provisionAccount first-account path). This
- *     verifies the Rule-1 decision at the observable-outcome layer.
+ *   - `add` writes the account with no stored primary marker — the active
+ *     account is derived at runtime, never announced on add.
  *   - `list` / `verify` are read-only (never invoke registryWriter.write
  *     and never invoke tokenStore.put/delete).
- *   - `remove` / `set-primary` humanise the PR4 result cleanly (skipped
- *     when flag off).
+ *   - `remove` humanises the PR4 result cleanly (skipped when flag off);
+ *     `set-primary` is gone and dispatches as an unknown subcommand.
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -66,7 +65,6 @@ function baseRegistry(): AccountRegistry {
 			{
 				uuid: coerceUuid(UUID_A),
 				label: "Personal",
-				isPrimary: true,
 				subscriptionType: "Pro",
 				rateLimitTier: "tier-2",
 				encryptedTokenRef: "keychain:a",
@@ -74,7 +72,6 @@ function baseRegistry(): AccountRegistry {
 			{
 				uuid: coerceUuid(UUID_B),
 				label: "Work",
-				isPrimary: false,
 				subscriptionType: "Pro",
 				rateLimitTier: "tier-2",
 				encryptedTokenRef: "keychain:b",
@@ -173,7 +170,7 @@ function makeHarness(
 }
 
 describe("cma account add", () => {
-	it("happy path (TTY): first add → account.isPrimary === true (Rule-1 auto-primary)", async () => {
+	it("happy path (TTY): first add writes the account with no stored primary marker", async () => {
 		const h = makeHarness({ overrideFlag: true, registry: undefined });
 		const args = parseArgs(["account", "add", "--label=Personal"]);
 		const result = await accountCommand(args, h.ports);
@@ -183,8 +180,11 @@ describe("cma account add", () => {
 		if (firstWrite === undefined || firstWrite.accounts[0] === undefined) {
 			throw new Error("unreachable — expected one write");
 		}
-		expect(firstWrite.accounts[0].isPrimary).toBe(true);
-		expect(h.logs.some((l) => l.includes("primary — first account"))).toBe(true);
+		expect(firstWrite.accounts[0].label).toBe("Personal");
+		// No primary flag exists on the account shape any more; the written
+		// record must not carry one, and `add` must not announce a primary.
+		expect(firstWrite.accounts[0]).not.toHaveProperty("isPrimary");
+		expect(h.logs.some((l) => l.includes("primary"))).toBe(false);
 	});
 
 	it("TOKEN SAFETY: token needle appears NOWHERE in captured output", async () => {
@@ -267,7 +267,7 @@ describe("cma account add", () => {
 		expect(h.errors.join("\n")).toContain("skipped");
 	});
 
-	it("second add (registry already has primary) → account.isPrimary=false, no first-account note", async () => {
+	it("second add (registry already populated) appends without a primary note", async () => {
 		const h = makeHarness({
 			overrideFlag: true,
 			registry: baseRegistry(),
@@ -281,7 +281,7 @@ describe("cma account add", () => {
 		const args = parseArgs(["account", "add", "--label=New"]);
 		const result = await accountCommand(args, h.ports);
 		expect(result.exitCode).toBe(0);
-		expect(h.logs.some((l) => l.includes("primary — first account"))).toBe(false);
+		expect(h.logs.some((l) => l.includes("primary"))).toBe(false);
 	});
 
 	it("PR4 failure surfaces with kind + detail, exit 2", async () => {
@@ -306,7 +306,7 @@ describe("cma account list — read-only", () => {
 		expect(h.writes.length).toBe(0);
 	});
 
-	it("populated registry → table with labels + short uuids + primary marker", async () => {
+	it("populated registry → table with labels + short uuids + subscription (no primary column)", async () => {
 		const h = makeHarness({ registry: baseRegistry() });
 		const args = parseArgs(["account", "list"]);
 		const result = await accountCommand(args, h.ports);
@@ -315,7 +315,8 @@ describe("cma account list — read-only", () => {
 		expect(out).toContain("Personal");
 		expect(out).toContain("Work");
 		expect(out).toContain(UUID_A.slice(0, 8));
-		expect(out).toContain("yes");
+		// The primary column is gone; the header no longer advertises it.
+		expect(out).not.toContain("primary");
 		expect(h.writes.length).toBe(0);
 	});
 
@@ -325,7 +326,6 @@ describe("cma account list — read-only", () => {
 				{
 					uuid: coerceUuid(UUID_A),
 					label: "A-Very-Very-Long-Label-Exceeding-Sixteen-Chars",
-					isPrimary: true,
 					subscriptionType: "EnterpriseTierWithAVeryLongName",
 					rateLimitTier: "tier-2",
 					encryptedTokenRef: "keychain:a",
@@ -425,8 +425,9 @@ describe("cma account remove", () => {
 
 	it("PR4 failure surfaces reason + detail", async () => {
 		const h = makeHarness({ registry: baseRegistry(), overrideFlag: true });
-		// Ask to remove primary while Work exists → PR4 rejects.
-		const args = parseArgs(["account", "remove", "--label=Personal"]);
+		// Selector matches no account → PR4 returns not_found, which the
+		// humaniser must render as a "failed" line with exit 2.
+		const args = parseArgs(["account", "remove", "--label=Nonexistent"]);
 		const result = await accountCommand(args, h.ports);
 		expect(result.exitCode).toBe(2);
 		expect(h.errors.join("\n")).toContain("failed");
@@ -553,48 +554,16 @@ describe("cma account refresh", () => {
 	});
 });
 
-describe("cma account set-primary", () => {
-	it("happy path → prints transition, exit 0", async () => {
+describe("cma account set-primary — removed subcommand", () => {
+	it("is no longer a known subcommand (active account is runtime-derived) → exit 2", async () => {
+		// The stored primary flag was removed, so there is nothing to set. The
+		// dispatcher must treat set-primary as unknown rather than silently
+		// accept a command that can no longer do anything.
 		const h = makeHarness({ registry: baseRegistry(), overrideFlag: true });
 		const args = parseArgs(["account", "set-primary", "--label=Work"]);
-		const result = await accountCommand(args, h.ports);
-		expect(result.exitCode).toBe(0);
-		expect(h.logs.join("\n")).toMatch(/Personal.*Work/u);
-	});
-
-	it("electing a first default prints '(none)' as the prior primary, exit 0", async () => {
-		// A no-primary registry now loads (invariant removed), so set-primary can
-		// elect a first default. The transition line must read '(none)' → target
-		// rather than crash on an absent previousPrimary.
-		const noPrimary: AccountRegistry = {
-			accounts: baseRegistry().accounts.map((a) => ({ ...a, isPrimary: false })),
-		};
-		const h = makeHarness({ registry: noPrimary, overrideFlag: true });
-		const args = parseArgs(["account", "set-primary", "--label=Work"]);
-		const result = await accountCommand(args, h.ports);
-		expect(result.exitCode).toBe(0);
-		expect(h.logs.join("\n")).toMatch(/\(none\).*Work/u);
-	});
-
-	it("skipped when flag off", async () => {
-		const h = makeHarness({ registry: baseRegistry() });
-		const args = parseArgs(["account", "set-primary", "--label=Work"]);
-		const result = await accountCommand(args, h.ports);
-		expect(result.exitCode).toBe(3);
-	});
-
-	it("already primary → failure, exit 2", async () => {
-		const h = makeHarness({ registry: baseRegistry(), overrideFlag: true });
-		const args = parseArgs(["account", "set-primary", "--label=Personal"]);
 		const result = await accountCommand(args, h.ports);
 		expect(result.exitCode).toBe(2);
-	});
-
-	it("missing selector → error", async () => {
-		const h = makeHarness({ registry: baseRegistry(), overrideFlag: true });
-		const args = parseArgs(["account", "set-primary"]);
-		const result = await accountCommand(args, h.ports);
-		expect(result.exitCode).toBe(2);
+		expect(h.errors.join("\n")).toContain("unknown subcommand");
 	});
 });
 

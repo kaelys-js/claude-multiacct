@@ -1,5 +1,5 @@
 /**
- * `@foundation/claude-multiacct` — `cma account {add,remove,list,verify,refresh,set-primary}`.
+ * `@foundation/claude-multiacct` — `cma account {add,remove,list,verify,refresh}`.
  *
  * Thin humaniser wrappers around PR4's library commands (`../commands.ts`).
  * Each subcommand:
@@ -29,14 +29,11 @@
  * return value. `commands/account.test.ts` runs an adversarial token-in-
  * captured-output test with a known needle string.
  *
- * # First-account primary — Rule 1 note
+ * # No stored primary
  *
- * PR4's `provisionAccount` treats "no registry yet" as the empty pool and
- * marks the first-added account primary in the same write. We do NOT
- * additionally invoke `setPrimary` on first add (it would fail with
- * `already_primary`). The auto-primary behaviour is verified in the test
- * suite by asserting `result.account.isPrimary === true` on the FIRST
- * add — the same contract, checked at the observable outcome layer.
+ * Accounts carry no "primary" flag. Which account is active is derived at
+ * runtime from Claude.app's current OAuth token, so `add` neither sets nor
+ * reports a primary marker, and there is no `set-primary` subcommand.
  *
  * @module
  */
@@ -49,7 +46,6 @@ import {
 	listAccounts,
 	refreshAccount,
 	removeAccount,
-	setPrimary,
 	type SkippedResult,
 	verifyAccount,
 } from "../commands.ts";
@@ -117,12 +113,9 @@ export async function accountCommand(args: ParsedArgs, ports: AccountPorts): Pro
 		case "refresh": {
 			return await accountRefresh(args, ports);
 		}
-		case "set-primary": {
-			return await accountSetPrimary(args, ports);
-		}
 		default: {
 			ports.logger.error(
-				`cma account: unknown subcommand '${String(args.subcommand ?? "<none>")}' (expected: add|list|remove|verify|refresh|set-primary)`,
+				`cma account: unknown subcommand '${String(args.subcommand ?? "<none>")}' (expected: add|list|remove|verify|refresh)`,
 			);
 			return { exitCode: 2 };
 		}
@@ -176,9 +169,8 @@ async function accountAdd(args: ParsedArgs, ports: AccountPorts): Promise<Accoun
 		ports.logger.error(`cma account add: failed (${result.kind}): ${result.detail}`);
 		return { exitCode: 2 };
 	}
-	const primaryNote = result.account.isPrimary ? " (primary — first account)" : "";
 	ports.logger.log(
-		`cma account add: added '${result.account.label}' [${shortUuid(result.account.uuid)}]${primaryNote}`,
+		`cma account add: added '${result.account.label}' [${shortUuid(result.account.uuid)}]`,
 	);
 	return { exitCode: 0 };
 }
@@ -333,40 +325,6 @@ async function accountRefresh(args: ParsedArgs, ports: AccountPorts): Promise<Ac
 }
 
 /**
- * `cma account set-primary` handler.
- *
- * @param {ParsedArgs} args - Parsed argv.
- * @param {AccountPorts} ports - Injected ports.
- * @returns {Promise<AccountExit>} Exit code result.
- */
-async function accountSetPrimary(args: ParsedArgs, ports: AccountPorts): Promise<AccountExit> {
-	const selector = parseSelector(args);
-	if (selector === undefined) {
-		ports.logger.error("cma account set-primary: --uuid=<uuid> or --label=<label> required");
-		return { exitCode: 2 };
-	}
-	const result = await setPrimary({
-		selector,
-		ports: ports.cliPorts,
-		env: ports.env,
-		overrideFlag: ports.overrideFlag,
-	});
-	if (isSkipped(result)) {
-		ports.logger.error(`cma account set-primary: skipped (${result.reason})`);
-		return { exitCode: 3 };
-	}
-	if (!result.ok) {
-		ports.logger.error(`cma account set-primary: failed (${result.reason}): ${result.detail}`);
-		return { exitCode: 2 };
-	}
-	// previousPrimary is undefined when no account held the stored default yet
-	// (electing a first default); report that plainly rather than crashing.
-	const from = result.previousPrimary?.label ?? "(none)";
-	ports.logger.log(`cma account set-primary: '${from}' → '${result.newPrimary.label}'`);
-	return { exitCode: 0 };
-}
-
-/**
  * Convert `--uuid`/`--label` flags to an `AccountSelector`.
  *
  * @param {ParsedArgs} args - Parsed argv.
@@ -404,14 +362,13 @@ function shortUuid(uuid: string): string {
  * @returns {string} Newline-joined table with header row.
  */
 function formatAccountTable(accounts: readonly Account[]): string {
-	const header = "label            uuid       primary  subscription    tier";
+	const header = "label            uuid       subscription    tier";
 	const rows = accounts.map((a) => {
 		const label = pad(a.label, 16);
 		const uuid = pad(shortUuid(a.uuid), 10);
-		const primary = a.isPrimary ? "yes    " : "no     ";
 		const sub = pad(a.subscriptionType, 15);
 		const tier = a.rateLimitTier;
-		return `${label} ${uuid} ${primary} ${sub} ${tier}`;
+		return `${label} ${uuid} ${sub} ${tier}`;
 	});
 	return [header, ...rows].join("\n");
 }

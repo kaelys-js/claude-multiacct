@@ -18,7 +18,6 @@ import type { BridgeClient, BridgeResult } from "./bridge-client.ts";
 export type PickerAccount = {
 	uuid: string;
 	label: string;
-	isPrimary: boolean;
 };
 
 export type MountPickerOptions = {
@@ -188,8 +187,9 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 		if (found !== undefined) {
 			return found.label;
 		}
-		const primary = accounts.find((a) => a.isPrimary);
-		return primary?.label ?? "…";
+		// No current pick yet: fall back to the first account in pool order,
+		// which mirrors the runtime active-account fallback in the domain.
+		return accounts[0]?.label ?? "…";
 	}
 
 	function refreshButton(): void {
@@ -246,15 +246,6 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 			label.style.whiteSpace = "nowrap";
 			label.textContent = account.label;
 			item.append(label);
-
-			if (account.isPrimary) {
-				const tag = doc.createElement("span");
-				tag.style.marginLeft = "8px";
-				tag.style.fontSize = "11px";
-				tag.style.opacity = "0.55";
-				tag.textContent = "primary";
-				item.append(tag);
-			}
 
 			item.addEventListener("click", () => {
 				// eslint-disable-next-line typescript/no-floating-promises -- fire-and-forget click handler
@@ -358,7 +349,11 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 	opts.doc.defaultView?.addEventListener("scroll", reposition, true);
 	opts.doc.defaultView?.addEventListener("resize", reposition);
 
-	// Initial data: fetch from client if not pre-seeded.
+	// Initial data: fetch from client if not pre-seeded. No account is marked
+	// selected up front — there is no stored primary, and the runtime-derived
+	// active account is wired in by the picker-styling work that follows. Until
+	// then `currentUuid` stays undefined and the button shows the first
+	// account's label as a hint (see `labelFor`).
 	if (opts.accounts === undefined) {
 		// eslint-disable-next-line typescript/no-floating-promises -- fire-and-forget initial accounts fetch
 		(async (): Promise<void> => {
@@ -369,8 +364,6 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 				}
 				if (res.ok && Array.isArray(res.data.accounts)) {
 					({ accounts } = res.data);
-					const primary = accounts.find((a) => a.isPrimary);
-					currentUuid = primary?.uuid;
 					refreshButton();
 					renderItems();
 				} else if (!res.ok) {
@@ -383,8 +376,6 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 			}
 		})();
 	} else {
-		const primary = accounts.find((a) => a.isPrimary);
-		currentUuid = primary?.uuid;
 		refreshButton();
 		renderItems();
 	}

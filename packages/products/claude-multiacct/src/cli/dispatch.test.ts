@@ -340,7 +340,6 @@ describe("dispatchCli", () => {
 				{
 					uuid: "11111111-1111-4111-8111-111111111111",
 					label: "Personal",
-					isPrimary: true,
 					subscriptionType: "Pro",
 					rateLimitTier: "tier-2",
 					encryptedTokenRef: "keychain:a",

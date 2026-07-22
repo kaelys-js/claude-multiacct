@@ -3,13 +3,10 @@
  * Intent: library-callable commands. Load-bearing:
  *
  *   - Flag-off tests are the GATED-PR proof: `addAccount`,
- *     `removeAccount`, `refreshAccount`, `setPrimary` return `{skipped:
- *     true}` and mutate NOTHING. Adversarial: bypass the flag on any of
- *     them and its flag-off test goes red.
+ *     `removeAccount`, `refreshAccount` return `{skipped: true}` and
+ *     mutate NOTHING. Adversarial: bypass the flag on any of them and its
+ *     flag-off test goes red.
  *   - `listAccounts` + `verifyAccount` are ALWAYS allowed (read-only).
- *   - `setPrimary` maintains PR1's exactly-one-primary invariant across the
- *     flip — the newly written registry has exactly one primary. Loosening
- *     the impl to allow zero primaries makes the invariant-check test red.
  *   - `removeAccount` is atomic-rollback: on registry write fail, the
  *     token store is restored to its pre-delete state.
  */
@@ -28,7 +25,6 @@ import {
 	listAccounts,
 	refreshAccount,
 	removeAccount,
-	setPrimary,
 	verifyAccount,
 } from "./commands.ts";
 
@@ -46,7 +42,6 @@ function baseRegistry(): AccountRegistry {
 			{
 				uuid: coerceUuid(UUID_A),
 				label: "Personal",
-				isPrimary: true,
 				subscriptionType: "Pro",
 				rateLimitTier: "tier-2",
 				encryptedTokenRef: "keychain:a",
@@ -54,7 +49,6 @@ function baseRegistry(): AccountRegistry {
 			{
 				uuid: coerceUuid(UUID_B),
 				label: "Work",
-				isPrimary: false,
 				subscriptionType: "Pro",
 				rateLimitTier: "tier-2",
 				encryptedTokenRef: "keychain:b",
@@ -223,15 +217,20 @@ describe("removeAccount — flag gate + atomicity", () => {
 		expect(ports.tokenStore.snapshot()).toEqual({});
 	});
 
-	it("refuses to remove the primary when other accounts exist (PR1 invariant guard)", async () => {
+	it("removes any account while others remain — no stored-primary guard to trip", async () => {
+		// The old exactly-one-primary guard refused to remove the first account
+		// while others existed. The active account is derived at runtime now, so
+		// there is nothing to protect: removing "Personal" trims the registry and
+		// writes the remaining pool.
 		const ports = makePorts({ registry: baseRegistry() });
 		const r = await removeAccount({
 			selector: { label: "Personal" },
 			ports,
 			overrideFlag: true,
 		});
-		assertNotOk(r);
-		expect(ports.writes).toEqual([]);
+		assertOk(r);
+		expect(ports.writes).toHaveLength(1);
+		expect(ports.writes[0]?.accounts.map((a) => a.label)).not.toContain("Personal");
 	});
 
 	it("removes the last account (empty pool — no write, token deleted)", async () => {
@@ -463,98 +462,11 @@ describe("refreshAccount — flag gate + refresh flow", () => {
 	});
 });
 
-describe("setPrimary — flag gate + invariant (exactly one primary)", () => {
-	it("flag off → {skipped:true}, no writes", async () => {
-		const ports = makePorts({ registry: baseRegistry() });
-		const r = await setPrimary({ selector: { label: "Work" }, ports, env: {} });
-		expect(r).toEqual({
-			ok: false,
-			skipped: true,
-			reason: expect.stringContaining("setPrimary"),
-		});
-		expect(ports.writes).toEqual([]);
-	});
-
-	it("flip: newly written registry has EXACTLY one primary (adversarial: allow zero → RED)", async () => {
-		const ports = makePorts({ registry: baseRegistry() });
-		const r = await setPrimary({
-			selector: { label: "Work" },
-			ports,
-			overrideFlag: true,
-		});
-		assertOk(r);
-		expect(ports.writes).toHaveLength(1);
-		const [written] = ports.writes;
-		if (written === undefined) {
-			throw new Error("expected one written registry");
-		}
-		const primaries = written.accounts.filter((a) => a.isPrimary);
-		expect(primaries).toHaveLength(1);
-		expect(primaries[0]?.label).toBe("Work");
-	});
-
-	it("elects a default with previousPrimary=undefined when none is stored yet", async () => {
-		// The exactly-one-primary schema invariant is gone, so a no-primary
-		// registry now loads. set-primary must still elect one and report the
-		// transition from "none" instead of assuming a previous default existed.
-		const noPrimary: AccountRegistry = {
-			accounts: baseRegistry().accounts.map((a) => ({ ...a, isPrimary: false })),
-		};
-		const ports = makePorts({ registry: noPrimary });
-		const r = await setPrimary({ selector: { label: "Work" }, ports, overrideFlag: true });
-		assertOk(r);
-		expect(r.previousPrimary).toBeUndefined();
-		expect(r.newPrimary.label).toBe("Work");
-		const [written] = ports.writes;
-		expect(written?.accounts.filter((a) => a.isPrimary)).toHaveLength(1);
-	});
-
-	it("already_primary when the target is already the primary", async () => {
-		const ports = makePorts({ registry: baseRegistry() });
-		const r = await setPrimary({
-			selector: { label: "Personal" },
-			ports,
-			overrideFlag: true,
-		});
-		assertNotOk(r);
-		const reason = "reason" in r ? r.reason : "";
-		expect(reason).toBe("already_primary");
-		expect(ports.writes).toEqual([]);
-	});
-
-	it("not_found when no registry", async () => {
-		const ports = makePorts();
-		const r = await setPrimary({ selector: { label: "x" }, ports, overrideFlag: true });
-		assertNotOk(r);
-	});
-
-	it("not_found when selector matches nothing", async () => {
-		const ports = makePorts({ registry: baseRegistry() });
-		const r = await setPrimary({ selector: { label: "Nope" }, ports, overrideFlag: true });
-		assertNotOk(r);
-	});
-
-	it("registry_write_failed surfaces when writer throws", async () => {
-		const ports = makePorts({
-			registry: baseRegistry(),
-			registryWriter: { write: () => Promise.reject(new Error("wf")) },
-		});
-		const r = await setPrimary({
-			selector: { label: "Work" },
-			ports,
-			overrideFlag: true,
-		});
-		assertNotOk(r);
-		const reason = "reason" in r ? r.reason : "";
-		expect(reason).toBe("registry_write_failed");
-	});
-});
-
 describe("commands — env fallback to process.env", () => {
 	it("defaults env to process.env when omitted (skip when flag unset)", async () => {
 		delete process.env.CLAUDE_MULTIACCT_ENABLE_SHIM;
 		const ports = makePorts({ registry: baseRegistry() });
-		const r = await setPrimary({ selector: { label: "Work" }, ports });
+		const r = await removeAccount({ selector: { label: "Work" }, ports });
 		expect("skipped" in r && r.skipped).toBe(true);
 	});
 });

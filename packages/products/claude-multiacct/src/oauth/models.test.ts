@@ -108,7 +108,6 @@ describe("ProvisionResultSchema", () => {
 				account: {
 					uuid: UUID,
 					label: "Personal",
-					isPrimary: true,
 					subscriptionType: "Pro",
 					rateLimitTier: "tier-2",
 					encryptedTokenRef: "keychain:handle-a",

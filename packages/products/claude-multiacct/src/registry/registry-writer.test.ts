@@ -40,7 +40,6 @@ function validRegistry(): AccountRegistry {
 			{
 				uuid: UUID_A as AccountRegistry["accounts"][0]["uuid"],
 				label: "Personal",
-				isPrimary: true,
 				subscriptionType: "Pro",
 				rateLimitTier: "tier-2",
 				encryptedTokenRef: "keychain:handle-a",

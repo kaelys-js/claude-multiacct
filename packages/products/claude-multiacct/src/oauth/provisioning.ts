@@ -10,10 +10,10 @@
  *      account and yields the identity fields (uuid, subscription, tier).
  *      Fail → `{kind:"verify_failed"}`; no writes.
  *   3. Load registry via PR2's reader. `undefined` (no pool yet) becomes an
- *      empty registry — the new account is the first + becomes primary.
+ *      empty registry — the new account is simply the pool's first member.
  *      Duplicate label → `{kind:"duplicate_label"}`; duplicate uuid →
  *      `{kind:"duplicate_uuid"}`. Both reject BEFORE any writes so the
- *      PR1 invariants stay unforced-on the writer.
+ *      registry invariants stay unforced-on the writer.
  *   4. ATOMIC double-write:
  *        a. Put the token into the store.
  *        b. Append the account to the registry via `AtomicRegistryWriter`.
@@ -84,9 +84,9 @@ export function flagOn(env: Record<string, string | undefined>): boolean {
 }
 
 /**
- * Return a registry with `account` appended. When `registry` is undefined,
- * the new account is the pool's first — forced to `isPrimary: true` so the
- * PR1 exactly-one-primary invariant holds.
+ * Return a registry with `account` appended. When `registry` is undefined the
+ * new account simply becomes the pool's only member; there is no stored primary
+ * flag to set, since the active account is derived at runtime.
  *
  * @param {AccountRegistry | undefined} registry - Prior registry, if any.
  * @param {Account} account - Account to append.
@@ -94,8 +94,7 @@ export function flagOn(env: Record<string, string | undefined>): boolean {
  */
 function appendAccount(registry: AccountRegistry | undefined, account: Account): AccountRegistry {
 	if (registry === undefined) {
-		// First account in a new pool — must be primary or the invariant fails.
-		return { accounts: [{ ...account, isPrimary: true }] };
+		return { accounts: [account] };
 	}
 	return { accounts: [...registry.accounts, account] };
 }
@@ -148,13 +147,11 @@ export async function provisionAccount(opts: ProvisionOptions): Promise<Provisio
 		}
 	}
 
-	// Build the new account. First account in a fresh pool is primary; every
-	// subsequent add is non-primary and needs setPrimary to flip explicitly.
-	const isPrimary = existing === undefined;
+	// Build the new account. No stored primary flag: the active account is
+	// derived at runtime from Claude.app's current token, not marked on add.
 	const account: Account = {
 		uuid: accountUuid,
 		label: opts.label,
-		isPrimary,
 		subscriptionType: verify.subscriptionType,
 		rateLimitTier: verify.rateLimitTier,
 		encryptedTokenRef: verify.accountUuid,

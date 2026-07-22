@@ -134,7 +134,6 @@ describe("discoverAccounts", () => {
 				{
 					uuid: registered,
 					label: "icloud",
-					isPrimary: true,
 					subscriptionType: "unknown",
 					rateLimitTier: "unknown",
 					encryptedTokenRef: registered,
@@ -517,7 +516,6 @@ describe("discoverAccounts", () => {
 				{
 					uuid: registered,
 					label: "icloud",
-					isPrimary: true,
 					subscriptionType: "unknown",
 					rateLimitTier: "unknown",
 					encryptedTokenRef: registered,

@@ -258,7 +258,6 @@ describe("start", () => {
 					{
 						uuid: "11111111-1111-4111-8111-111111111111",
 						label: "a",
-						isPrimary: true,
 						encryptedTokenRef: "kc:ref",
 						subscriptionType: "pro",
 						rateLimitTier: "tier1",

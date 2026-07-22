@@ -34,7 +34,6 @@ const sessUuid = "22222222-2222-4222-8222-222222222222";
 const sampleAccount: Account = {
 	uuid: acctUuid as Account["uuid"],
 	label: "test",
-	isPrimary: true,
 	encryptedTokenRef: "kc:ref",
 	subscriptionType: "pro",
 	rateLimitTier: "tier1",

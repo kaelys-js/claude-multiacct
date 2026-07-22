@@ -69,7 +69,6 @@ function acct(uuid: AccountUuid, label: string): Account {
 	return {
 		uuid,
 		label,
-		isPrimary: false,
 		subscriptionType: "Pro",
 		rateLimitTier: "tier-2",
 		encryptedTokenRef: `keychain:${label}`,

@@ -23,10 +23,8 @@
  * runtime by `getPrimary` as the account whose OAuth token-sha256 matches the
  * token Claude.app is currently authenticated as. That makes "which account is
  * active?" track reality (whatever Claude.app is logged in as) instead of a
- * bit that can silently drift from it. The `isPrimary` field on `Account`
- * survives as the operator's stored default (managed by the CLI `set-primary`
- * command, shown in `status`), but it is no longer what account-resolution
- * consults.
+ * bit that can silently drift from it. `Account` carries no stored primary
+ * flag at all: there is nothing on disk for resolution to consult or repair.
  *
  * `getPrimary` / `getPooled` derive the active account from two injected
  * dependencies, the current active token sha and a per-account sha resolver,
