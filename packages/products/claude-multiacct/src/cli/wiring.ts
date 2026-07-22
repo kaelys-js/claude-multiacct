@@ -54,6 +54,13 @@ import {
 	uninstall as uninstallExtension,
 } from "../extension/installer.ts";
 import {
+	installAgent as installActiveToken,
+	nodeAgentFsPort as activeTokenFsPort,
+	nodeLaunchctlPort as activeTokenLaunchctlPort,
+	uninstallAgent as uninstallActiveToken,
+} from "../active-token-agent/agent-installer.ts";
+import { ACTIVE_TOKEN_LABEL, renderActiveTokenPlist } from "../active-token-agent/launchd-plist.ts";
+import {
 	installAgent as installDaemon,
 	nodeAgentFsPort as daemonFsPort,
 	nodeLaunchctlPort as daemonLaunchctlPort,
@@ -92,6 +99,7 @@ import {
 	undeployAgentScripts,
 } from "./deploy-scripts.ts";
 import {
+	resolveActiveTokenScriptPath,
 	resolveDaemonScriptPath,
 	resolveExtensionDistDir,
 	resolveWatcherScriptPath,
@@ -165,7 +173,7 @@ function resolveLegacyFlags(
 }
 
 /**
- * Build the five-step orchestration list bound to real installers.
+ * Build the six-step orchestration list bound to real installers.
  *
  * @param {WiringDeps} deps - Logger + env.
  * @param {LegacyFlags} legacyFlags - Opt-in flags for the destructive legacy-cleanup step.
@@ -197,6 +205,14 @@ function buildSteps(deps: WiringDeps, legacyFlags: LegacyFlags): readonly Orches
 
 	const watcherTarget = join(homedir(), ".claude-multiacct", "watcher.js");
 	const daemonTarget = join(homedir(), ".claude-multiacct", "daemon.js");
+	const activeTokenTarget = join(homedir(), ".claude-multiacct", "active-token.js");
+	const claudeConfigJson = join(
+		homedir(),
+		"Library",
+		"Application Support",
+		"Claude",
+		"config.json",
+	);
 	const backupsRoot = join(homedir(), ".claude-multiacct-backups");
 	const deployPairs = (): readonly DeployPair[] => [
 		{
@@ -205,6 +221,11 @@ function buildSteps(deps: WiringDeps, legacyFlags: LegacyFlags): readonly Orches
 			source: resolveWatcherScriptPath(import.meta.url),
 		},
 		{ name: "daemon.js", target: daemonTarget, source: resolveDaemonScriptPath(import.meta.url) },
+		{
+			name: "active-token.js",
+			target: activeTokenTarget,
+			source: resolveActiveTokenScriptPath(import.meta.url),
+		},
 	];
 
 	const stepWatcher: OrchestrationStep = {
@@ -276,6 +297,45 @@ function buildSteps(deps: WiringDeps, legacyFlags: LegacyFlags): readonly Orches
 		},
 	};
 
+	// The gui-session companion that resolves the active account (keychain-
+	// capable) and publishes it to the file the daemon reads. Deployed like the
+	// watcher/daemon: copy the bundle, render the plist, install the agent.
+	// WatchPaths points at Claude's config.json so an account switch re-fires it.
+	const stepActiveToken: OrchestrationStep = {
+		name: "active-token",
+		install: async (flag) => {
+			await deployAgentScripts(realDeployFs(), [deployPairs()[2] as DeployPair], {
+				backupsRoot,
+				now: () => new Date(),
+			});
+			const body = renderActiveTokenPlist({
+				label: ACTIVE_TOKEN_LABEL,
+				watchedPath: claudeConfigJson,
+				programArgs: [process.execPath, activeTokenTarget],
+				stdoutPath: join(homedir(), ".claude-multiacct", "logs", "active-token.out.log"),
+				stderrPath: join(homedir(), ".claude-multiacct", "logs", "active-token.err.log"),
+			});
+			const result = await installActiveToken({
+				launchctl: activeTokenLaunchctlPort(),
+				fs: activeTokenFsPort(),
+				uid,
+				plistBody: body,
+				flag,
+			});
+			return { ok: !("skipped" in result && result.skipped) };
+		},
+		uninstall: async (flag) => {
+			await uninstallActiveToken({
+				launchctl: activeTokenLaunchctlPort(),
+				fs: activeTokenFsPort(),
+				uid,
+				flag,
+			});
+			await undeployAgentScripts(realDeployFs(), [deployPairs()[2] as DeployPair]);
+			return { ok: true };
+		},
+	};
+
 	const stepExtension: OrchestrationStep = {
 		name: "extension",
 		install: async (flag) => {
@@ -302,7 +362,7 @@ function buildSteps(deps: WiringDeps, legacyFlags: LegacyFlags): readonly Orches
 		},
 	};
 
-	return [stepLegacyCleanup, stepShim, stepWatcher, stepDaemon, stepExtension];
+	return [stepLegacyCleanup, stepShim, stepWatcher, stepDaemon, stepActiveToken, stepExtension];
 }
 
 /**
