@@ -6,6 +6,13 @@
  * menu can reach the page's own theme variables and match Claude's native
  * dropdown pixel-for-pixel.
  *
+ * The menu also carries pool management: each account row has a small remove
+ * control (`DELETE /accounts/:uuid`), and a trailing "Add account" row
+ * provisions a new account (`POST /accounts`) after collecting a label and the
+ * OAuth token
+ * the user obtained by signing in to Claude. Both re-fetch `/accounts` on
+ * success so the menu reflects the new pool without a page reload.
+ *
  * The load-bearing surface values (panel background, border, text, radius,
  * shadow) are the real Claude design-system tokens, referenced as the page's
  * own CSS variables with resolved-hex fallbacks. Captured live on 2026-07-21
@@ -47,6 +54,17 @@ export type MountPickerOptions = {
 	 */
 	activeUuid?: string;
 	onChoice?: (accountUuid: string) => void;
+	/**
+	 * Collect free-text input for "Add account" (label, then token). Returns
+	 * the entered string or `null` when the user cancels. Defaults to the
+	 * document's `window.prompt`; injected so tests never open a real dialog.
+	 */
+	prompt?: (message: string) => string | null;
+	/**
+	 * Confirm a destructive remove. Returns true to proceed. Defaults to the
+	 * document's `window.confirm`; injected so tests never open a real dialog.
+	 */
+	confirm?: (message: string) => boolean;
 };
 
 export type PickerHandle = {
@@ -164,6 +182,31 @@ function styleItem(el: HTMLElement, isSelected: boolean): void {
 }
 
 /**
+ * Style the small per-row remove ("×") control. Muted until hovered so it
+ * reads as a secondary affordance next to the account label.
+ *
+ * @param {HTMLElement} el - The remove-button element to style.
+ * @returns {void}
+ */
+function styleRemoveButton(el: HTMLElement): void {
+	el.style.display = "inline-flex";
+	el.style.alignItems = "center";
+	el.style.justifyContent = "center";
+	el.style.width = "16px";
+	el.style.height = "16px";
+	el.style.flex = "0 0 auto";
+	el.style.padding = "0";
+	el.style.border = "0";
+	el.style.borderRadius = "0.25rem";
+	el.style.background = "transparent";
+	el.style.color = "var(--claude-secondary-color, #a6a39a)";
+	el.style.font = "inherit";
+	el.style.lineHeight = "1";
+	el.style.cursor = "default";
+	el.style.opacity = "0.7";
+}
+
+/**
  * Mount the picker onto `host`. Returns a handle whose `destroy()` removes
  * every DOM node the picker created and detaches its listeners.
  *
@@ -172,6 +215,20 @@ function styleItem(el: HTMLElement, isSelected: boolean): void {
  */
 export function mountPicker(opts: MountPickerOptions): PickerHandle {
 	const { doc } = opts;
+
+	// Dialog collectors. Default to the document's own window prompt/confirm
+	// (the content script always has one); tests inject fakes. `defaultView`
+	// is non-null for both the extension document and jsdom, so the cast spends
+	// no runtime branch on the null case.
+	const view = doc.defaultView as Window & typeof globalThis;
+	function defaultPrompt(message: string): string | null {
+		return view.prompt(message);
+	}
+	function defaultConfirm(message: string): boolean {
+		return view.confirm(message);
+	}
+	const promptFn = opts.prompt ?? defaultPrompt;
+	const confirmFn = opts.confirm ?? defaultConfirm;
 
 	const button = doc.createElement("button");
 	button.type = "button";
@@ -277,6 +334,34 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 			label.textContent = account.label;
 			item.append(label);
 
+			const removeBtn = doc.createElement("button");
+			removeBtn.type = "button";
+			removeBtn.dataset.cmaRemove = account.uuid;
+			removeBtn.className = "cds-reset";
+			removeBtn.setAttribute("aria-label", `Remove ${account.label}`);
+			removeBtn.textContent = "×";
+			styleRemoveButton(removeBtn);
+			removeBtn.addEventListener("mouseenter", () => {
+				removeBtn.style.opacity = "1";
+			});
+			removeBtn.addEventListener("mouseleave", () => {
+				removeBtn.style.opacity = "0.7";
+			});
+			removeBtn.addEventListener("click", (event: Event) => {
+				// Never let the remove click bubble to the row's choose handler.
+				event.stopPropagation();
+				// eslint-disable-next-line typescript/no-floating-promises -- fire-and-forget click handler
+				(async (): Promise<void> => {
+					try {
+						await removeChosen(account);
+					} catch (error: unknown) {
+						// eslint-disable-next-line no-console
+						console.warn("[cma-extension] remove failed:", error);
+					}
+				})();
+			});
+			item.append(removeBtn);
+
 			item.addEventListener("click", () => {
 				// eslint-disable-next-line typescript/no-floating-promises -- fire-and-forget click handler
 				(async (): Promise<void> => {
@@ -290,6 +375,34 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 			});
 			inner.append(item);
 		}
+
+		// Trailing "Add account" row — provisions a new pooled account.
+		const addRow = doc.createElement("div");
+		addRow.setAttribute("role", "menuitem");
+		addRow.setAttribute("tabindex", "-1");
+		addRow.dataset.cmaAddAccount = "";
+		addRow.className = MENU_ITEM_CLASSES;
+		styleItem(addRow, false);
+		addRow.style.color = "var(--claude-secondary-color, #a6a39a)";
+		addRow.textContent = "+ Add account";
+		addRow.addEventListener("mouseenter", () => {
+			addRow.style.background = HOVER_BG;
+		});
+		addRow.addEventListener("mouseleave", () => {
+			addRow.style.background = "transparent";
+		});
+		addRow.addEventListener("click", () => {
+			// eslint-disable-next-line typescript/no-floating-promises -- fire-and-forget click handler
+			(async (): Promise<void> => {
+				try {
+					await addNew();
+				} catch (error: unknown) {
+					// eslint-disable-next-line no-console
+					console.warn("[cma-extension] add failed:", error);
+				}
+			})();
+		});
+		inner.append(addRow);
 	}
 
 	function positionMenu(): void {
@@ -346,6 +459,63 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 			renderItems();
 			opts.onChoice?.(previous ?? "");
 		}
+	}
+
+	// Re-pull the pool from the daemon after a mutation so the menu reflects
+	// the new set without a page reload. A dead picker, a failed request, or a
+	// non-array payload leaves the menu as-is. When the selected account is gone
+	// (just removed), `labelFor` falls back to the first-account hint, so no
+	// explicit reset is needed here.
+	async function refetchAccounts(): Promise<void> {
+		const res = await opts.client.get<{ ok: boolean; accounts: PickerAccount[] }>("/accounts");
+		if (destroyed || !res.ok || !Array.isArray(res.data.accounts)) {
+			return;
+		}
+		({ accounts } = res.data);
+		refreshButton();
+		renderItems();
+	}
+
+	// "Add account" — collect a label and the OAuth token the user obtained by
+	// signing in to Claude, POST them, then refresh the pool. A cancelled or
+	// empty prompt aborts without a request (Rule 12: no silent empty writes).
+	async function addNew(): Promise<void> {
+		closeMenu();
+		const labelRaw = promptFn("New account label:");
+		const label = labelRaw === null ? "" : labelRaw.trim();
+		if (label === "") {
+			return;
+		}
+		const tokenRaw = promptFn("Paste the OAuth token for this account (sign in to Claude first):");
+		const token = tokenRaw === null ? "" : tokenRaw.trim();
+		if (token === "") {
+			return;
+		}
+		const result: BridgeResult<unknown> = await opts.client.post("/accounts", { label, token });
+		if (!result.ok) {
+			// eslint-disable-next-line no-console
+			console.warn("[cma-extension] add account failed:", result.kind, result.detail);
+			return;
+		}
+		await refetchAccounts();
+	}
+
+	// Per-row remove — confirm, DELETE, then refresh. A declined confirm aborts.
+	async function removeChosen(account: PickerAccount): Promise<void> {
+		const ok = confirmFn(
+			`Remove account "${account.label}"? This deregisters it and deletes its stored token.`,
+		);
+		if (!ok) {
+			return;
+		}
+		closeMenu();
+		const result: BridgeResult<unknown> = await opts.client.del(`/accounts/${account.uuid}`);
+		if (!result.ok) {
+			// eslint-disable-next-line no-console
+			console.warn("[cma-extension] remove account failed:", result.kind, result.detail);
+			return;
+		}
+		await refetchAccounts();
 	}
 
 	button.addEventListener("click", (event: Event) => {

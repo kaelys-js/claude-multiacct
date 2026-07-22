@@ -31,7 +31,9 @@ import type { Account } from "../domain/account.ts";
 import type { ChoiceStore } from "../ports.ts";
 import { atomicWriteJson } from "./atomic-json.ts";
 import {
+	type AddAccountFn,
 	dispatch,
+	type RemoveAccountFn,
 	type RouteDeps,
 	type RouteResult,
 	type SignalSwapFn,
@@ -59,6 +61,10 @@ export type StartOptions = {
 	listAccounts: () => Promise<Account[]>;
 	/** Resolve the runtime-active account uuid for `/accounts` (see routes.ts). */
 	activeAccountUuid: () => Promise<string | undefined>;
+	/** Provision a new account (`POST /accounts`). See `account-admin.ts`. */
+	addAccount: AddAccountFn;
+	/** Deregister an account (`DELETE /accounts/:uuid`). See `account-admin.ts`. */
+	removeAccount: RemoveAccountFn;
 	verifyAccount: VerifyAccountFn;
 	choiceStore: Pick<ChoiceStore, "write">;
 	flagOn: boolean;
@@ -294,6 +300,8 @@ export async function start(opts: StartOptions): Promise<StartResult> {
 	const routeDeps: RouteDeps = {
 		listAccounts: opts.listAccounts,
 		activeAccountUuid: opts.activeAccountUuid,
+		addAccount: opts.addAccount,
+		removeAccount: opts.removeAccount,
 		verifyAccount: opts.verifyAccount,
 		choiceStore: opts.choiceStore,
 		flagOn: opts.flagOn,

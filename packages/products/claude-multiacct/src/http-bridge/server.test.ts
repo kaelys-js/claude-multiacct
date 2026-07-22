@@ -69,6 +69,10 @@ async function scratchPath(): Promise<string> {
 const noopDeps = {
 	listAccounts: (): Promise<never[]> => Promise.resolve([]),
 	activeAccountUuid: (): Promise<undefined> => Promise.resolve(undefined),
+	addAccount: (): Promise<{ ok: false; status: number; reason: string; detail: string }> =>
+		Promise.resolve({ ok: false, status: 500, reason: "unwired", detail: "test noop" }),
+	removeAccount: (): Promise<{ ok: false; status: number; reason: string; detail: string }> =>
+		Promise.resolve({ ok: false, status: 500, reason: "unwired", detail: "test noop" }),
 	verifyAccount: (): Promise<{ ok: true }> => Promise.resolve({ ok: true }),
 	choiceStore: { write: (): Promise<void> => Promise.resolve() },
 	flagOn: true,
@@ -366,6 +370,71 @@ describe("start", () => {
 			},
 		);
 		expect(res.status).toBe(400);
+	});
+
+	it("POST /accounts threads the body to addAccount and echoes the provisioned account (201)", async () => {
+		// Proves start() wires addAccount into the route AND that the JSON body
+		// crosses the socket intact. Drop the `addAccount: opts.addAccount` line in
+		// server.ts and this flips red (the noop 500 answers instead).
+		const path = await scratchPath();
+		const account = {
+			uuid: "11111111-1111-4111-8111-111111111111",
+			label: "work",
+			encryptedTokenRef: "kc:ref",
+			subscriptionType: "pro",
+			rateLimitTier: "tier1",
+		};
+		const addAccount = vi.fn<() => Promise<{ ok: true; account: typeof account }>>(() =>
+			Promise.resolve({ ok: true, account }),
+		);
+		const s = await start({ ...noopDeps, bridgeJsonPath: path, addAccount: addAccount as never });
+		alive.push(s);
+		const res = await fetch(`http://127.0.0.1:${String(s.port)}/accounts`, {
+			method: "POST",
+			headers: {
+				origin: "https://claude.ai",
+				"x-cma-bridge-secret": s.secret,
+				"content-type": "application/json",
+			},
+			body: JSON.stringify({ label: "work", token: "sk-ant-oat-xyz" }),
+		});
+		expect(res.status).toBe(201);
+		const body = (await res.json()) as { ok: boolean; account: { label: string } };
+		expect(body.ok).toBe(true);
+		expect(body.account.label).toBe("work");
+		expect(addAccount).toHaveBeenCalledWith({ label: "work", token: "sk-ant-oat-xyz" });
+	});
+
+	it("DELETE /accounts/:uuid threads the uuid to removeAccount and echoes the removed account", async () => {
+		const path = await scratchPath();
+		const account = {
+			uuid: "11111111-1111-4111-8111-111111111111",
+			label: "work",
+			encryptedTokenRef: "kc:ref",
+			subscriptionType: "pro",
+			rateLimitTier: "tier1",
+		};
+		const removeAccount = vi.fn<() => Promise<{ ok: true; removed: typeof account }>>(() =>
+			Promise.resolve({ ok: true, removed: account }),
+		);
+		const s = await start({
+			...noopDeps,
+			bridgeJsonPath: path,
+			removeAccount: removeAccount as never,
+		});
+		alive.push(s);
+		const res = await fetch(
+			`http://127.0.0.1:${String(s.port)}/accounts/11111111-1111-4111-8111-111111111111`,
+			{
+				method: "DELETE",
+				headers: { origin: "https://claude.ai", "x-cma-bridge-secret": s.secret },
+			},
+		);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { ok: boolean; removed: { label: string } };
+		expect(body.ok).toBe(true);
+		expect(body.removed.label).toBe("work");
+		expect(removeAccount).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111");
 	});
 
 	it("wires the default signalSwap + default logger.log when opts omit them", async () => {

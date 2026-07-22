@@ -31,9 +31,12 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { PACKAGE_VERSION } from "./src/index.ts";
 import { start } from "./src/http-bridge/server.ts";
+import { makeAddAccount, makeRemoveAccount } from "./src/http-bridge/account-admin.ts";
 import { FsChoiceStore } from "./src/cli-shim/choice-store.ts";
-import { readRegistry } from "./src/cli-shim/registry-store.ts";
+import { readRegistry, defaultRegistryPath } from "./src/cli-shim/registry-store.ts";
 import { SecurityCliTokenStore } from "./src/cli-shim/token-store.ts";
+import { SecurityCliMutableTokenStore } from "./src/cli-shim/mutable-token-store.ts";
+import { AtomicRegistryWriter, nodeRegistryFsPort } from "./src/registry/registry-writer.ts";
 import { verifyToken } from "./src/oauth/verify.ts";
 import { flagOn } from "./src/oauth/provisioning.ts";
 import {
@@ -164,6 +167,24 @@ const activeAccountUuid = async () => {
 	}
 };
 
+// Pool-mutation ports for POST /accounts + DELETE /accounts/:uuid. Same
+// adapters the CLI's makeCliPorts uses (keychain MutableTokenStore + atomic
+// registry writer + the real verify subprocess), so the bridge provisions and
+// removes accounts exactly the way the cma account add/remove CLI does.
+// Construction touches neither the keychain nor disk — the keychain
+// reads/writes happen only per add/remove request, keeping the boot path free
+// of a blocking security-CLI prompt (see the lazy-keychain note above).
+bootLog("construct-cliports");
+const registryPath = defaultRegistryPath();
+const cliPorts = {
+	tokenStore: new SecurityCliMutableTokenStore(),
+	registryWriter: new AtomicRegistryWriter({ path: registryPath, fs: nodeRegistryFsPort() }),
+	readRegistry: () => readRegistry(registryPath),
+	verify: (token) => verifyToken({ token, claudeRealPath, exec: verifyExec }),
+};
+const addAccount = makeAddAccount({ cliPorts, env: process.env });
+const removeAccount = makeRemoveAccount({ cliPorts, env: process.env });
+
 const flag = flagOn(process.env);
 
 // Auto-detect accounts BEFORE start() so the daemon serves a populated
@@ -207,6 +228,8 @@ try {
 	const { port } = await start({
 		listAccounts,
 		activeAccountUuid,
+		addAccount,
+		removeAccount,
 		verifyAccount,
 		choiceStore,
 		flagOn: flag,

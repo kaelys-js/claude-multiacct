@@ -18,11 +18,15 @@ import { describe, expect, it, vi } from "vitest";
 import type { Account } from "../domain/account.ts";
 import type { VerifyResult } from "../oauth/models.ts";
 import {
+	type AddAccountFn,
 	dispatch,
+	handleAddAccount,
 	handleHealth,
 	handleListAccounts,
+	handleRemoveAccount,
 	handleSetChoice,
 	handleUsage,
+	type RemoveAccountFn,
 	type RouteDeps,
 	type SignalSwapFn,
 	type VerifyAccountFn,
@@ -50,6 +54,12 @@ function makeDeps(overrides: Partial<RouteDeps> = {}): RouteDeps {
 	return {
 		listAccounts: overrides.listAccounts ?? (() => Promise.resolve([sampleAccount])),
 		activeAccountUuid: overrides.activeAccountUuid ?? (() => Promise.resolve(acctUuid)),
+		addAccount:
+			overrides.addAccount ??
+			vi.fn<AddAccountFn>(() => Promise.resolve({ ok: true, account: sampleAccount })),
+		removeAccount:
+			overrides.removeAccount ??
+			vi.fn<RemoveAccountFn>(() => Promise.resolve({ ok: true, removed: sampleAccount })),
 		verifyAccount:
 			overrides.verifyAccount ??
 			vi.fn<VerifyAccountFn>(() =>
@@ -256,6 +266,104 @@ describe("handleSetChoice (flag gate + validation)", () => {
 	});
 });
 
+describe("handleAddAccount (flag gate + validation + status mapping)", () => {
+	it("flag-off → 403 skipped:true and addAccount is NOT called (bypass flag → RED)", async () => {
+		const addAccount = vi.fn<AddAccountFn>(() =>
+			Promise.resolve({ ok: true, account: sampleAccount }),
+		);
+		const r = await handleAddAccount(makeDeps({ flagOn: false, addAccount }), {
+			label: "x",
+			token: "t",
+		});
+		expect(r.status).toBe(403);
+		expect(r.body).toEqual({ ok: false, skipped: true, reason: "flag-off" });
+		expect(addAccount).not.toHaveBeenCalled();
+	});
+
+	it("flag-on + valid body → 201 with the provisioned account, addAccount gets label+token", async () => {
+		const addAccount = vi.fn<AddAccountFn>(() =>
+			Promise.resolve({ ok: true, account: sampleAccount }),
+		);
+		const r = await handleAddAccount(makeDeps({ addAccount }), { label: "work", token: "sk-tok" });
+		expect(r.status).toBe(201);
+		expect(r.body).toEqual({ ok: true, account: sampleAccount });
+		expect(addAccount).toHaveBeenCalledWith({ label: "work", token: "sk-tok" });
+	});
+
+	it("missing token → 400 with the body issue path (loosen the schema → RED)", async () => {
+		const r = await handleAddAccount(makeDeps(), { label: "work" });
+		expect(r.status).toBe(400);
+		expect((r.body as { reason: string }).reason).toMatch(/body/u);
+	});
+
+	it("empty label → 400 (non-empty label is required)", async () => {
+		const r = await handleAddAccount(makeDeps(), { label: "", token: "t" });
+		expect(r.status).toBe(400);
+	});
+
+	it("an extra body field → 400 (strictObject rejects the stray key)", async () => {
+		const r = await handleAddAccount(makeDeps(), { label: "w", token: "t", uuid: "x" });
+		expect(r.status).toBe(400);
+	});
+
+	it("propagates a classified addAccount failure with its status + reason/detail", async () => {
+		// The route must surface whatever status the orchestration chose (409 for a
+		// duplicate here) rather than flattening every failure to 500.
+		const addAccount = vi.fn<AddAccountFn>(() =>
+			Promise.resolve({
+				ok: false,
+				status: 409,
+				reason: "duplicate_label",
+				detail: 'label "work" is already registered',
+			}),
+		);
+		const r = await handleAddAccount(makeDeps({ addAccount }), { label: "work", token: "t" });
+		expect(r.status).toBe(409);
+		expect(r.body).toEqual({
+			ok: false,
+			reason: "duplicate_label",
+			detail: 'label "work" is already registered',
+		});
+	});
+});
+
+describe("handleRemoveAccount (flag gate + validation + status mapping)", () => {
+	it("flag-off → 403 skipped:true and removeAccount is NOT called (bypass flag → RED)", async () => {
+		const removeAccount = vi.fn<RemoveAccountFn>(() =>
+			Promise.resolve({ ok: true, removed: sampleAccount }),
+		);
+		const r = await handleRemoveAccount(makeDeps({ flagOn: false, removeAccount }), acctUuid);
+		expect(r.status).toBe(403);
+		expect(r.body).toEqual({ ok: false, skipped: true, reason: "flag-off" });
+		expect(removeAccount).not.toHaveBeenCalled();
+	});
+
+	it("flag-on + valid uuid → 200 with the removed account", async () => {
+		const removeAccount = vi.fn<RemoveAccountFn>(() =>
+			Promise.resolve({ ok: true, removed: sampleAccount }),
+		);
+		const r = await handleRemoveAccount(makeDeps({ removeAccount }), acctUuid);
+		expect(r.status).toBe(200);
+		expect(r.body).toEqual({ ok: true, removed: sampleAccount });
+		expect(removeAccount).toHaveBeenCalledWith(acctUuid);
+	});
+
+	it("non-uuid path → 400 citing :accountUuid (loosen the uuid check → RED)", async () => {
+		const r = await handleRemoveAccount(makeDeps(), "not-a-uuid");
+		expect(r.status).toBe(400);
+		expect((r.body as { reason: string }).reason).toMatch(/path :accountUuid/u);
+	});
+
+	it("propagates a classified removeAccount failure (404 not_found)", async () => {
+		const removeAccount = vi.fn<RemoveAccountFn>(() =>
+			Promise.resolve({ ok: false, status: 404, reason: "not_found", detail: "no such account" }),
+		);
+		const r = await handleRemoveAccount(makeDeps({ removeAccount }), acctUuid);
+		expect(r.status).toBe(404);
+		expect(r.body).toEqual({ ok: false, reason: "not_found", detail: "no such account" });
+	});
+});
+
 describe("dispatch (routing table)", () => {
 	it("routes GET /health", async () => {
 		const r = await dispatch({ method: "GET", pathname: "/health" }, makeDeps());
@@ -267,6 +375,17 @@ describe("dispatch (routing table)", () => {
 	});
 	it("routes GET /usage/:uuid", async () => {
 		const r = await dispatch({ method: "GET", pathname: `/usage/${acctUuid}` }, makeDeps());
+		expect(r.status).toBe(200);
+	});
+	it("routes POST /accounts to handleAddAccount (201)", async () => {
+		const r = await dispatch(
+			{ method: "POST", pathname: "/accounts", body: { label: "w", token: "t" } },
+			makeDeps(),
+		);
+		expect(r.status).toBe(201);
+	});
+	it("routes DELETE /accounts/:uuid to handleRemoveAccount (200)", async () => {
+		const r = await dispatch({ method: "DELETE", pathname: `/accounts/${acctUuid}` }, makeDeps());
 		expect(r.status).toBe(200);
 	});
 	it("routes POST /choice/:uuid", async () => {

@@ -41,9 +41,12 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { PACKAGE_VERSION } from "./src/index.ts";
 import { start } from "./src/http-bridge/server.ts";
+import { makeAddAccount, makeRemoveAccount } from "./src/http-bridge/account-admin.ts";
 import { FsChoiceStore } from "./src/cli-shim/choice-store.ts";
-import { readRegistry } from "./src/cli-shim/registry-store.ts";
+import { readRegistry, defaultRegistryPath } from "./src/cli-shim/registry-store.ts";
 import { SecurityCliTokenStore } from "./src/cli-shim/token-store.ts";
+import { SecurityCliMutableTokenStore } from "./src/cli-shim/mutable-token-store.ts";
+import { AtomicRegistryWriter, nodeRegistryFsPort } from "./src/registry/registry-writer.ts";
 import { verifyToken } from "./src/oauth/verify.ts";
 import { flagOn } from "./src/oauth/provisioning.ts";
 
@@ -93,11 +96,24 @@ const listAccounts = async () => (await readRegistry())?.accounts ?? [];
 // only cares that start() accepts and stores it, so a stub keeps the mirror
 // runnable without pulling the active-token IO into this harness.
 const activeAccountUuid = async () => undefined;
+
+// Pool-mutation ports — mirror of scripts/build-daemon.mjs. Construction is
+// keychain/disk-free, so it does not lengthen boot; the boot test only proves
+// start() accepts and stores the two functions.
+const registryPath = defaultRegistryPath();
+const cliPorts = {
+	tokenStore: new SecurityCliMutableTokenStore(),
+	registryWriter: new AtomicRegistryWriter({ path: registryPath, fs: nodeRegistryFsPort() }),
+	readRegistry: () => readRegistry(registryPath),
+	verify: (token) => verifyToken({ token, claudeRealPath, exec: verifyExec }),
+};
+const addAccount = makeAddAccount({ cliPorts, env: process.env });
+const removeAccount = makeRemoveAccount({ cliPorts, env: process.env });
 const flag = flagOn(process.env);
 
 try {
 	bootLog("start-listen");
-	const { port } = await start({ listAccounts, activeAccountUuid, verifyAccount, choiceStore, flagOn: flag, version: PACKAGE_VERSION });
+	const { port } = await start({ listAccounts, activeAccountUuid, addAccount, removeAccount, verifyAccount, choiceStore, flagOn: flag, version: PACKAGE_VERSION });
 	bootLog("listening");
 	process.stdout.write(JSON.stringify({ ready: true, port, pid: process.pid }) + "\\n");
 	bootLog("ready");
@@ -174,7 +190,7 @@ describe("daemon boot under launchd-shaped minimal env", () => {
 	it("boot-time throw → try/catch prints `[daemon-boot] fatal:` on stderr + exits 1 (fail loud, not silent hang)", async () => {
 		// Same shape as realEntry but replaces the start() call with a throw.
 		const throwEntry = realEntry.replace(
-			`const { port } = await start({ listAccounts, activeAccountUuid, verifyAccount, choiceStore, flagOn: flag, version: PACKAGE_VERSION });`,
+			`const { port } = await start({ listAccounts, activeAccountUuid, addAccount, removeAccount, verifyAccount, choiceStore, flagOn: flag, version: PACKAGE_VERSION });`,
 			`throw new Error("simulated boot fault");`,
 		);
 		const throwDaemon = await bundle(throwEntry);

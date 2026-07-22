@@ -24,6 +24,7 @@ import { mountPicker, type PickerAccount } from "./picker.ts";
 
 type GetFn = (path: string) => Promise<BridgeResult<unknown>>;
 type PostFn = (path: string, body: unknown) => Promise<BridgeResult<unknown>>;
+type DelFn = (path: string) => Promise<BridgeResult<unknown>>;
 
 const ACCOUNTS: PickerAccount[] = [
 	{ uuid: "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa", label: "Alice" },
@@ -44,6 +45,17 @@ function mockClient(postResult?: { ok: boolean; kind?: BridgeErrorKind }): Bridg
 				? Promise.resolve({ ok: true, data: { ok: true } })
 				: Promise.resolve({ ok: false, kind: effective.kind ?? "network", detail: "x" }),
 		),
+	} as unknown as BridgeClient;
+}
+
+// A client with all three verbs stubbed to succeed. Tests that only care about
+// the guard paths (cancelled prompt/confirm) use this so the client is complete
+// but the request stubs are never expected to fire.
+function mockClientWithDel(): BridgeClient {
+	return {
+		get: vi.fn<GetFn>(() => Promise.resolve({ ok: true, data: { ok: true, accounts: ACCOUNTS } })),
+		post: vi.fn<PostFn>(() => Promise.resolve({ ok: true, data: { ok: true } })),
+		del: vi.fn<DelFn>(() => Promise.resolve({ ok: true, data: { ok: true } })),
 	} as unknown as BridgeClient;
 }
 
@@ -68,6 +80,25 @@ function getMenu(doc: Document): HTMLElement {
 function getItems(doc: Document): HTMLElement[] {
 	return [...getMenu(doc).querySelectorAll<HTMLElement>("[data-uuid]")];
 }
+
+function getAddRow(doc: Document): HTMLElement {
+	const row = getMenu(doc).querySelector<HTMLElement>("[data-cma-add-account]");
+	if (row === null) {
+		throw new Error("add-account row not rendered");
+	}
+	return row;
+}
+
+function getRemoveButtons(doc: Document): HTMLElement[] {
+	return [...getMenu(doc).querySelectorAll<HTMLElement>("[data-cma-remove]")];
+}
+
+const CAROL: PickerAccount = { uuid: "cccccccc-cccc-4ccc-cccc-cccccccccccc", label: "Carol" };
+
+const tick = (): Promise<void> =>
+	new Promise((resolve) => {
+		setTimeout(resolve, 0);
+	});
 
 describe("mountPicker", () => {
 	let doc: Document;
@@ -472,5 +503,343 @@ describe("mountPicker", () => {
 		// Reverted: label back to the hint and onChoice called with "" (no prior pick).
 		expect(getButton(doc).textContent).toBe("Carol");
 		expect(onChoice).toHaveBeenLastCalledWith("");
+	});
+
+	// --- Add / remove account management -----------------------------------
+
+	it("brightens the remove control and the Add row on hover, restoring on leave", () => {
+		mountPicker({
+			host: body,
+			client: mockClient(),
+			sessionUuid: SESSION,
+			doc,
+			accounts: ACCOUNTS,
+		});
+		getButton(doc).click();
+		const remove = getRemoveButtons(doc)[0]!;
+		const { Event } = doc.defaultView!;
+		remove.dispatchEvent(new Event("mouseenter"));
+		expect(remove.style.opacity).toBe("1");
+		remove.dispatchEvent(new Event("mouseleave"));
+		expect(remove.style.opacity).toBe("0.7");
+
+		const addRow = getAddRow(doc);
+		addRow.dispatchEvent(new Event("mouseenter"));
+		expect(addRow.style.background).toBe("rgba(255, 255, 255, 0.08)");
+		addRow.dispatchEvent(new Event("mouseleave"));
+		expect(addRow.style.background).toBe("transparent");
+	});
+
+	it("renders a remove control per row and a trailing Add account row", () => {
+		mountPicker({
+			host: body,
+			client: mockClient(),
+			sessionUuid: SESSION,
+			doc,
+			accounts: ACCOUNTS,
+		});
+		expect(getRemoveButtons(doc)).toHaveLength(ACCOUNTS.length);
+		expect(getAddRow(doc).textContent).toBe("+ Add account");
+		// The Add row is NOT counted as an account row (no data-uuid).
+		expect(getItems(doc)).toHaveLength(ACCOUNTS.length);
+	});
+
+	it("Add account collects label+token, POSTs /accounts, then refetches the pool", async () => {
+		const client: BridgeClient = {
+			get: vi.fn<GetFn>(() =>
+				Promise.resolve({ ok: true, data: { ok: true, accounts: [...ACCOUNTS, CAROL] } }),
+			),
+			post: vi.fn<PostFn>(() => Promise.resolve({ ok: true, data: { ok: true } })),
+			del: vi.fn<DelFn>(() => Promise.resolve({ ok: true, data: { ok: true } })),
+		} as unknown as BridgeClient;
+		const prompt = vi
+			.fn<(m: string) => string | null>()
+			.mockReturnValueOnce("  Carol  ") // label (trimmed)
+			.mockReturnValueOnce(" sk-ant-oat-tok "); // token (trimmed)
+		mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS, prompt });
+		getButton(doc).click();
+		getAddRow(doc).click();
+		await tick();
+		expect(client.post).toHaveBeenCalledWith("/accounts", {
+			label: "Carol",
+			token: "sk-ant-oat-tok",
+		});
+		// Refetch replaced the pool → Carol's row is now present.
+		expect(client.get).toHaveBeenCalledWith("/accounts");
+		expect(getItems(doc).map((i) => i.dataset.uuid)).toContain(CAROL.uuid);
+	});
+
+	it("Add account aborts without a POST when the label prompt is cancelled", async () => {
+		const client = mockClientWithDel();
+		const prompt = vi.fn<(m: string) => string | null>().mockReturnValue(null);
+		mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS, prompt });
+		getButton(doc).click();
+		getAddRow(doc).click();
+		await tick();
+		expect(client.post).not.toHaveBeenCalled();
+	});
+
+	it("Add account aborts when the token prompt is blank (no empty-token write)", async () => {
+		const client = mockClientWithDel();
+		const prompt = vi
+			.fn<(m: string) => string | null>()
+			.mockReturnValueOnce("Carol")
+			.mockReturnValueOnce("   ");
+		mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS, prompt });
+		getButton(doc).click();
+		getAddRow(doc).click();
+		await tick();
+		expect(client.post).not.toHaveBeenCalled();
+	});
+
+	it("Add account logs a warning and does not refetch when the POST fails", async () => {
+		const get = vi.fn<GetFn>(() =>
+			Promise.resolve({ ok: true, data: { ok: true, accounts: ACCOUNTS } }),
+		);
+		const client: BridgeClient = {
+			get,
+			post: vi.fn<PostFn>(() => Promise.resolve({ ok: false, kind: "unexpected", detail: "409" })),
+			del: vi.fn<DelFn>(),
+		} as unknown as BridgeClient;
+		const prompt = vi
+			.fn<(m: string) => string | null>()
+			.mockReturnValueOnce("Carol")
+			.mockReturnValueOnce("tok");
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS, prompt });
+			getButton(doc).click();
+			getAddRow(doc).click();
+			await tick();
+			expect(warn).toHaveBeenCalledWith(
+				expect.stringContaining("add account failed"),
+				"unexpected",
+				"409",
+			);
+			expect(get).not.toHaveBeenCalled();
+		} finally {
+			warn.mockRestore();
+		}
+	});
+
+	it("remove control confirms, DELETEs /accounts/:uuid, then refetches the trimmed pool", async () => {
+		const client: BridgeClient = {
+			get: vi.fn<GetFn>(() =>
+				Promise.resolve({ ok: true, data: { ok: true, accounts: [ACCOUNTS[0]!] } }),
+			),
+			post: vi.fn<PostFn>(),
+			del: vi.fn<DelFn>(() => Promise.resolve({ ok: true, data: { ok: true } })),
+		} as unknown as BridgeClient;
+		const confirm = vi.fn<(m: string) => boolean>(() => true);
+		mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS, confirm });
+		getButton(doc).click();
+		// Remove Bob (the second row's control).
+		getRemoveButtons(doc)[1]!.click();
+		await tick();
+		expect(client.del).toHaveBeenCalledWith(`/accounts/${ACCOUNTS[1]!.uuid}`);
+		// Pool refetched → only Alice's row remains.
+		expect(getItems(doc).map((i) => i.dataset.uuid)).toEqual([ACCOUNTS[0]!.uuid]);
+	});
+
+	it("remove aborts (no DELETE) when the confirm is declined", async () => {
+		const client = mockClientWithDel();
+		const confirm = vi.fn<(m: string) => boolean>(() => false);
+		mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS, confirm });
+		getButton(doc).click();
+		getRemoveButtons(doc)[0]!.click();
+		await tick();
+		expect(client.del).not.toHaveBeenCalled();
+	});
+
+	it("clicking a remove control does not fall through to the row's choose handler", async () => {
+		const client = mockClientWithDel();
+		const confirm = vi.fn<(m: string) => boolean>(() => false);
+		const onChoice = vi.fn<(uuid: string) => void>();
+		mountPicker({
+			host: body,
+			client,
+			sessionUuid: SESSION,
+			doc,
+			accounts: ACCOUNTS,
+			confirm,
+			onChoice,
+		});
+		getButton(doc).click();
+		// The remove button lives inside the row; a real click bubbles. The
+		// stopPropagation guard must keep the row's choose from firing.
+		getRemoveButtons(doc)[1]!.dispatchEvent(
+			new doc.defaultView!.MouseEvent("click", { bubbles: true }),
+		);
+		await tick();
+		expect(client.post).not.toHaveBeenCalled();
+		expect(onChoice).not.toHaveBeenCalled();
+	});
+
+	it("remove logs a warning and leaves the pool when the DELETE fails", async () => {
+		const get = vi.fn<GetFn>(() =>
+			Promise.resolve({ ok: true, data: { ok: true, accounts: ACCOUNTS } }),
+		);
+		const client: BridgeClient = {
+			get,
+			post: vi.fn<PostFn>(),
+			del: vi.fn<DelFn>(() => Promise.resolve({ ok: false, kind: "network", detail: "offline" })),
+		} as unknown as BridgeClient;
+		const confirm = vi.fn<(m: string) => boolean>(() => true);
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS, confirm });
+			getButton(doc).click();
+			getRemoveButtons(doc)[0]!.click();
+			await tick();
+			expect(warn).toHaveBeenCalledWith(
+				expect.stringContaining("remove account failed"),
+				"network",
+				"offline",
+			);
+			expect(get).not.toHaveBeenCalled();
+		} finally {
+			warn.mockRestore();
+		}
+	});
+
+	it("refetch after a mutation swallows a failed /accounts response (menu unchanged)", async () => {
+		// The refetch GET fails; the menu must keep its current rows rather than
+		// blanking. Exercises the `!res.ok` guard in refetchAccounts.
+		const client: BridgeClient = {
+			get: vi.fn<GetFn>(() => Promise.resolve({ ok: false, kind: "network", detail: "x" })),
+			post: vi.fn<PostFn>(() => Promise.resolve({ ok: true, data: { ok: true } })),
+			del: vi.fn<DelFn>(),
+		} as unknown as BridgeClient;
+		const prompt = vi
+			.fn<(m: string) => string | null>()
+			.mockReturnValueOnce("Carol")
+			.mockReturnValueOnce("tok");
+		mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS, prompt });
+		getButton(doc).click();
+		getAddRow(doc).click();
+		await tick();
+		// POST succeeded, refetch failed → rows are still the original two.
+		expect(getItems(doc)).toHaveLength(ACCOUNTS.length);
+	});
+
+	it("refetch swallows a non-array accounts payload", async () => {
+		const client: BridgeClient = {
+			get: vi.fn<GetFn>(() =>
+				Promise.resolve({ ok: true, data: { ok: true, accounts: "nope" as unknown } }),
+			),
+			post: vi.fn<PostFn>(() => Promise.resolve({ ok: true, data: { ok: true } })),
+			del: vi.fn<DelFn>(),
+		} as unknown as BridgeClient;
+		const prompt = vi
+			.fn<(m: string) => string | null>()
+			.mockReturnValueOnce("Carol")
+			.mockReturnValueOnce("tok");
+		mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS, prompt });
+		getButton(doc).click();
+		getAddRow(doc).click();
+		await tick();
+		expect(getItems(doc)).toHaveLength(ACCOUNTS.length);
+	});
+
+	it("a destroy() before the refetch resolves suppresses the re-render", async () => {
+		let resolveGet: ((v: BridgeResult<unknown>) => void) | undefined;
+		const client: BridgeClient = {
+			get: vi.fn<GetFn>(
+				() =>
+					new Promise<BridgeResult<unknown>>((resolve) => {
+						resolveGet = resolve;
+					}),
+			),
+			post: vi.fn<PostFn>(() => Promise.resolve({ ok: true, data: { ok: true } })),
+			del: vi.fn<DelFn>(),
+		} as unknown as BridgeClient;
+		const prompt = vi
+			.fn<(m: string) => string | null>()
+			.mockReturnValueOnce("Carol")
+			.mockReturnValueOnce("tok");
+		const handle = mountPicker({
+			host: body,
+			client,
+			sessionUuid: SESSION,
+			doc,
+			accounts: ACCOUNTS,
+			prompt,
+		});
+		getButton(doc).click();
+		getAddRow(doc).click();
+		await tick(); // POST resolves, refetch GET is now pending
+		handle.destroy();
+		resolveGet?.({ ok: true, data: { ok: true, accounts: [...ACCOUNTS, CAROL] } });
+		await tick();
+		// Picker is gone; the late refetch did no work.
+		expect(doc.body.querySelector("[data-cma-picker]")).toBeNull();
+	});
+
+	it("falls back to the document's window.prompt/confirm when none are injected", async () => {
+		// Default collectors: prompt drives Add, confirm drives remove. Spying on
+		// the jsdom window proves `defaultPrompt`/`defaultConfirm` are wired.
+		const client = mockClientWithDel();
+		const win = doc.defaultView!;
+		const promptSpy = vi.spyOn(win, "prompt").mockReturnValue(null); // cancels add
+		const confirmSpy = vi.spyOn(win, "confirm").mockReturnValue(false); // cancels remove
+		try {
+			mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS });
+			getButton(doc).click();
+			getAddRow(doc).click();
+			getRemoveButtons(doc)[0]!.click();
+			await tick();
+			expect(promptSpy).toHaveBeenCalled();
+			expect(confirmSpy).toHaveBeenCalled();
+			expect(client.post).not.toHaveBeenCalled();
+			expect(client.del).not.toHaveBeenCalled();
+		} finally {
+			promptSpy.mockRestore();
+			confirmSpy.mockRestore();
+		}
+	});
+
+	it("swallows a throw from the remove DELETE via the row-level try/catch", async () => {
+		const client: BridgeClient = {
+			get: vi.fn<GetFn>(() =>
+				Promise.resolve({ ok: true, data: { ok: true, accounts: ACCOUNTS } }),
+			),
+			post: vi.fn<PostFn>(),
+			del: vi.fn<DelFn>(() => Promise.reject(new Error("del exploded"))),
+		} as unknown as BridgeClient;
+		const confirm = vi.fn<(m: string) => boolean>(() => true);
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS, confirm });
+			getButton(doc).click();
+			getRemoveButtons(doc)[0]!.click();
+			await tick();
+			expect(warn).toHaveBeenCalledWith("[cma-extension] remove failed:", expect.anything());
+		} finally {
+			warn.mockRestore();
+		}
+	});
+
+	it("swallows a throw from the add POST via the add-row try/catch", async () => {
+		const client: BridgeClient = {
+			get: vi.fn<GetFn>(() =>
+				Promise.resolve({ ok: true, data: { ok: true, accounts: ACCOUNTS } }),
+			),
+			post: vi.fn<PostFn>(() => Promise.reject(new Error("post exploded"))),
+			del: vi.fn<DelFn>(),
+		} as unknown as BridgeClient;
+		const prompt = vi
+			.fn<(m: string) => string | null>()
+			.mockReturnValueOnce("Carol")
+			.mockReturnValueOnce("tok");
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS, prompt });
+			getButton(doc).click();
+			getAddRow(doc).click();
+			await tick();
+			expect(warn).toHaveBeenCalledWith("[cma-extension] add failed:", expect.anything());
+		} finally {
+			warn.mockRestore();
+		}
 	});
 });

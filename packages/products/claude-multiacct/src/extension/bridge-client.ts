@@ -43,6 +43,8 @@ export type FetchWithHeaders = (
 export type BridgeClient = {
 	get<T = unknown>(path: string): Promise<BridgeResult<T>>;
 	post<T = unknown>(path: string, body: unknown): Promise<BridgeResult<T>>;
+	/** DELETE with no body — the account-remove path (`DELETE /accounts/:uuid`). */
+	del<T = unknown>(path: string): Promise<BridgeResult<T>>;
 };
 
 export type CreateBridgeClientOptions = {
@@ -76,7 +78,7 @@ export function createBridgeClient(opts: CreateBridgeClientOptions): BridgeClien
 
 	async function doFetch<T>(
 		path: string,
-		method: "GET" | "POST",
+		method: "GET" | "POST" | "DELETE",
 		body: unknown | undefined,
 		config: BridgeConfig,
 	): Promise<BridgeResult<T> | { retryAuth: true }> {
@@ -118,7 +120,7 @@ export function createBridgeClient(opts: CreateBridgeClientOptions): BridgeClien
 
 	async function request<T>(
 		path: string,
-		method: "GET" | "POST",
+		method: "GET" | "POST" | "DELETE",
 		body: unknown | undefined,
 	): Promise<BridgeResult<T>> {
 		let config = await ensureConfig();
@@ -148,6 +150,9 @@ export function createBridgeClient(opts: CreateBridgeClientOptions): BridgeClien
 		},
 		post<T = unknown>(path: string, body: unknown): Promise<BridgeResult<T>> {
 			return request<T>(path, "POST", body);
+		},
+		del<T = unknown>(path: string): Promise<BridgeResult<T>> {
+			return request<T>(path, "DELETE", undefined);
 		},
 	};
 }

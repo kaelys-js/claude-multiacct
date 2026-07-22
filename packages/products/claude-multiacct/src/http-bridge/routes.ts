@@ -2,12 +2,18 @@
  * `@foundation/claude-multiacct` — pure route handlers for the loopback
  * HTTP bridge.
  *
- * The extension (PR5b) talks to the daemon via five endpoints:
+ * The extension talks to the daemon via these endpoints:
  *
  *   - `GET /health` — liveness + version, no auth. Used by launchd + the
  *     extension's readiness probe.
  *   - `GET /accounts` — the current pool plus the runtime-derived active
  *     account uuid (read-only, always allowed).
+ *   - `POST /accounts` — provision a new pooled account from a `{label,
+ *     token}` body (the token is one the user obtained by signing in to
+ *     Claude). **Requires the feature flag on.**
+ *   - `DELETE /accounts/:accountUuid` — deregister an account: drop its
+ *     keychain token AND its registry entry, target-only + fail-closed.
+ *     **Requires the feature flag on.**
  *   - `GET /usage/:accountUuid` — subscription/tier + last-known usage.
  *     Verifies the stored token against the CLI; read-only.
  *   - `POST /choice/:sessionUuid` — pin an account to a session; the
@@ -60,6 +66,39 @@ export type VerifyAccountFn = (uuid: string) => Promise<{
 export type ListAccountsFn = () => Promise<Account[]>;
 
 /**
+ * Outcome of an add-account orchestration. Success carries the freshly
+ * provisioned account; failure carries the HTTP status the handler should
+ * emit plus a classified `reason`/`detail` (Rule 12). Injected so the route
+ * stays pure — the real orchestration (verify the token, write the keychain
+ * and registry) lives in `account-admin.ts` and is mocked in route tests.
+ */
+export type AddAccountOutcome =
+	| { ok: true; account: Account }
+	| { ok: false; status: number; reason: string; detail: string };
+
+/**
+ * Provision a new pooled account from a label and an OAuth `token` the caller
+ * obtained by signing in to Claude. The live sign-in that produces the token
+ * is the one step performed outside the daemon; everything downstream (verify,
+ * keychain, registry) runs through injected ports so tests never sign in.
+ */
+export type AddAccountFn = (input: { label: string; token: string }) => Promise<AddAccountOutcome>;
+
+/** Outcome of a remove-account orchestration. Mirror of {@link AddAccountOutcome}. */
+export type RemoveAccountOutcome =
+	| { ok: true; removed: Account }
+	| { ok: false; status: number; reason: string; detail: string };
+
+/**
+ * Deregister a pooled account by uuid — drop its keychain token AND its
+ * registry entry. Injected so tests drive the real teardown against in-memory
+ * stores. The impl (see `account-admin.ts` → `cli/commands.ts::removeAccount`)
+ * is fail-closed (a locked/failing keychain aborts before the registry is
+ * touched) and target-only (never removes more than the addressed uuid).
+ */
+export type RemoveAccountFn = (uuid: string) => Promise<RemoveAccountOutcome>;
+
+/**
  * Resolve the runtime-active account uuid — the account Claude.app is currently
  * authenticated as, derived by matching its OAuth token sha against each
  * account's (`discovery/active-token.ts` + `domain/registry.ts::getPrimary`).
@@ -83,6 +122,10 @@ export type RouteDeps = {
 	listAccounts: ListAccountsFn;
 	/** Resolve the runtime-active account uuid for `/accounts` (see the type). */
 	activeAccountUuid: ActiveAccountUuidFn;
+	/** Provision a new account from a `{label, token}` body. Flag-gated. */
+	addAccount: AddAccountFn;
+	/** Deregister an account by uuid. Flag-gated, fail-closed, target-only. */
+	removeAccount: RemoveAccountFn;
 	verifyAccount: VerifyAccountFn;
 	choiceStore: Pick<ChoiceStore, "write">;
 	/** True iff `CLAUDE_MULTIACCT_ENABLE_SHIM=1`. Mirrors the shim gate. */
@@ -113,6 +156,18 @@ const UuidSchema = v.pipe(v.string(), v.uuid());
 
 const ChoiceBodySchema = v.strictObject({
 	accountUuid: UuidSchema,
+});
+
+const NonEmptyString = v.pipe(v.string(), v.minLength(1));
+
+/**
+ * `POST /accounts` body — the human label plus the OAuth token acquired by
+ * signing in to Claude. `strictObject` so an unexpected extra field (e.g. a
+ * stray `uuid`) is a 400, not silently accepted.
+ */
+const AddAccountBodySchema = v.strictObject({
+	label: NonEmptyString,
+	token: NonEmptyString,
 });
 
 /**
@@ -165,6 +220,64 @@ export async function handleListAccounts(deps: RouteDeps): Promise<RouteResult> 
 	const accounts = await deps.listAccounts();
 	const activeUuid = await deps.activeAccountUuid();
 	return { status: 200, body: { ok: true, accounts, activeUuid } };
+}
+
+/**
+ * Provision a new account. **Requires the feature flag on** — flag-off returns
+ * 403 `{ok:false, skipped:true, reason:"flag-off"}` so the endpoint stays inert
+ * (and touches nothing) with the flag off, mirroring `handleSetChoice`. On
+ * success returns 201 with the provisioned account; the injected `addAccount`
+ * classifies every failure into an HTTP status (400 bad token, 409 duplicate,
+ * 500 store/registry).
+ *
+ * @param {RouteDeps} deps - Injected ports.
+ * @param {unknown} body - Parsed request body (`{label, token}`).
+ * @returns {Promise<RouteResult>} 201 with the account, or 400/403/409/500.
+ */
+export async function handleAddAccount(deps: RouteDeps, body: unknown): Promise<RouteResult> {
+	if (!deps.flagOn) {
+		return { status: 403, body: { ok: false, skipped: true, reason: "flag-off" } };
+	}
+	const parsed = v.safeParse(AddAccountBodySchema, body);
+	if (!parsed.success) {
+		return badRequest(parsed.issues, "body");
+	}
+	const outcome = await deps.addAccount({ label: parsed.output.label, token: parsed.output.token });
+	if (!outcome.ok) {
+		return {
+			status: outcome.status,
+			body: { ok: false, reason: outcome.reason, detail: outcome.detail },
+		};
+	}
+	return { status: 201, body: { ok: true, account: outcome.account } };
+}
+
+/**
+ * Deregister an account by uuid. **Requires the feature flag on** (403 flag-off
+ * before any store touch). The injected `removeAccount` is fail-closed and
+ * target-only; the handler maps its classified failure to an HTTP status (404
+ * unknown account, 500 keychain/registry failure).
+ *
+ * @param {RouteDeps} deps - Injected ports.
+ * @param {string} uuid - Account uuid from the path.
+ * @returns {Promise<RouteResult>} 200 with the removed account, or 400/403/404/500.
+ */
+export async function handleRemoveAccount(deps: RouteDeps, uuid: string): Promise<RouteResult> {
+	if (!deps.flagOn) {
+		return { status: 403, body: { ok: false, skipped: true, reason: "flag-off" } };
+	}
+	const parsed = v.safeParse(UuidSchema, uuid);
+	if (!parsed.success) {
+		return badRequest(parsed.issues, "path :accountUuid");
+	}
+	const outcome = await deps.removeAccount(parsed.output);
+	if (!outcome.ok) {
+		return {
+			status: outcome.status,
+			body: { ok: false, reason: outcome.reason, detail: outcome.detail },
+		};
+	}
+	return { status: 200, body: { ok: true, removed: outcome.removed } };
 }
 
 /**
@@ -261,6 +374,13 @@ export async function dispatch(req: RouteRequest, deps: RouteDeps): Promise<Rout
 	}
 	if (req.method === "GET" && req.pathname === "/accounts") {
 		return await handleListAccounts(deps);
+	}
+	if (req.method === "POST" && req.pathname === "/accounts") {
+		return await handleAddAccount(deps, req.body);
+	}
+	if (req.method === "DELETE" && req.pathname.startsWith("/accounts/")) {
+		const uuid = req.pathname.slice("/accounts/".length);
+		return await handleRemoveAccount(deps, uuid);
 	}
 	if (req.method === "GET" && req.pathname.startsWith("/usage/")) {
 		const uuid = req.pathname.slice("/usage/".length);
