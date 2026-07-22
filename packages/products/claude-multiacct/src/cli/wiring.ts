@@ -87,6 +87,11 @@ import {
 	uninstallAgent as uninstallWatcher,
 } from "../watcher/agent-installer.ts";
 import { renderWatcherPlist, WATCHER_LABEL } from "../watcher/launchd-plist.ts";
+import { FileTokenStore } from "../oauth/file-token-store.ts";
+import { migrateKeychainTokensToFile } from "../oauth/keychain-file-migration.ts";
+import { KEYCHAIN_SERVICE } from "../cli-shim/token-store.ts";
+import { defaultRegistryPath, readRegistry } from "../cli-shim/registry-store.ts";
+import type { AccountUuid } from "../domain/account.ts";
 import type { InstallPorts, OrchestrationStep } from "./commands/install.ts";
 import type { InstallerStatusFn } from "./commands/status.ts";
 import type { LaunchPorts } from "./commands/launch.ts";
@@ -192,6 +197,46 @@ function resolveLegacyFlags(
 function buildSteps(deps: WiringDeps, legacyFlags: LegacyFlags): readonly OrchestrationStep[] {
 	const uid = process.getuid?.() ?? 0;
 	const stepLegacyCleanup = makeLegacyCleanupStep(realLegacyCleanupPorts(deps), legacyFlags);
+
+	// Move any per-account OAuth token still in the login keychain into the
+	// encrypted file store the daemon + shim now read. This runs from the
+	// keychain-CAPABLE `cma install` (GUI session), never from the daemon.
+	// Best-effort: a locked/refused keychain is a skip, never an install
+	// failure — so this step always reports ok. The actual migration logic is
+	// unit-tested in `oauth/keychain-file-migration.test.ts`.
+	const stepMigrateTokens: OrchestrationStep = {
+		name: "migrate-tokens",
+		install: async () => {
+			try {
+				const registry = await readRegistry(defaultRegistryPath(), deps.logger);
+				const uuids = (registry?.accounts ?? []).map((a) => a.uuid as AccountUuid);
+				if (uuids.length === 0) {
+					return { ok: true, detail: "no accounts to migrate" };
+				}
+				const result = await migrateKeychainTokensToFile({
+					uuids,
+					readKeychainToken: (uuid) => readKeychainToken(uuid, deps.logger),
+					fileStore: new FileTokenStore(),
+					logger: deps.logger,
+				});
+				return {
+					ok: true,
+					detail: `migrated=${String(result.migrated)} skipped=${String(result.skipped)} failed=${String(result.failed)}`,
+				};
+			} catch (error) {
+				// Never fail the install on a migration hiccup — the daemon/shim
+				// still work for accounts added AFTER the switch; only legacy
+				// keychain tokens would need a re-add.
+				deps.logger.warn(
+					`migrate-tokens: skipped (${error instanceof Error ? error.message : String(error)})`,
+				);
+				return { ok: true, detail: "skipped (see warning)" };
+			}
+		},
+		// Nothing to reverse — moved tokens stay in the file store, which is the
+		// canonical store post-switch.
+		uninstall: () => Promise.resolve({ ok: true }),
+	};
 	const stepShim: OrchestrationStep = {
 		name: "shim",
 		install: async (flag) => {
@@ -409,6 +454,7 @@ function buildSteps(deps: WiringDeps, legacyFlags: LegacyFlags): readonly Orches
 
 	return [
 		stepLegacyCleanup,
+		stepMigrateTokens,
 		stepShim,
 		stepWatcher,
 		stepDaemon,
@@ -586,6 +632,41 @@ async function moveToTrash(src: string, logger: { warn: (m: string) => void }): 
 			`legacy-cleanup: rename ${src} -> ${dest} failed: ${error instanceof Error ? error.message : String(error)}`,
 		);
 		throw error;
+	}
+}
+
+/** Hard cap on the migration's per-account keychain read (never block install). */
+const MIGRATE_KEYCHAIN_TIMEOUT_MS = 5000;
+
+/**
+ * Read one account's legacy token from the login keychain (service
+ * `com.claude-multiacct.tokens`), timeout-bounded. Returns `undefined` (never
+ * throws) on a miss, a refused read, or a timeout — the migration treats that
+ * as "nothing to move" so a locked keychain can't fail `cma install`.
+ *
+ * @param {AccountUuid} uuid - Account uuid (keychain account name).
+ * @param {{warn: (m: string) => void}} logger - Warn sink for the failure line (no token material).
+ * @returns {Promise<string | undefined>} The stored token, or `undefined`.
+ */
+async function readKeychainToken(
+	uuid: AccountUuid,
+	logger: { warn: (m: string) => void },
+): Promise<string | undefined> {
+	try {
+		const { stdout } = await execFileAsync(
+			"security",
+			["find-generic-password", "-w", "-s", KEYCHAIN_SERVICE, "-a", uuid],
+			{ timeout: MIGRATE_KEYCHAIN_TIMEOUT_MS },
+		);
+		return stdout.replace(/\n$/u, "");
+	} catch (error) {
+		// Miss / refused / timeout — the account simply has no legacy keychain
+		// token to move. Log the uuid + reason (never the token) and skip.
+		logger.warn(
+			`migrate-tokens: keychain read for ${uuid} returned nothing (${error instanceof Error ? error.message : String(error)})`,
+		);
+		// eslint-disable-next-line unicorn/no-useless-undefined -- explicit for the caller's `=== undefined` branch
+		return undefined;
 	}
 }
 

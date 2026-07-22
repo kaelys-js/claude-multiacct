@@ -348,8 +348,21 @@ export async function removeAccount(args: {
 		accounts: reg.accounts.filter((a) => a.uuid !== account.uuid),
 	};
 
-	// Snapshot the token so we can undo.
-	const tokenSnapshot = await args.ports.tokenStore.get(account.uuid);
+	// Snapshot the token so we can undo. The snapshot is rollback-only: it is
+	// re-`put` iff the registry write later fails. A store that cannot READ the
+	// current token (missing entry, a keychain-blind daemon under
+	// `SessionCreate=true`, a decrypt failure) must NOT abort the removal — treat
+	// any get-failure as "no snapshot" so the delete + registry write still run.
+	// Without this a `get` throw propagates out of `removeAccount` and the DELETE
+	// route 500s before it ever tries to remove the account (the exact
+	// keychain-blind failure the file store fixes).
+	let tokenSnapshot: string | undefined;
+	try {
+		tokenSnapshot = await args.ports.tokenStore.get(account.uuid);
+	} catch {
+		// Unreadable token → no snapshot; removal proceeds and rollback (if any)
+		// simply has nothing to restore.
+	}
 
 	// Empty registry after removal → we skip the registry write and only drop
 	// the token. No sessions can meaningfully reassign (no account remains), so

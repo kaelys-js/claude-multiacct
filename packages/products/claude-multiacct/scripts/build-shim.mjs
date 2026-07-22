@@ -40,7 +40,7 @@ import { runShim } from "./src/cli-shim/shim.ts";
 import { removeSessionPid, writeSessionPid } from "./src/cli-shim/session-pid.ts";
 import { readRegistry } from "./src/cli-shim/registry-store.ts";
 import { FsChoiceStore, defaultChoiceStoreDir } from "./src/cli-shim/choice-store.ts";
-import { SecurityCliTokenStore } from "./src/cli-shim/token-store.ts";
+import { FileTokenStore } from "./src/oauth/file-token-store.ts";
 
 if (process.env.CMA_SHIM_SELFTEST === "1") {
 	process.stdout.write(\`cma-shim selftest OK \${PACKAGE_VERSION}\\n\`);
@@ -49,7 +49,12 @@ if (process.env.CMA_SHIM_SELFTEST === "1") {
 
 const binDir = dirname(fileURLToPath(import.meta.url));
 const choiceStore = new FsChoiceStore(defaultChoiceStoreDir());
-const tokenStore = new SecurityCliTokenStore();
+// Read tokens from the SAME encrypted file store the daemon writes. The shim
+// runs in the GUI session, but the daemon (keychain-blind under
+// SessionCreate=true) can only write the file store — so the shim must read it
+// there too, or a daemon-added account's token would be invisible here and the
+// shim would silently fall back to the primary account.
+const tokenStore = new FileTokenStore();
 
 const result = await runShim({
 	argv: process.argv,

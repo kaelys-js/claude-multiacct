@@ -15,10 +15,12 @@
  * Adversarial:
  *   - Remove the try/catch → the fail-loud subtest observes a hang or a
  *     non-1 exit code and trips.
- *   - Add a keychain touch (SecurityCliTokenStore.get) to the boot path →
- *     `security` will hang under a non-GUI launchd context; even in this
- *     unit test (interactive shell, keychain unlocked) an extra keychain
- *     round-trip lengthens boot and trips a tightened timeout.
+ *   - Add a keychain touch (a `security` CLI round-trip) to the boot path →
+ *     it will hang under a non-GUI launchd context; even in this unit test
+ *     (interactive shell, keychain unlocked) an extra keychain round-trip
+ *     lengthens boot and trips a tightened timeout. Per-account tokens now
+ *     live in the keychain-free encrypted FileTokenStore precisely so no such
+ *     touch is on the add/remove/read path either.
  */
 
 import { spawn, spawnSync } from "node:child_process";
@@ -44,8 +46,7 @@ import { start } from "./src/http-bridge/server.ts";
 import { makeAddAccount, makeRemoveAccount } from "./src/http-bridge/account-admin.ts";
 import { FsChoiceStore } from "./src/cli-shim/choice-store.ts";
 import { readRegistry, defaultRegistryPath } from "./src/cli-shim/registry-store.ts";
-import { SecurityCliTokenStore } from "./src/cli-shim/token-store.ts";
-import { SecurityCliMutableTokenStore } from "./src/cli-shim/mutable-token-store.ts";
+import { FileTokenStore } from "./src/oauth/file-token-store.ts";
 import { AtomicRegistryWriter, nodeRegistryFsPort } from "./src/registry/registry-writer.ts";
 import { verifyToken } from "./src/oauth/verify.ts";
 import { flagOn } from "./src/oauth/provisioning.ts";
@@ -75,7 +76,7 @@ const verifyExec = async (file, args, options) => {
 bootLog("imports-loaded");
 const claudeRealPath = process.env.CMA_CLAUDE_REAL_PATH ?? "/nowhere/claude.real";
 bootLog("construct-stores");
-const tokenStore = new SecurityCliTokenStore();
+const tokenStore = new FileTokenStore();
 const choiceStore = new FsChoiceStore();
 
 const verifyAccount = async (uuid) => {
@@ -102,7 +103,7 @@ const activeAccountUuid = async () => undefined;
 // start() accepts and stores the two functions.
 const registryPath = defaultRegistryPath();
 const cliPorts = {
-	tokenStore: new SecurityCliMutableTokenStore(),
+	tokenStore,
 	registryWriter: new AtomicRegistryWriter({ path: registryPath, fs: nodeRegistryFsPort() }),
 	readRegistry: () => readRegistry(registryPath),
 	verify: (token) => verifyToken({ token, claudeRealPath, exec: verifyExec }),
