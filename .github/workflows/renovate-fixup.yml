@@ -280,7 +280,7 @@ jobs:
           git config user.name "$BOT_NAME"
           git config user.email "$BOT_EMAIL"
           git add -A
-          git commit \
+          ./bin/mise exec -- git commit \
             --signoff \
             --message "chore(deps): regenerate derived files for this bump" \
             --message "Follow-on to the Renovate bump on this PR. pnpm-lock.yaml,
@@ -291,4 +291,4 @@ jobs:
           it here and pushes the result back.
 
           Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
-          git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
+          ./bin/mise exec -- git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
