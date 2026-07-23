@@ -609,29 +609,25 @@ describe("mountPicker", () => {
 		expect(getItems(doc)).toHaveLength(ACCOUNTS.length);
 	});
 
-	it("Add account starts an OAuth login: opens the authorize URL, shows a waiting state, then refetches on done", async () => {
+	it("Add account starts an OAuth login: shows a waiting state (daemon opens the browser), then refetches on done", async () => {
 		const { client, posts } = loginClient({
 			statuses: ["pending", "done"],
 			accountsAfter: [...ACCOUNTS, CAROL],
 		});
-		const openUrl = vi.fn<(u: string) => void>();
 		mountPicker({
 			host: body,
 			client,
 			sessionUuid: SESSION,
 			doc,
 			accounts: ACCOUNTS,
-			openUrl,
 			sleep: noSleep,
 		});
 		getButton(doc).click();
 		getAddRow(doc).click();
 		await tick();
-		// Started the login and opened the exact authorize URL in the browser.
+		// Started the login. The DAEMON opens the browser host-side (the renderer
+		// cannot); the picker never tries to open an external URL itself.
 		expect(posts[0]?.path).toBe("/accounts/login/start");
-		expect(openUrl).toHaveBeenCalledWith(
-			"https://claude.com/cai/oauth/authorize?state=s&code_challenge=c",
-		);
 		// It never falls back to the dead window.prompt or a token POST.
 		expect(posts.some((p) => p.path === "/accounts")).toBe(false);
 		// Poll ran to `done` and the pool was refetched → Carol appears.
@@ -648,22 +644,40 @@ describe("mountPicker", () => {
 			sessionUuid: SESSION,
 			doc,
 			accounts: ACCOUNTS,
-			openUrl: vi.fn<(url: string) => void>(),
 			sleep: parkSleep, // poll parks so the waiting UI stays put
 		});
 		getButton(doc).click();
 		getAddRow(doc).click();
 		await tick();
-		expect(q(doc, "[data-cma-login-waiting]")).not.toBeNull();
-		expect(q(doc, "[data-cma-login-cancel]")).not.toBeNull();
-		// A real clickable anchor to the authorize URL is the reliable fallback
-		// when the host restricts programmatic window.open.
-		const link = q(doc, "[data-cma-login-link]") as HTMLAnchorElement | null;
-		expect(link).not.toBeNull();
-		expect(link!.getAttribute("href")).toBe(
-			"https://claude.com/cai/oauth/authorize?state=s&code_challenge=c",
+		expect(q(doc, "[data-cma-login-waiting]")?.textContent).toContain(
+			"Finish signing in in your browser",
 		);
-		expect(link!.getAttribute("target")).toBe("_blank");
+		expect(q(doc, "[data-cma-login-cancel]")).not.toBeNull();
+		// The "Open the sign-in page" link is present (the daemon re-open path).
+		expect(q(doc, "[data-cma-login-link]")?.textContent).toBe("Open the sign-in page");
+	});
+
+	it("the 'Open the sign-in page' link asks the DAEMON to re-open (POST /accounts/login/open/:id), never a renderer navigation", async () => {
+		const { client, posts } = loginClient({ statuses: ["pending"] });
+		mountPicker({
+			host: body,
+			client,
+			sessionUuid: SESSION,
+			doc,
+			accounts: ACCOUNTS,
+			sleep: parkSleep,
+		});
+		getButton(doc).click();
+		getAddRow(doc).click();
+		await tick();
+		const link = q(doc, "[data-cma-login-link]") as HTMLAnchorElement;
+		// A real click: preventDefault is called (no renderer nav) and the daemon
+		// open endpoint is hit for the in-flight login id.
+		const event = new doc.defaultView!.MouseEvent("click", { bubbles: true, cancelable: true });
+		link.dispatchEvent(event);
+		await tick();
+		expect(event.defaultPrevented).toBe(true);
+		expect(posts.some((p) => p.path === "/accounts/login/open/login-1")).toBe(true);
 	});
 
 	it("surfaces an error in-DOM when the daemon refuses to start the login", async () => {
@@ -676,13 +690,12 @@ describe("mountPicker", () => {
 			sessionUuid: SESSION,
 			doc,
 			accounts: ACCOUNTS,
-			openUrl: vi.fn<(url: string) => void>(),
 			sleep: noSleep,
 		});
 		getButton(doc).click();
 		getAddRow(doc).click();
 		await tick();
-		expect(q(doc, "[data-cma-add-error]")?.textContent).toContain("Could not start sign-in");
+		expect(q(doc, "[data-cma-add-error]")?.textContent).toContain("Couldn't start sign-in");
 	});
 
 	it("cancel-sign-in tells the daemon to close the listener and returns to idle", async () => {
@@ -693,7 +706,6 @@ describe("mountPicker", () => {
 			sessionUuid: SESSION,
 			doc,
 			accounts: ACCOUNTS,
-			openUrl: vi.fn<(url: string) => void>(),
 			sleep: parkSleep,
 		});
 		getButton(doc).click();
@@ -731,7 +743,6 @@ describe("mountPicker", () => {
 			sessionUuid: SESSION,
 			doc,
 			accounts: ACCOUNTS,
-			openUrl: vi.fn<(url: string) => void>(),
 			sleep: noSleep,
 		});
 		getButton(doc).click();
@@ -762,7 +773,6 @@ describe("mountPicker", () => {
 			sessionUuid: SESSION,
 			doc,
 			accounts: ACCOUNTS,
-			openUrl: vi.fn<(url: string) => void>(),
 			sleep: noSleep,
 		});
 		getButton(doc).click();
@@ -780,7 +790,6 @@ describe("mountPicker", () => {
 			sessionUuid: SESSION,
 			doc,
 			accounts: ACCOUNTS,
-			openUrl: vi.fn<(url: string) => void>(),
 			sleep: noSleep,
 			pollTimeoutMs: 0, // deadline already past → immediate timeout branch
 		});
@@ -788,6 +797,29 @@ describe("mountPicker", () => {
 		getAddRow(doc).click();
 		await tick();
 		expect(q(doc, "[data-cma-add-error]")?.textContent).toContain("timed out");
+	});
+
+	it("stops polling when the picker is destroyed mid-flight (no work on a dead picker)", async () => {
+		const { client } = loginClient({ statuses: ["pending"] });
+		let releaseSleep: (() => void) | undefined;
+		const handle = mountPicker({
+			host: body,
+			client,
+			sessionUuid: SESSION,
+			doc,
+			accounts: ACCOUNTS,
+			sleep: () =>
+				new Promise<void>((resolve) => {
+					releaseSleep = resolve;
+				}),
+		});
+		getButton(doc).click();
+		getAddRow(doc).click();
+		await tick(); // login started; the poll is parked at its first sleep
+		handle.destroy();
+		releaseSleep?.(); // sleep resolves → poll sees `destroyed` and bails
+		await tick();
+		expect(doc.body.querySelector("[data-cma-picker]")).toBeNull();
 	});
 
 	it("recovers from a throw while starting the login (actionRow try/catch)", async () => {
@@ -806,13 +838,12 @@ describe("mountPicker", () => {
 				sessionUuid: SESSION,
 				doc,
 				accounts: ACCOUNTS,
-				openUrl: vi.fn<(url: string) => void>(),
 				sleep: noSleep,
 			});
 			getButton(doc).click();
 			getAddRow(doc).click();
 			await tick();
-			expect(q(doc, "[data-cma-add-error]")?.textContent).toContain("Could not start sign-in");
+			expect(q(doc, "[data-cma-add-error]")?.textContent).toContain("Couldn't start sign-in");
 			expect(warn).toHaveBeenCalledWith("[cma-extension] start login failed:", expect.anything());
 		} finally {
 			warn.mockRestore();
@@ -864,10 +895,92 @@ describe("mountPicker", () => {
 			const addPost = posts.find((p) => p.path === "/accounts");
 			expect(addPost).toBeDefined();
 			expect((addPost!.body as { label: string }).label).toMatch(/^Pasted \d{4}-/u);
-			expect(q(doc, "[data-cma-add-error]")?.textContent).toContain("Token was rejected");
+			expect(q(doc, "[data-cma-add-error]")?.textContent).toContain("That token was rejected");
 		} finally {
 			warn.mockRestore();
 		}
+	});
+
+	it("token fallback: carries real <label>s, dark-panel inputs, and autofocuses the token field", () => {
+		const { client } = loginClient({});
+		mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS });
+		getButton(doc).click();
+		q(doc, "[data-cma-add-token]")?.click();
+		// Real, associated <label> captions (not bare placeholders).
+		const form = q(doc, "[data-cma-token-form]")!;
+		const labels = [...form.querySelectorAll("label")].map((l) => l.textContent);
+		expect(labels.some((t) => t?.includes("Account name (optional)"))).toBe(true);
+		expect(labels.some((t) => t?.includes("OAuth token"))).toBe(true);
+		// Inputs are styled to sit on the dark #262624 menu — never a white box.
+		const tokenInput = q(doc, "[data-cma-token-input]") as HTMLInputElement;
+		expect(tokenInput.style.background).toBe("rgba(255, 255, 255, 0.04)");
+		expect(tokenInput.style.color).toContain("--claude-text-100");
+		// The token field is focused the moment the form opens.
+		expect(doc.activeElement).toBe(tokenInput);
+	});
+
+	it("token fallback: Cancel closes the form and returns to the OAuth entry", () => {
+		const { client } = loginClient({});
+		mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS });
+		getButton(doc).click();
+		q(doc, "[data-cma-add-token]")?.click();
+		expect(q(doc, "[data-cma-token-form]")).not.toBeNull();
+		q(doc, "[data-cma-token-cancel]")?.click();
+		// Form gone; the "+ Add account" OAuth entry and the token toggle are back.
+		expect(q(doc, "[data-cma-token-form]")).toBeNull();
+		expect(q(doc, "[data-cma-add-account]")).not.toBeNull();
+		expect(q(doc, "[data-cma-add-token]")).not.toBeNull();
+	});
+
+	it("token fallback: Enter in the token field submits the paste", async () => {
+		const { client, posts } = loginClient({ accountsAfter: [...ACCOUNTS, CAROL] });
+		mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS });
+		getButton(doc).click();
+		q(doc, "[data-cma-add-token]")?.click();
+		const tokenInput = q(doc, "[data-cma-token-input]") as HTMLInputElement;
+		tokenInput.value = "sk-ant-oat-enter";
+		tokenInput.dispatchEvent(
+			new doc.defaultView!.KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+		);
+		await tick();
+		expect(posts.some((p) => p.path === "/accounts")).toBe(true);
+	});
+
+	it("token fallback: the submit button is disabled while the POST is in flight, and a double-click can't re-fire it", async () => {
+		let resolvePost: ((v: BridgeResult<unknown>) => void) | undefined;
+		const post = vi.fn<PostFn>(
+			() =>
+				new Promise<BridgeResult<unknown>>((resolve) => {
+					resolvePost = resolve;
+				}),
+		);
+		const client: BridgeClient = {
+			get: vi.fn<GetFn>(() =>
+				Promise.resolve({ ok: true, data: { ok: true, accounts: ACCOUNTS } }),
+			),
+			post,
+			del: vi.fn<DelFn>(),
+		} as unknown as BridgeClient;
+		mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS });
+		getButton(doc).click();
+		q(doc, "[data-cma-add-token]")?.click();
+		const tokenInput = q(doc, "[data-cma-token-input]") as HTMLInputElement;
+		tokenInput.value = "sk-ant-tok";
+		const submit = q(doc, "[data-cma-token-submit]") as HTMLButtonElement;
+		submit.click();
+		await Promise.resolve();
+		// POST is parked → the button is disabled.
+		expect(submit.disabled).toBe(true);
+		// A second Enter while the submit is disabled is a no-op (the runSubmit
+		// guard) — still exactly one POST. (A disabled button dispatches no click,
+		// but the input still fires keydown, so Enter is how a re-fire is attempted.)
+		tokenInput.dispatchEvent(
+			new doc.defaultView!.KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+		);
+		await Promise.resolve();
+		expect(post).toHaveBeenCalledTimes(1);
+		resolvePost?.({ ok: true, data: { ok: true } });
+		await tick();
 	});
 
 	it("remove control confirms, DELETEs /accounts/:uuid, then refetches the trimmed pool", async () => {
@@ -909,7 +1022,7 @@ describe("mountPicker", () => {
 		expect(messages[0]).toContain('switch to "Alice"');
 	});
 
-	it("the native account's row shows a DISABLED × (tooltip) and cannot trigger a DELETE", async () => {
+	it("the native account's row shows NO × at all (not even a disabled one); only the explicit row is removable", () => {
 		const client = mockClientWithDel();
 		const confirm = vi.fn<(m: string) => boolean>(() => true);
 		const withNative: PickerAccount[] = [
@@ -918,17 +1031,15 @@ describe("mountPicker", () => {
 		];
 		mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: withNative, confirm });
 		getButton(doc).click();
-		// Only ONE actionable remove control (Bob's); Alice's is disabled + tagged.
+		// Exactly ONE remove control (Bob's). The native (Alice) row has none —
+		// no actionable × and no lingering disabled × placeholder either.
 		expect(getRemoveButtons(doc)).toHaveLength(1);
-		const disabled = getMenu(doc).querySelector<HTMLButtonElement>("[data-cma-remove-disabled]");
-		expect(disabled).not.toBeNull();
-		expect(disabled!.disabled).toBe(true);
-		expect(disabled!.title).toContain("can't be removed");
-		// Clicking the disabled control confirms nothing and deletes nothing.
-		disabled!.click();
-		await tick();
-		expect(confirm).not.toHaveBeenCalled();
-		expect(client.del).not.toHaveBeenCalled();
+		expect(getMenu(doc).querySelector("[data-cma-remove-disabled]")).toBeNull();
+		// The one remove control that exists targets the explicit account, not native.
+		expect(getRemoveButtons(doc)[0]!.dataset.cmaRemove).toBe(ACCOUNTS[1]!.uuid);
+		// The native row (first menuitem) contains no <button> child at all.
+		const nativeRow = getItems(doc)[0]!;
+		expect(nativeRow.querySelector("button")).toBeNull();
 	});
 
 	it("remove aborts (no DELETE) when the confirm is declined", async () => {
@@ -1058,12 +1169,11 @@ describe("mountPicker", () => {
 		expect(doc.body.querySelector("[data-cma-picker]")).toBeNull();
 	});
 
-	it("defaults openUrl to window.open and confirm to window.confirm when none are injected", async () => {
-		// Proves `defaultOpenUrl` (Add → OAuth) and `defaultConfirm` (remove) are
-		// wired to the document view. There is no window.prompt path any more.
-		const { client } = loginClient({ statuses: ["pending"] });
+	it("defaults confirm to window.confirm when none is injected (remove path)", async () => {
+		// Proves `defaultConfirm` (remove) is wired to the document view. The Add →
+		// OAuth path opens no browser in the renderer any more: the DAEMON opens it.
+		const client = mockClientWithDel();
 		const win = doc.defaultView!;
-		const openSpy = vi.spyOn(win, "open").mockReturnValue(null);
 		const confirmSpy = vi.spyOn(win, "confirm").mockReturnValue(false); // cancels remove
 		try {
 			mountPicker({
@@ -1072,21 +1182,13 @@ describe("mountPicker", () => {
 				sessionUuid: SESSION,
 				doc,
 				accounts: ACCOUNTS,
-				sleep: parkSleep,
 			});
 			getButton(doc).click();
-			getAddRow(doc).click();
 			getRemoveButtons(doc)[0]!.click();
 			await tick();
-			expect(openSpy).toHaveBeenCalledWith(
-				"https://claude.com/cai/oauth/authorize?state=s&code_challenge=c",
-				"_blank",
-				"noopener",
-			);
 			expect(confirmSpy).toHaveBeenCalled();
 			expect(client.del).not.toHaveBeenCalled();
 		} finally {
-			openSpy.mockRestore();
 			confirmSpy.mockRestore();
 		}
 	});
@@ -1099,7 +1201,6 @@ describe("mountPicker", () => {
 			sessionUuid: SESSION,
 			doc,
 			accounts: ACCOUNTS,
-			openUrl: vi.fn<(url: string) => void>(),
 			pollIntervalMs: 1, // real 1ms sleep via defaultSleep
 		});
 		getButton(doc).click();

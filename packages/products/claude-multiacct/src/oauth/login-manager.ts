@@ -102,6 +102,17 @@ export type LoginManagerDeps = {
 	fetchProfile: FetchProfileFn;
 	register: RegisterFn;
 	openCallbackServer: OpenCallbackServer;
+	/**
+	 * Open the authorize URL in the user's real browser. The picker runs inside
+	 * Claude's Electron renderer, where `window.open` to an external origin is a
+	 * no-op — only a main-process/Node opener reaches the system browser. The
+	 * daemon is that Node process, so it opens the URL here: automatically the
+	 * moment `start()` binds the listener, and again on demand via `open()`.
+	 * Injected so tests never spawn a real browser; omitted, the manager simply
+	 * does not open (the picker's "Open the sign-in page" link still calls
+	 * `open()`, which no-ops without this port).
+	 */
+	openUrl?: (url: string) => void;
 	/** Injected entropy; defaults to node crypto. */
 	randomBytes?: RandomBytesFn;
 	/** Injected clock; defaults to `Date.now`. */
@@ -133,6 +144,8 @@ export type LoginManager = {
 	start: () => Promise<LoginStartResult>;
 	getStatus: (loginId: string) => LoginStatusView;
 	cancel: (loginId: string) => Promise<LoginStatusView>;
+	/** Re-open a pending login's authorize URL in the browser (see `openUrl`). */
+	open: (loginId: string) => LoginStatusView;
 };
 
 type Session = {
@@ -140,6 +153,7 @@ type Session = {
 	state: string;
 	verifier: string;
 	redirectUri: string;
+	authorizeUrl: string;
 	server: CallbackServer;
 	status: LoginStatus;
 	account?: Account;
@@ -367,13 +381,54 @@ export function createLoginManager(deps: LoginManagerDeps): LoginManager {
 			state,
 			verifier,
 			redirectUri: server.redirectUri,
+			authorizeUrl,
 			server,
 			status: "pending",
 			createdAt: now(),
 		};
 		sessions.set(loginId, session);
 		logger.log(`login ${loginId}: listening on ${server.redirectUri}`);
+		// Open the browser from here (a Node process) — the renderer cannot reach
+		// the system browser. Best-effort: a spawn failure must not fail start(),
+		// the picker still shows an "Open the sign-in page" link that retries.
+		openInBrowser(session);
 		return { loginId, authorizeUrl };
+	}
+
+	/**
+	 * Fire the injected opener for a session's authorize URL, swallowing (and
+	 * warning on) any failure so a spawn error never breaks the caller.
+	 *
+	 * @param {Session} session - The session whose authorize URL to open.
+	 * @returns {void}
+	 */
+	function openInBrowser(session: Session): void {
+		if (deps.openUrl === undefined) {
+			return;
+		}
+		try {
+			deps.openUrl(session.authorizeUrl);
+			logger.log(`login ${session.loginId}: opening sign-in page in browser`);
+		} catch (error) {
+			logger.warn(
+				`login ${session.loginId}: open browser failed: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
+	}
+
+	/**
+	 * Re-open a pending login's authorize URL. Backs `POST /accounts/login/open`.
+	 *
+	 * @param {string} loginId - The login to re-open.
+	 * @returns {LoginStatusView} The login's current view, or `unknown_login`.
+	 */
+	function open(loginId: string): LoginStatusView {
+		const session = sessions.get(loginId);
+		if (session === undefined) {
+			return { ok: false, reason: "unknown_login", detail: `no login ${loginId}` };
+		}
+		openInBrowser(session);
+		return viewOf(session);
 	}
 
 	function getStatus(loginId: string): LoginStatusView {
@@ -398,7 +453,7 @@ export function createLoginManager(deps: LoginManagerDeps): LoginManager {
 		return viewOf(session);
 	}
 
-	return { start, getStatus, cancel };
+	return { start, getStatus, cancel, open };
 }
 
 /** Args for {@link nodeCallbackServer}. */

@@ -312,6 +312,49 @@ describe("start", () => {
 		expect(body.authorizeUrl).toContain("oauth/authorize");
 	});
 
+	it("threads loginOpen through to POST /accounts/login/open/:loginId", async () => {
+		const path = await scratchPath();
+		const loginOpen = vi.fn<() => { ok: true; status: string }>(() => ({
+			ok: true,
+			status: "pending",
+		}));
+		const s = await start({ ...noopDeps, bridgeJsonPath: path, loginOpen });
+		alive.push(s);
+		const res = await fetch(
+			`http://127.0.0.1:${String(s.port)}/accounts/login/open/11111111-1111-4111-8111-111111111111`,
+			{
+				method: "POST",
+				headers: {
+					origin: "https://claude.ai",
+					"x-cma-bridge-secret": s.secret,
+					"content-type": "application/json",
+				},
+				body: "{}",
+			},
+		);
+		expect(res.status).toBe(200);
+		expect(loginOpen).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111");
+	});
+
+	it("without loginOpen wired, POST /accounts/login/open/:loginId → 503", async () => {
+		const path = await scratchPath();
+		const s = await start({ ...noopDeps, bridgeJsonPath: path });
+		alive.push(s);
+		const res = await fetch(
+			`http://127.0.0.1:${String(s.port)}/accounts/login/open/11111111-1111-4111-8111-111111111111`,
+			{
+				method: "POST",
+				headers: {
+					origin: "https://claude.ai",
+					"x-cma-bridge-secret": s.secret,
+					"content-type": "application/json",
+				},
+				body: "{}",
+			},
+		);
+		expect(res.status).toBe(503);
+	});
+
 	it("OPTIONS preflight from an allowed Origin → 204 with cors headers", async () => {
 		const path = await scratchPath();
 		const s = await start({ ...noopDeps, bridgeJsonPath: path });

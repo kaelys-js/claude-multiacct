@@ -140,6 +140,16 @@ export type LoginStatusFn = (loginId: string) => LoginStatusResult | Promise<Log
 /** Cancel a pending in-app login by its `loginId` (closes its loopback listener). */
 export type LoginCancelFn = (loginId: string) => Promise<LoginStatusResult>;
 
+/**
+ * Re-open a pending login's authorize URL in the user's browser. The daemon
+ * already opens it once when the login starts; this backs the picker's "Open
+ * the sign-in page" link, which the renderer cannot honor itself (an external
+ * `window.open` is a no-op inside Claude's Electron content script). Read-only
+ * from the pool's point of view (it spawns a browser, mutates nothing), so it
+ * is not flag-gated — a login only exists after the flag-gated `start`.
+ */
+export type LoginOpenFn = (loginId: string) => LoginStatusResult | Promise<LoginStatusResult>;
+
 /** Injected port bundle every handler takes. */
 export type RouteDeps = {
 	listAccounts: ListAccountsFn;
@@ -159,6 +169,8 @@ export type RouteDeps = {
 	loginStatus?: LoginStatusFn;
 	/** Cancel a pending login. Optional (see `loginStart`); closes its listener. */
 	loginCancel?: LoginCancelFn;
+	/** Re-open a pending login's authorize URL. Optional (see `loginStart`). */
+	loginOpen?: LoginOpenFn;
 	verifyAccount: VerifyAccountFn;
 	choiceStore: Pick<ChoiceStore, "write">;
 	/** True iff `CLAUDE_MULTIACCT_ENABLE_SHIM=1`. Mirrors the shim gate. */
@@ -417,6 +429,41 @@ export async function handleLoginCancel(deps: RouteDeps, loginId: string): Promi
 }
 
 /**
+ * Re-open a pending login's authorize URL in the browser — backs the picker's
+ * "Open the sign-in page" link. Not flag-gated (a login only exists after the
+ * flag-gated `start`, and this mutates nothing). 404s an unknown `loginId`;
+ * 503s when the login manager is not wired.
+ *
+ * @param {RouteDeps} deps - Injected ports.
+ * @param {string} loginId - Login id from the path.
+ * @returns {Promise<RouteResult>} 200 with the status, or 400/404/503.
+ */
+export async function handleLoginOpen(deps: RouteDeps, loginId: string): Promise<RouteResult> {
+	if (deps.loginOpen === undefined) {
+		return {
+			status: 503,
+			body: { ok: false, reason: "login_unavailable", detail: "login manager not wired" },
+		};
+	}
+	const parsed = v.safeParse(UuidSchema, loginId);
+	if (!parsed.success) {
+		return badRequest(parsed.issues, "path :loginId");
+	}
+	const result = await deps.loginOpen(parsed.output);
+	if (!result.ok) {
+		return { status: 404, body: { ok: false, reason: result.reason, detail: result.detail } };
+	}
+	return {
+		status: 200,
+		body: {
+			ok: true,
+			status: result.status,
+			...(result.detail === undefined ? {} : { detail: result.detail }),
+		},
+	};
+}
+
+/**
  * Verify one account (by uuid) — always allowed, read-only.
  *
  * @param {RouteDeps} deps - Injected ports.
@@ -524,6 +571,10 @@ export async function dispatch(req: RouteRequest, deps: RouteDeps): Promise<Rout
 	if (req.method === "POST" && req.pathname.startsWith("/accounts/login/cancel/")) {
 		const loginId = req.pathname.slice("/accounts/login/cancel/".length);
 		return await handleLoginCancel(deps, loginId);
+	}
+	if (req.method === "POST" && req.pathname.startsWith("/accounts/login/open/")) {
+		const loginId = req.pathname.slice("/accounts/login/open/".length);
+		return await handleLoginOpen(deps, loginId);
 	}
 	if (req.method === "DELETE" && req.pathname.startsWith("/accounts/")) {
 		const uuid = req.pathname.slice("/accounts/".length);
