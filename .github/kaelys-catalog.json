@@ -1,8 +1,8 @@
 {
 	"$schema": "https://raw.githubusercontent.com/kaelys-js/kaelys-js/main/schema/kaelys-catalog.schema.json",
 	"name": "claude-multiacct",
-	"tagline": "Pool several Claude accounts in one Claude Desktop and switch the active login per Code session.",
-	"sellMe": "Running more than one Anthropic subscription used to mean cloning Claude.app or re-signing the bundle. This pools every account inside a single Claude Desktop / Claude Code and switches the active login per Code-tab session from a picker mounted next to the model selector. An MV3 extension paints the picker in the Electron renderer, a Bearer-secured loopback daemon holds the account pool, and a CLI shim hot-swaps CLAUDE_CODE_OAUTH_TOKEN between the real claude binary and each session's chosen account. It installs without patching or re-signing the app, applies on launch, and survives Claude updates.",
+	"tagline": "Several Claude accounts in one Claude Desktop, switchable per session.",
+	"sellMe": "Run more than one Claude subscription without separate apps or signing in and out. claude-multiacct adds an account picker inside Claude Desktop, so you can add accounts, remove them, and choose which one a session uses. It sets itself up when Claude starts and keeps working after Claude updates.",
 	"status": "beta",
 	"since": 2026,
 	"primaryLanguage": "TypeScript",
@@ -19,19 +19,19 @@
 	"products": [
 		{
 			"name": "cli-shim",
-			"description": "Drop-in `claude` wrapper that resolves the session's chosen account and swaps CLAUDE_CODE_OAUTH_TOKEN before exec'ing the real binary."
+			"description": "Runs each session under the account you picked for it."
 		},
 		{
 			"name": "watcher",
-			"description": "launchd agent that keeps the shim installed and re-applies it after Claude Desktop updates."
+			"description": "Keeps everything installed and re-applies it after Claude updates."
 		},
 		{
 			"name": "http-bridge",
-			"description": "Loopback HTTP daemon (127.0.0.1, Bearer-secured) that holds the account pool and answers both the picker and the shim."
+			"description": "A small local service that holds your accounts and answers the picker."
 		},
 		{
 			"name": "extension",
-			"description": "MV3 extension injected into the renderer that paints the account picker next to the model selector."
+			"description": "The account picker that appears inside Claude Desktop."
 		}
 	]
 }
