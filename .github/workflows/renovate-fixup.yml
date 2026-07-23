@@ -291,4 +291,4 @@ jobs:
           it here and pushes the result back.
 
           Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
-          git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
+          ./bin/mise exec -- git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
