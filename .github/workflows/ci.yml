@@ -264,6 +264,16 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Install toolchain (mise — node, pnpm, all linters)
         run: ./bin/mise install
+      # The pipx-backed linters (reuse, yamllint, check-jsonschema) install as
+      # venvs whose shebangs and internal symlinks are absolute paths into this
+      # job's work root. The cached .mise is keyed only on mise.toml/mise.lock,
+      # so on the self-hosted runners it can restore under a different per-service
+      # work root than the one it was built in, leaving those paths dangling and
+      # making `mise exec -- reuse` fail ENOENT. `mise install` skips them (the
+      # version dir already exists), so force a reinstall to re-anchor the venvs
+      # to the current work root. Cheap, idempotent, self-healing.
+      - name: Re-anchor pipx venvs to current work root
+        run: ./bin/mise install --force pipx:reuse pipx:check-jsonschema yamllint
       - name: Install dependencies
         run: ./bin/mise exec -- pnpm install --frozen-lockfile
       - name: Lint (strict — zero diagnostics required)
