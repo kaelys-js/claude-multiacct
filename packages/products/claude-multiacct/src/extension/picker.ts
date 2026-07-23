@@ -9,15 +9,17 @@
  * The menu also carries pool management: each removable account row has a small
  * remove control (`DELETE /accounts/:uuid`) — the native/primary row shows none,
  * since it can't be removed. A trailing "+ Add account" row runs a real in-app
- * OAuth sign-in: it asks the daemon to start a login (`POST /accounts/login/start`),
- * and the DAEMON opens the Anthropic authorize URL in the system browser host-side
- * (the Electron renderer cannot — an external `window.open` is a no-op there). The
- * picker shows an in-DOM waiting state with an "Open the sign-in page" link
- * (`POST /accounts/login/open/:loginId` — a daemon re-open), and polls
- * `GET /accounts/login/status/:loginId` until the account registers. An explicit
- * in-DOM token-paste form (`POST /accounts`) is offered as a fallback. Every
- * success re-fetches `/accounts` so the menu reflects the new pool without a
- * page reload.
+ * OAuth sign-in against the Claude account client's MANUAL copy-the-code redirect
+ * (the account client rejects loopback, so there is no 127.0.0.1 callback). The
+ * picker asks the daemon to start a login (`POST /accounts/login/start`) and to
+ * open the authorize URL in the system browser (`POST /accounts/login/open/:id`;
+ * the Electron renderer cannot open an external window itself). The browser lands
+ * on the platform callback, which shows the user a `code#state` to copy. The
+ * picker then reveals a paste panel; on submit it POSTs the pasted value to
+ * `POST /accounts/login/complete` (`{loginId, code}`), which drives
+ * exchange → profile → register host-side. An explicit in-DOM token-paste form
+ * (`POST /accounts`) is offered as a fallback. Every success re-fetches
+ * `/accounts` so the menu reflects the new pool without a page reload.
  *
  * The load-bearing surface values (panel background, border, text, radius,
  * shadow) are the real Claude design-system tokens, referenced as the page's
@@ -68,15 +70,6 @@ export type MountPickerOptions = {
 	 */
 	activeUuid?: string;
 	onChoice?: (accountUuid: string) => void;
-	/**
-	 * Sleep between login-status polls. Defaults to a real `setTimeout`. Injected
-	 * so tests drive the poll loop deterministically without wall-clock waits.
-	 */
-	sleep?: (ms: number) => Promise<void>;
-	/** Poll interval while waiting for the browser sign-in (default 1500ms). */
-	pollIntervalMs?: number;
-	/** Give up waiting for sign-in after this long (default 5 minutes). */
-	pollTimeoutMs?: number;
 	/**
 	 * Confirm a destructive remove. Returns true to proceed. Defaults to the
 	 * document's `window.confirm`; injected so tests never open a real dialog.
@@ -233,31 +226,24 @@ function styleRemoveButton(el: HTMLElement): void {
 export function mountPicker(opts: MountPickerOptions): PickerHandle {
 	const { doc } = opts;
 
-	// Dialog + timer ports. Default to the document view's own `window.confirm` /
-	// `setTimeout` (the content script always has a view); tests inject fakes.
-	// `defaultView` is non-null for both the extension document and jsdom, so the
-	// cast spends no runtime branch on the null case.
+	// Confirm port. Default to the document view's own `window.confirm` (the
+	// content script always has a view); tests inject a fake. `defaultView` is
+	// non-null for both the extension document and jsdom, so the cast spends no
+	// runtime branch on the null case.
 	//
 	// There is NO renderer-side browser open here. Electron's content script
 	// cannot reach the system browser (an external `window.open` is a no-op, as
 	// `window.prompt` was), so the DAEMON opens the authorize URL host-side — once
-	// automatically when the login starts, and again when the user clicks "Open
-	// the sign-in page" (which POSTs `/accounts/login/open/:loginId`). Adding an
-	// account runs a real OAuth sign-in (see `startLogin`), with an in-DOM
-	// token-paste form as an explicit fallback (see `renderTokenForm`).
+	// when the login starts, and again when the user clicks "Open the sign-in
+	// page" (which POSTs `/accounts/login/open/:loginId`). Adding an account runs a
+	// real OAuth sign-in and ends with the user pasting the browser-shown
+	// `code#state` into a panel (see `startLogin` / `completeLogin`), with an
+	// in-DOM token-paste form as an explicit fallback (see `renderTokenForm`).
 	const view = doc.defaultView as Window & typeof globalThis;
 	function defaultConfirm(message: string): boolean {
 		return view.confirm(message);
 	}
-	function defaultSleep(ms: number): Promise<void> {
-		return new Promise((resolve) => {
-			view.setTimeout(resolve, ms);
-		});
-	}
 	const confirmFn = opts.confirm ?? defaultConfirm;
-	const sleepFn = opts.sleep ?? defaultSleep;
-	const pollIntervalMs = opts.pollIntervalMs ?? 1500;
-	const pollTimeoutMs = opts.pollTimeoutMs ?? 300_000;
 
 	const button = doc.createElement("button");
 	button.type = "button";
@@ -297,16 +283,19 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 	let currentUuid: string | undefined = opts.activeUuid;
 	let accounts: PickerAccount[] = opts.accounts ?? [];
 	let destroyed = false;
-	// Add-account area state. `waiting` while the browser sign-in is in flight;
-	// `error` shows `addMessage`; `tokenFormOpen` reveals the paste fallback.
-	let addState: "idle" | "waiting" | "error" = "idle";
+	// Add-account area state. `pasting` reveals the code-paste panel while the user
+	// finishes signing in in the browser; `error` shows `addMessage`;
+	// `tokenFormOpen` reveals the token fallback.
+	let addState: "idle" | "pasting" | "error" = "idle";
 	let addMessage = "";
 	let tokenFormOpen = false;
 	// One-shot: focus the token input the render right after the form opens.
 	let focusTokenOnRender = false;
+	// One-shot: focus the code input the render right after the paste panel opens.
+	let focusCodeOnRender = false;
 	let activeLoginId: string | undefined;
 	// The authorize URL of the in-flight login, surfaced as a clickable link in
-	// the waiting state so the user always has a reliable way to open it.
+	// the paste panel so the user always has a reliable way to (re)open it.
 	let activeAuthorizeUrl: string | undefined;
 
 	function labelFor(uuid: string | undefined): string {
@@ -457,54 +446,79 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 		return row;
 	}
 
-	// The add-account area. Three visual states: idle (the "+ Add account"
-	// OAuth entry plus the token-paste fallback toggle), waiting (a live
-	// "signing in…" line with a cancel control), and error (an inline message
-	// above the idle entries). Rendered fresh on every `renderItems`.
+	// A 1px hairline divider on Claude's border token, with breathing room. Used to
+	// separate the account LIST from the add area, and the token form from the
+	// entries above it, so the add controls don't crowd the last account row.
+	function divider(dataAttr: string): HTMLDivElement {
+		const line = doc.createElement("div");
+		line.dataset[dataAttr] = "";
+		line.setAttribute("role", "separator");
+		line.style.height = "0";
+		line.style.margin = "6px 4px";
+		line.style.borderTop = "1px solid var(--claude-border, #eaddd81a)";
+		return line;
+	}
+
+	// A styled action button for the add/paste/token forms. `filled` is the
+	// primary/accent action (a light fill with dark text — readable on the dark
+	// menu, and still legible in a light theme where the tokens invert); `ghost`
+	// is the muted secondary like `actionRow`. Both are theme-aware via Claude's
+	// CSS vars with hex fallbacks and carry hover states.
+	function styledButton(cfg: {
+		text: string;
+		dataAttr: string;
+		variant: "filled" | "ghost";
+	}): HTMLButtonElement {
+		const btn = doc.createElement("button");
+		btn.type = "button";
+		btn.dataset[cfg.dataAttr] = "";
+		btn.className = "cds-reset";
+		btn.textContent = cfg.text;
+		// Padding tuned to the tokenField inputs (5px 8px) so buttons and fields
+		// share a rhythm; radius matches the fields' 0.375rem.
+		btn.style.padding = "5px 12px";
+		btn.style.borderRadius = "0.375rem";
+		btn.style.font = "inherit";
+		btn.style.fontSize = "0.8125rem";
+		btn.style.lineHeight = "1.2";
+		btn.style.cursor = "pointer";
+		btn.style.userSelect = "none";
+		if (cfg.variant === "filled") {
+			btn.style.border = "1px solid transparent";
+			btn.style.background = "var(--claude-text-100, #f5f4ef)";
+			btn.style.color = "var(--claude-background-color, #262624)";
+			btn.style.fontWeight = "600";
+			btn.addEventListener("mouseenter", () => {
+				btn.style.opacity = "0.85";
+			});
+			btn.addEventListener("mouseleave", () => {
+				btn.style.opacity = "1";
+			});
+		} else {
+			btn.style.border = "1px solid var(--claude-border, #eaddd81a)";
+			btn.style.background = "transparent";
+			btn.style.color = "var(--claude-secondary-color, #a6a39a)";
+			btn.addEventListener("mouseenter", () => {
+				btn.style.background = HOVER_BG;
+			});
+			btn.addEventListener("mouseleave", () => {
+				btn.style.background = "transparent";
+			});
+		}
+		return btn;
+	}
+
+	// The add-account area. Visual states: idle (the "+ Add account" OAuth entry
+	// plus the token-paste fallback toggle), pasting (the code-paste panel while
+	// the user finishes signing in in the browser), and error (an inline message
+	// above the idle entries). A divider always separates it from the account list
+	// above. Rendered fresh on every `renderItems`.
 	function renderAddArea(): void {
-		if (addState === "waiting") {
-			inner.append(
-				statusRow(
-					"cmaLoginWaiting",
-					addMessage || "Finish signing in in your browser, then come back here.",
-				),
-			);
-			// "Open the sign-in page" — the renderer can't reach the system browser
-			// (an external window.open is a no-op inside Claude's Electron content
-			// script), so this asks the DAEMON to open it: a POST to
-			// /accounts/login/open/:loginId. The daemon already opened it once when
-			// the login started; this is the reliable retry. `href` is kept for
-			// transparency, but the click is intercepted (never a renderer navigation).
-			if (activeLoginId !== undefined) {
-				const link = doc.createElement("a");
-				link.dataset.cmaLoginLink = "";
-				if (activeAuthorizeUrl !== undefined) {
-					link.href = activeAuthorizeUrl;
-				}
-				link.target = "_blank";
-				link.rel = "noopener";
-				link.textContent = "Open the sign-in page";
-				link.style.display = "block";
-				link.style.padding = "6px 10px";
-				link.style.color = "var(--claude-text-100, #f5f4ef)";
-				link.style.textDecoration = "underline";
-				link.style.cursor = "pointer";
-				link.addEventListener("click", (event: Event) => {
-					event.preventDefault();
-					event.stopPropagation();
-					// eslint-disable-next-line typescript/no-floating-promises -- fire-and-forget: the daemon already opened once, this is a retry
-					openSignInPage();
-				});
-				inner.append(link);
-			}
-			inner.append(
-				actionRow("cmaLoginCancel", "Cancel sign-in", () => {
-					// eslint-disable-next-line typescript/no-floating-promises -- fire-and-forget click handler
-					(async (): Promise<void> => {
-						await cancelLogin();
-					})();
-				}),
-			);
+		// Clear separation between the account LIST and the add area.
+		inner.append(divider("cmaAddDivider"));
+
+		if (addState === "pasting") {
+			renderPastePanel();
 			return;
 		}
 
@@ -541,6 +555,114 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 					positionMenu();
 				}),
 			);
+		}
+	}
+
+	// The code-paste panel: shown after the daemon opens the browser. The user
+	// signs in there, copies the `code#state` the platform callback shows, and
+	// pastes it here. Submitting POSTs it to /accounts/login/complete. An "Open the
+	// sign-in page" link re-asks the daemon to open the authorize URL (the renderer
+	// cannot). Styled Add/Cancel match the token form.
+	function renderPastePanel(): void {
+		const panel = doc.createElement("div");
+		panel.dataset.cmaCodeForm = "";
+		panel.style.display = "flex";
+		panel.style.flexDirection = "column";
+		panel.style.gap = "6px";
+		panel.style.padding = "6px 10px";
+
+		const hint = doc.createElement("div");
+		hint.dataset.cmaCodeHint = "";
+		hint.textContent = "Sign in in your browser, then paste the code it shows you.";
+		hint.style.fontSize = "0.75rem";
+		hint.style.color = "var(--claude-secondary-color, #a6a39a)";
+		panel.append(hint);
+
+		// "Open the sign-in page" — the renderer can't reach the system browser, so
+		// this asks the DAEMON to (re)open it via POST /accounts/login/open/:id. The
+		// daemon already opened it once on start; this is the reliable retry. `href`
+		// is kept for transparency; the click is intercepted (never a renderer nav).
+		// `activeLoginId`/`activeAuthorizeUrl` are invariants of the pasting state.
+		const link = doc.createElement("a");
+		link.dataset.cmaLoginLink = "";
+		/* c8 ignore next 3 -- activeAuthorizeUrl is always set when the paste panel shows; guard is defensive */
+		if (activeAuthorizeUrl !== undefined) {
+			link.href = activeAuthorizeUrl;
+		}
+		link.target = "_blank";
+		link.rel = "noopener";
+		link.textContent = "Open the sign-in page";
+		link.style.color = "var(--claude-text-100, #f5f4ef)";
+		link.style.textDecoration = "underline";
+		link.style.cursor = "pointer";
+		link.style.fontSize = "0.75rem";
+		link.addEventListener("click", (event: Event) => {
+			event.preventDefault();
+			event.stopPropagation();
+			// eslint-disable-next-line typescript/no-floating-promises -- fire-and-forget: the daemon already opened once, this is a retry
+			openSignInPage();
+		});
+		panel.append(link);
+
+		// An inline error while still on the paste panel (empty code, or a failed
+		// complete request that leaves the login retryable).
+		if (addMessage !== "") {
+			const err = statusRow("cmaAddError", addMessage);
+			err.style.padding = "0";
+			panel.append(err);
+		}
+
+		const { field: codeFieldEl, input: codeInput } = tokenField({
+			labelText: "Paste the code from your browser",
+			dataAttr: "cmaCodeInput",
+			type: "text",
+			placeholder: "Paste code here",
+		});
+
+		const submit = styledButton({ text: "Add", dataAttr: "cmaCodeSubmit", variant: "filled" });
+		const cancel = styledButton({ text: "Cancel", dataAttr: "cmaCodeCancel", variant: "ghost" });
+
+		// Disable the submit while the POST is in flight so a double-submit can't
+		// fire two completes; a re-render (error or refetch) restores it.
+		const runSubmit = (): void => {
+			if (submit.disabled) {
+				return;
+			}
+			submit.disabled = true;
+			// eslint-disable-next-line typescript/no-floating-promises -- fire-and-forget submit; completeLogin re-renders on completion
+			completeLogin(codeInput.value);
+		};
+
+		submit.addEventListener("click", (event: Event) => {
+			event.stopPropagation();
+			runSubmit();
+		});
+		cancel.addEventListener("click", (event: Event) => {
+			event.stopPropagation();
+			// eslint-disable-next-line typescript/no-floating-promises -- fire-and-forget click handler
+			(async (): Promise<void> => {
+				await cancelLogin();
+			})();
+		});
+		codeInput.addEventListener("keydown", (event: KeyboardEvent) => {
+			if (event.key === "Enter") {
+				event.preventDefault();
+				runSubmit();
+			}
+		});
+
+		const buttons = doc.createElement("div");
+		buttons.style.display = "flex";
+		buttons.style.gap = "6px";
+		buttons.append(submit, cancel);
+
+		// Clicks inside the panel must not bubble to the outside-close handler.
+		panel.addEventListener("click", (event: Event) => event.stopPropagation());
+		panel.append(codeFieldEl, buttons);
+		inner.append(panel);
+		if (focusCodeOnRender) {
+			focusCodeOnRender = false;
+			codeInput.focus();
 		}
 	}
 
@@ -605,16 +727,8 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 			placeholder: "Paste OAuth token",
 		});
 
-		const submit = doc.createElement("button");
-		submit.type = "button";
-		submit.dataset.cmaTokenSubmit = "";
-		submit.className = "cds-reset";
-		submit.textContent = "Add";
-		const cancel = doc.createElement("button");
-		cancel.type = "button";
-		cancel.dataset.cmaTokenCancel = "";
-		cancel.className = "cds-reset";
-		cancel.textContent = "Cancel";
+		const submit = styledButton({ text: "Add", dataAttr: "cmaTokenSubmit", variant: "filled" });
+		const cancel = styledButton({ text: "Cancel", dataAttr: "cmaTokenCancel", variant: "ghost" });
 
 		// Disable the submit while the POST is in flight so a double-click can't
 		// fire two provisioning requests; a re-render (error or refetch) restores it.
@@ -656,6 +770,8 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 		// Clicks inside the form must not bubble to the outside-close handler.
 		form.addEventListener("click", (event: Event) => event.stopPropagation());
 		form.append(labelField, tokenFieldEl, buttons);
+		// A clean separator above the token form panel.
+		inner.append(divider("cmaTokenDivider"));
 		inner.append(form);
 		// Autofocus the token field when the form first opens (not on every
 		// re-render, or it would steal focus mid-typing).
@@ -736,11 +852,11 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 		renderItems();
 	}
 
-	// "+ Add account" — start a real OAuth sign-in. Ask the daemon to bind a
-	// loopback listener + build the authorize URL; the DAEMON opens that URL in
-	// the browser host-side (the renderer can't). Only once the start succeeds do
-	// we show the waiting state — so the user never sees "waiting" unless the
-	// browser open was actually requested. Then poll until sign-in completes.
+	// "+ Add account" — start a real OAuth sign-in. Ask the daemon to build the
+	// authorize URL (manual copy-the-code redirect), then to open it host-side (the
+	// renderer can't). Only once the start succeeds do we reveal the paste panel —
+	// so the user never sees it unless the browser open was actually requested. The
+	// user finishes in the browser, copies the shown `code#state`, and pastes it.
 	async function startLogin(): Promise<void> {
 		type StartData = { ok: boolean; loginId?: string; authorizeUrl?: string };
 		const started: BridgeResult<StartData> = await opts.client.post("/accounts/login/start", {});
@@ -756,71 +872,75 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 		}
 		activeLoginId = started.data.loginId;
 		activeAuthorizeUrl = started.data.authorizeUrl;
-		addState = "waiting";
-		addMessage = "Finish signing in in your browser, then come back here.";
+		// Ask the daemon to open the authorize URL host-side (non-fatal on failure —
+		// the paste panel still offers an "Open the sign-in page" retry link).
+		await openSignInPage();
+		addState = "pasting";
+		addMessage = "";
 		tokenFormOpen = false;
+		focusCodeOnRender = true;
 		renderItems();
 		positionMenu();
-		await pollLogin(started.data.loginId);
 	}
 
 	// Ask the daemon to (re-)open the authorize URL host-side. Backs the "Open the
-	// sign-in page" link, which only renders while `activeLoginId` is set, so it
-	// is always defined here. Fire-and-forget (the daemon already opened once on
-	// start); a failure is non-fatal — the login keeps polling.
+	// sign-in page" link and the initial open on start. `activeLoginId` is always
+	// set by the time this runs. A failure is swallowed (and warned) — the user can
+	// still open the page manually from the link's href.
 	async function openSignInPage(): Promise<void> {
-		await opts.client.post(`/accounts/login/open/${String(activeLoginId)}`, {});
+		try {
+			await opts.client.post(`/accounts/login/open/${String(activeLoginId)}`, {});
+		} catch (error: unknown) {
+			// eslint-disable-next-line no-console
+			console.warn("[cma-extension] open sign-in page failed:", error);
+		}
 	}
 
-	// Poll the login's status until it leaves `pending`/`exchanging`, the caller
-	// cancels (activeLoginId cleared), the picker is destroyed, or the deadline
-	// passes. On `done` refresh the pool; on `error`/`cancelled` surface it.
-	async function pollLogin(loginId: string): Promise<void> {
-		type StatusData = { ok: boolean; status?: string; detail?: string };
-		const deadline = Date.now() + pollTimeoutMs;
-		while (Date.now() < deadline) {
-			// eslint-disable-next-line no-await-in-loop -- polling is sequential by design: wait, check, repeat
-			await sleepFn(pollIntervalMs);
-			if (destroyed || activeLoginId !== loginId) {
-				return;
-			}
-			// eslint-disable-next-line no-await-in-loop -- one status probe per interval; must be serial
-			const res: BridgeResult<StatusData> = await opts.client.get(
-				`/accounts/login/status/${loginId}`,
-			);
-			if (!res.ok) {
-				addState = "error";
-				addMessage = "Lost contact with the sign-in. Try again.";
-				activeLoginId = undefined;
-				renderItems();
-				return;
-			}
-			const { status } = res.data;
-			if (status === "done") {
-				activeLoginId = undefined;
-				addState = "idle";
-				addMessage = "";
-				// eslint-disable-next-line no-await-in-loop -- terminal branch; loop exits right after
-				await refetchAccounts();
-				return;
-			}
-			if (status === "error" || status === "cancelled") {
-				activeLoginId = undefined;
-				addState = "error";
-				addMessage = res.data.detail ?? `Sign-in ${status}.`;
-				renderItems();
-				return;
-			}
+	// Submit the pasted `code#state` to /accounts/login/complete. The daemon runs
+	// exchange → profile → register and returns the login's final status. On `done`
+	// refresh the pool; otherwise surface a clean inline error (never a raw stack).
+	async function completeLogin(codeRaw: string): Promise<void> {
+		const code = codeRaw.trim();
+		if (code === "") {
+			// Stay on the paste panel — the user just needs to paste the code.
+			addMessage = "Paste the code first.";
+			renderItems();
+			return;
 		}
-		// Deadline passed with no terminal status.
-		addState = "error";
-		addMessage = "Sign-in timed out. Try again.";
+		type CompleteData = { ok: boolean; status?: string; detail?: string };
+		const res: BridgeResult<CompleteData> = await opts.client.post("/accounts/login/complete", {
+			loginId: activeLoginId,
+			code,
+		});
+		if (!res.ok) {
+			// The request itself failed (network). The pending login is still valid,
+			// so keep the paste panel for a retry rather than tearing it down.
+			addMessage = "Couldn't reach the sign-in service. Try again.";
+			renderItems();
+			// eslint-disable-next-line no-console
+			console.warn("[cma-extension] complete login failed:", res.kind, res.detail);
+			return;
+		}
+		if (res.data.status === "done") {
+			activeLoginId = undefined;
+			activeAuthorizeUrl = undefined;
+			addState = "idle";
+			addMessage = "";
+			await refetchAccounts();
+			return;
+		}
+		// The daemon reports a non-done terminal status (a rejected code or a state
+		// mismatch): the login is consumed, so drop back to the idle add entry with
+		// the detail surfaced, and the user can restart cleanly.
 		activeLoginId = undefined;
+		activeAuthorizeUrl = undefined;
+		addState = "error";
+		addMessage = res.data.detail ?? "That code was rejected. Try adding the account again.";
 		renderItems();
 	}
 
-	// Cancel a pending sign-in: tell the daemon to close its listener, then
-	// return the add area to idle. Clearing `activeLoginId` stops any live poll.
+	// Cancel a pending sign-in: return the add area to idle and tell the daemon to
+	// drop the pending login. Clearing `activeLoginId` prevents any late complete.
 	async function cancelLogin(): Promise<void> {
 		const loginId = activeLoginId;
 		activeLoginId = undefined;

@@ -3,34 +3,38 @@
  *
  * Drives the full "sign in to another Claude account from the app" flow and
  * holds the little bit of state the stateless HTTP bridge cannot: the pending
- * logins (their PKCE verifier + CSRF `state` + loopback listener) between the
- * moment the picker asks to start and the moment the browser redirect lands.
+ * logins (their PKCE verifier + CSRF `state`) between the moment the picker
+ * asks to start and the moment the user pastes the code back.
  *
- * # The flow
+ * # The flow (manual copy-the-code redirect)
  *
- *   1. `start()` — mint PKCE + `state`, bind a loopback listener on
- *      `127.0.0.1:<ephemeral>/callback`, build the authorize URL, and hand
- *      `{loginId, authorizeUrl}` back. The picker opens that URL in the browser.
+ * The Claude account OAuth client rejects loopback redirects, so this is NOT a
+ * listener-on-127.0.0.1 flow. It uses the shipping desktop app's manual
+ * redirect (`platform.claude.com/oauth/code/callback`):
+ *
+ *   1. `start()` — mint PKCE + `state`, build the authorize URL with the manual
+ *      `redirect_uri`, and hand `{loginId, authorizeUrl}` back. The daemon opens
+ *      that URL in the system browser (the renderer cannot).
  *   2. The user signs in to the target account and consents. The auth server
- *      redirects the browser to the loopback `redirect_uri` with `?code&state`.
- *   3. The listener's handler runs: it validates `state` (CSRF — a mismatch is
- *      rejected BEFORE any exchange), exchanges the code for tokens, fetches the
- *      account's real identity from the profile API, and registers/updates the
- *      pool (dedup by `accountUuid`). It then shows the browser a done page and
- *      closes the listener.
- *   4. The picker polls `getStatus(loginId)` until it flips to `done`/`error`,
- *      then re-fetches `/accounts`.
+ *      redirects the browser to the manual callback, which renders a `code#state`
+ *      string for the user to copy.
+ *   3. The user pastes that string into the picker; the picker POSTs it to
+ *      `complete(loginId, pasted)`. That splits `code#state` on the FIRST `#`,
+ *      validates `state` (CSRF — a mismatch is rejected BEFORE any exchange),
+ *      exchanges the code for tokens against the SAME manual `redirect_uri`,
+ *      fetches the account's identity from the profile API, and registers/updates
+ *      the pool (dedup by `accountUuid`).
  *
  * Every long-lived secret (`verifier`, tokens, code) stays inside the process;
  * only classified statuses cross the wire. Nothing here logs a token or a code.
  *
  * # State hygiene
  *
- * Abandoned logins (browser closed, user walked away) would otherwise leak a
- * bound listener. `start()` and `getStatus()` sweep sessions older than `ttlMs`
- * — closing their listeners and marking them `cancelled` — so a stale login
- * never holds a socket open. The sweep is driven by the injected `now`, not a
- * timer, so it is deterministic under test.
+ * Abandoned logins (browser closed, user walked away) leave only a small session
+ * record — no socket. `start()`, `getStatus()`, and `complete()` sweep sessions
+ * older than `ttlMs`, marking them `cancelled`, so a stale login does not linger
+ * as `pending`. The sweep is driven by the injected `now`, not a timer, so it is
+ * deterministic under test.
  *
  * @module
  */
@@ -40,6 +44,7 @@ import type { Account } from "../domain/account.ts";
 import type { AccountProfile, ProfileResult } from "../discovery/identity.ts";
 import {
 	buildAuthorizeUrl,
+	CLAUDE_MANUAL_REDIRECT_URL,
 	createPkcePair,
 	createState,
 	type ExchangeResult,
@@ -49,35 +54,6 @@ import type { RegisterResult } from "./register-account.ts";
 
 /** Terminal + in-flight statuses of a login session. */
 export type LoginStatus = "pending" | "exchanging" | "done" | "error" | "cancelled";
-
-/** What the browser is shown when it hits the loopback callback. */
-export type CallbackPage = { status: number; html: string };
-
-/** Parsed loopback callback query. */
-export type CallbackQuery = {
-	code?: string;
-	state?: string;
-	error?: string;
-	errorDescription?: string;
-};
-
-/** A bound loopback listener. `close` is idempotent. */
-export type CallbackServer = {
-	/** The ephemeral port the listener bound. */
-	port: number;
-	/** The exact `redirect_uri` (`http://127.0.0.1:<port>/callback`). */
-	redirectUri: string;
-	/** Tear the listener down. Idempotent. */
-	close: () => Promise<void>;
-};
-
-/**
- * Open a loopback listener that invokes `handler` when the browser hits
- * `/callback`. The handler resolves to the page the browser should see.
- */
-export type OpenCallbackServer = (
-	handler: (query: CallbackQuery) => Promise<CallbackPage>,
-) => Promise<CallbackServer>;
 
 /** The exchange port — code → tokens (see `./login.ts`). */
 export type ExchangeCodeFn = (args: {
@@ -101,16 +77,15 @@ export type LoginManagerDeps = {
 	exchangeCode: ExchangeCodeFn;
 	fetchProfile: FetchProfileFn;
 	register: RegisterFn;
-	openCallbackServer: OpenCallbackServer;
 	/**
 	 * Open the authorize URL in the user's real browser. The picker runs inside
 	 * Claude's Electron renderer, where `window.open` to an external origin is a
 	 * no-op — only a main-process/Node opener reaches the system browser. The
 	 * daemon is that Node process, so it opens the URL here: automatically the
-	 * moment `start()` binds the listener, and again on demand via `open()`.
-	 * Injected so tests never spawn a real browser; omitted, the manager simply
-	 * does not open (the picker's "Open the sign-in page" link still calls
-	 * `open()`, which no-ops without this port).
+	 * moment `start()` builds the URL, and again on demand via `open()`. Injected
+	 * so tests never spawn a real browser; omitted, the manager simply does not
+	 * open (the picker's "Open the sign-in page" link still calls `open()`, which
+	 * no-ops without this port).
 	 */
 	openUrl?: (url: string) => void;
 	/** Injected entropy; defaults to node crypto. */
@@ -142,6 +117,12 @@ export type LoginStartResult = { loginId: string; authorizeUrl: string };
 /** The manager surface the daemon binds. */
 export type LoginManager = {
 	start: () => Promise<LoginStartResult>;
+	/**
+	 * Complete a login from the `code#state` the user pasted back from the manual
+	 * redirect. Validates `state`, exchanges the code, fetches the profile, and
+	 * registers the account. Returns the login's final view.
+	 */
+	complete: (loginId: string, pasted: string) => Promise<LoginStatusView>;
 	getStatus: (loginId: string) => LoginStatusView;
 	cancel: (loginId: string) => Promise<LoginStatusView>;
 	/** Re-open a pending login's authorize URL in the browser (see `openUrl`). */
@@ -154,7 +135,6 @@ type Session = {
 	verifier: string;
 	redirectUri: string;
 	authorizeUrl: string;
-	server: CallbackServer;
 	status: LoginStatus;
 	account?: Account;
 	updated?: boolean;
@@ -163,19 +143,6 @@ type Session = {
 };
 
 const DEFAULT_TTL_MS = 10 * 60 * 1000;
-
-/**
- * Minimal, self-contained HTML page shown in the browser after the redirect.
- *
- * @param {string} title - Heading text.
- * @param {string} message - Body copy under the heading.
- * @returns {string} A complete HTML document.
- */
-function page(title: string, message: string): string {
-	return `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title><style>body{font-family:-apple-system,system-ui,sans-serif;background:#262624;color:#f5f4ef;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}main{max-width:26rem;text-align:center;padding:2rem}h1{font-size:1.25rem;margin:0 0 .5rem}p{color:#a6a39a;line-height:1.5}</style></head><body><main><h1>${title}</h1><p>${message}</p></main></body></html>`;
-}
-
-const DONE_PAGE = page("Signed in", "You can close this tab and return to Claude.");
 
 /** Drop-everything logger — the default when a caller injects none. */
 const SILENT_LOGGER: NonNullable<LoginManagerDeps["logger"]> = {
@@ -207,7 +174,7 @@ function viewOf(session: Session): LoginStatusView {
  * Build a login manager. See the module docstring for the flow + state hygiene.
  *
  * @param {LoginManagerDeps} deps - Injected ports + overrides.
- * @returns {LoginManager} `{start, getStatus, cancel}`.
+ * @returns {LoginManager} `{start, complete, getStatus, cancel, open}`.
  */
 export function createLoginManager(deps: LoginManagerDeps): LoginManager {
 	const sessions = new Map<string, Session>();
@@ -216,22 +183,6 @@ export function createLoginManager(deps: LoginManagerDeps): LoginManager {
 	const ttlMs = deps.ttlMs ?? DEFAULT_TTL_MS;
 	const logger = deps.logger ?? SILENT_LOGGER;
 
-	/**
-	 * Close a session's listener, swallowing (and warning on) a double-close.
-	 *
-	 * @param {Session} session - The session whose listener to close.
-	 * @returns {Promise<void>} Resolves once the close is attempted.
-	 */
-	async function closeServer(session: Session): Promise<void> {
-		try {
-			await session.server.close();
-		} catch (error) {
-			logger.warn(
-				`login ${session.loginId}: listener close failed: ${error instanceof Error ? error.message : String(error)}`,
-			);
-		}
-	}
-
 	/** Expire any pending session older than the TTL. */
 	function sweep(): void {
 		const cutoff = now() - ttlMs;
@@ -239,55 +190,22 @@ export function createLoginManager(deps: LoginManagerDeps): LoginManager {
 			if (session.status === "pending" && session.createdAt < cutoff) {
 				session.status = "cancelled";
 				session.detail = "login timed out";
-				// eslint-disable-next-line typescript/no-floating-promises -- best-effort teardown of an abandoned listener
-				closeServer(session);
 			}
 		}
 	}
 
 	/**
-	 * Run the callback: validate state (CSRF), exchange, fetch identity, register.
-	 * Returns the page the browser should see. Never logs the code or token.
+	 * Run exchange → profile → register for a validated code. Mutates the session
+	 * status/account/detail and returns its view. Never logs the code or token.
 	 *
-	 * @param {Session} session - The pending session the callback belongs to.
-	 * @param {CallbackQuery} query - The parsed loopback callback query.
-	 * @returns {Promise<CallbackPage>} The page to render in the browser.
+	 * @param {Session} session - The pending session the code belongs to.
+	 * @param {string} code - The authorization code (already split from state).
+	 * @returns {Promise<LoginStatusView>} The session's view after the pipeline.
 	 */
-	async function handleCallback(session: Session, query: CallbackQuery): Promise<CallbackPage> {
-		if (query.error !== undefined) {
-			session.status = "error";
-			session.detail = `authorization denied: ${query.error}${query.errorDescription === undefined ? "" : ` (${query.errorDescription})`}`;
-			logger.log(`login ${session.loginId}: denied at authorize`);
-			await closeServer(session);
-			return {
-				status: 400,
-				html: page("Sign-in failed", "Authorization was denied. Return to Claude and try again."),
-			};
-		}
-		// CSRF: a mismatched or missing state is rejected BEFORE any exchange.
-		if (query.state === undefined || query.state !== session.state) {
-			session.status = "error";
-			session.detail = "state mismatch (possible CSRF); ignored";
-			logger.warn(`login ${session.loginId}: state mismatch — rejected`);
-			await closeServer(session);
-			return {
-				status: 400,
-				html: page("Sign-in failed", "Security check failed. Return to Claude and try again."),
-			};
-		}
-		if (query.code === undefined || query.code === "") {
-			session.status = "error";
-			session.detail = "callback missing authorization code";
-			await closeServer(session);
-			return {
-				status: 400,
-				html: page("Sign-in failed", "No authorization code. Return to Claude and try again."),
-			};
-		}
-
+	async function runExchange(session: Session, code: string): Promise<LoginStatusView> {
 		session.status = "exchanging";
 		const exchanged = await deps.exchangeCode({
-			code: query.code,
+			code,
 			codeVerifier: session.verifier,
 			state: session.state,
 			redirectUri: session.redirectUri,
@@ -296,14 +214,7 @@ export function createLoginManager(deps: LoginManagerDeps): LoginManager {
 			session.status = "error";
 			session.detail = `token exchange failed: ${exchanged.kind}: ${exchanged.detail}`;
 			logger.warn(`login ${session.loginId}: exchange failed (${exchanged.kind})`);
-			await closeServer(session);
-			return {
-				status: 502,
-				html: page(
-					"Sign-in failed",
-					"Could not complete the token exchange. Return to Claude and try again.",
-				),
-			};
+			return viewOf(session);
 		}
 
 		const profile = await deps.fetchProfile(exchanged.tokens.accessToken);
@@ -311,14 +222,7 @@ export function createLoginManager(deps: LoginManagerDeps): LoginManager {
 			session.status = "error";
 			session.detail = `profile fetch failed: ${profile.kind}: ${profile.detail}`;
 			logger.warn(`login ${session.loginId}: profile failed (${profile.kind})`);
-			await closeServer(session);
-			return {
-				status: 502,
-				html: page(
-					"Sign-in failed",
-					"Could not read the account profile. Return to Claude and try again.",
-				),
-			};
+			return viewOf(session);
 		}
 
 		const registered = await deps.register({
@@ -329,14 +233,7 @@ export function createLoginManager(deps: LoginManagerDeps): LoginManager {
 			session.status = "error";
 			session.detail = `register failed: ${registered.kind}: ${registered.detail}`;
 			logger.warn(`login ${session.loginId}: register failed (${registered.kind})`);
-			await closeServer(session);
-			return {
-				status: 500,
-				html: page(
-					"Sign-in failed",
-					"Could not register the account. Return to Claude and try again.",
-				),
-			};
+			return viewOf(session);
 		}
 
 		session.status = "done";
@@ -345,54 +242,85 @@ export function createLoginManager(deps: LoginManagerDeps): LoginManager {
 		logger.log(
 			`login ${session.loginId}: ${registered.updated ? "updated" : "added"} account ${registered.account.uuid}`,
 		);
-		await closeServer(session);
-		return { status: 200, html: DONE_PAGE };
+		return viewOf(session);
 	}
 
 	/**
-	 * Start a login: mint PKCE + state, bind a listener, build the authorize URL.
+	 * Complete a login from the pasted `code#state`. Splits on the FIRST `#`
+	 * (`code` = left, `state` = right), validates `state` against the minted one
+	 * BEFORE any exchange (CSRF), then runs the exchange pipeline.
 	 *
-	 * @returns {Promise<LoginStartResult>} The `loginId` to poll and the URL to open.
+	 * @param {string} loginId - The login to complete.
+	 * @param {string} pasted - The `code#state` the user copied from the browser.
+	 * @returns {Promise<LoginStatusView>} The login's final view, or `unknown_login`.
 	 */
-	async function start(): Promise<LoginStartResult> {
+	async function complete(loginId: string, pasted: string): Promise<LoginStatusView> {
+		sweep();
+		const session = sessions.get(loginId);
+		if (session === undefined) {
+			return { ok: false, reason: "unknown_login", detail: `no login ${loginId}` };
+		}
+		// Split on the FIRST '#': code = left, state = right. A paste with no '#'
+		// yields an empty state, which fails the CSRF check below (as it should —
+		// the manual redirect always returns `code#state`).
+		const hashIndex = pasted.indexOf("#");
+		const code = (hashIndex === -1 ? pasted : pasted.slice(0, hashIndex)).trim();
+		const pastedState = hashIndex === -1 ? "" : pasted.slice(hashIndex + 1).trim();
+
+		// CSRF: a mismatched or missing state is rejected BEFORE any exchange.
+		if (pastedState !== session.state) {
+			session.status = "error";
+			session.detail = "state mismatch (possible CSRF); ignored";
+			logger.warn(`login ${session.loginId}: state mismatch — rejected`);
+			return viewOf(session);
+		}
+		if (code === "") {
+			session.status = "error";
+			session.detail = "pasted value had no authorization code";
+			return viewOf(session);
+		}
+		return await runExchange(session, code);
+	}
+
+	/**
+	 * Start a login: mint PKCE + state, build the manual-redirect authorize URL.
+	 * No network or listener bind, so it is synchronous under a Promise-returning
+	 * signature (the daemon awaits it uniformly with the other login ports).
+	 *
+	 * @returns {Promise<LoginStartResult>} The `loginId` to complete and the URL to open.
+	 */
+	function start(): Promise<LoginStartResult> {
 		sweep();
 		const loginId = genLoginId();
 		const state = createState(deps.randomBytes);
 		const { verifier, challenge } = createPkcePair(deps.randomBytes);
-
-		// The handler closes over `session`, which is assigned right after the
-		// listener binds. A callback cannot arrive before the browser opens the
-		// authorize URL we return below, so the reference is always populated.
-		// eslint-disable-next-line prefer-const -- forward-declared: captured by the handler closure before assignment
-		let session: Session;
-		const server = await deps.openCallbackServer((query) => handleCallback(session, query));
+		const redirectUri = CLAUDE_MANUAL_REDIRECT_URL;
 
 		const authorizeUrl = buildAuthorizeUrl({
 			...(deps.authorizeUrl === undefined ? {} : { authorizeUrl: deps.authorizeUrl }),
 			...(deps.clientId === undefined ? {} : { clientId: deps.clientId }),
 			...(deps.scopes === undefined ? {} : { scopes: deps.scopes }),
-			redirectUri: server.redirectUri,
+			redirectUri,
 			state,
 			codeChallenge: challenge,
 		});
 
-		session = {
+		const session: Session = {
 			loginId,
 			state,
 			verifier,
-			redirectUri: server.redirectUri,
+			redirectUri,
 			authorizeUrl,
-			server,
 			status: "pending",
 			createdAt: now(),
 		};
 		sessions.set(loginId, session);
-		logger.log(`login ${loginId}: listening on ${server.redirectUri}`);
+		logger.log(`login ${loginId}: authorize URL built (manual redirect)`);
 		// Open the browser from here (a Node process) — the renderer cannot reach
 		// the system browser. Best-effort: a spawn failure must not fail start(),
 		// the picker still shows an "Open the sign-in page" link that retries.
 		openInBrowser(session);
-		return { loginId, authorizeUrl };
+		return Promise.resolve({ loginId, authorizeUrl });
 	}
 
 	/**
@@ -440,103 +368,21 @@ export function createLoginManager(deps: LoginManagerDeps): LoginManager {
 		return viewOf(session);
 	}
 
-	async function cancel(loginId: string): Promise<LoginStatusView> {
+	function cancel(loginId: string): Promise<LoginStatusView> {
 		const session = sessions.get(loginId);
 		if (session === undefined) {
-			return { ok: false, reason: "unknown_login", detail: `no login ${loginId}` };
+			return Promise.resolve({
+				ok: false,
+				reason: "unknown_login",
+				detail: `no login ${loginId}`,
+			});
 		}
 		if (session.status === "pending") {
 			session.status = "cancelled";
 			session.detail = "cancelled by user";
-			await closeServer(session);
 		}
-		return viewOf(session);
+		return Promise.resolve(viewOf(session));
 	}
 
-	return { start, getStatus, cancel, open };
-}
-
-/** Args for {@link nodeCallbackServer}. */
-export type NodeCallbackServerDeps = {
-	/** Bind host; defaults to `127.0.0.1`. Never anything but loopback. */
-	host?: string;
-	/** Callback path; defaults to `/callback`. */
-	path?: string;
-};
-
-/**
- * Real loopback listener backed by `node:http`, bound to `127.0.0.1:0`. This is
- * the production {@link OpenCallbackServer}. Only `/callback` is served; any
- * other path 404s so a stray probe cannot drive the exchange.
- *
- * @param {NodeCallbackServerDeps} [cfg] - Host/path overrides.
- * @returns {OpenCallbackServer} An opener the login manager injects.
- */
-export function nodeCallbackServer(cfg: NodeCallbackServerDeps = {}): OpenCallbackServer {
-	const host = cfg.host ?? "127.0.0.1";
-	const path = cfg.path ?? "/callback";
-	return async (handler) => {
-		const { createServer } = await import("node:http");
-		const server = createServer((req, res) => {
-			// eslint-disable-next-line typescript/no-floating-promises -- fire-and-forget request handler; all errors are caught inside
-			(async (): Promise<void> => {
-				try {
-					const url = new URL(req.url ?? "/", `http://${host}`);
-					if (url.pathname !== path) {
-						res.writeHead(404, { "content-type": "text/plain" });
-						res.end("not found");
-						return;
-					}
-					const get = (k: string): Record<string, string> => {
-						const val = url.searchParams.get(k);
-						return val === null ? {} : { [k]: val };
-					};
-					const query: CallbackQuery = {
-						...get("code"),
-						...get("state"),
-						...get("error"),
-						...(url.searchParams.get("error_description") === null
-							? {}
-							: { errorDescription: url.searchParams.get("error_description") as string }),
-					};
-					const result = await handler(query);
-					res.writeHead(result.status, { "content-type": "text/html; charset=utf-8" });
-					res.end(result.html);
-				} catch (error: unknown) {
-					res.writeHead(500, { "content-type": "text/plain" });
-					res.end(error instanceof Error ? error.message : String(error));
-				}
-			})();
-		});
-		await new Promise<void>((resolve, reject) => {
-			server.once("error", reject);
-			server.listen(0, host, () => {
-				server.removeListener("error", reject);
-				resolve();
-			});
-		});
-		const address = server.address();
-		/* c8 ignore next 3 -- AddressInfo is always an object for a tcp listen. */
-		if (address === null || typeof address === "string") {
-			throw new Error("callback server: expected AddressInfo");
-		}
-		const { port } = address;
-		return {
-			port,
-			redirectUri: `http://${host}:${String(port)}${path}`,
-			// Stop accepting new connections and resolve immediately. We do NOT
-			// await the drain callback: `close()` is invoked from inside the
-			// callback handler itself (before its response has flushed), so
-			// awaiting the drain would deadlock — the drain waits for the response,
-			// the response waits for the handler, the handler waits for close.
-			// Idle keep-alive sockets are dropped so the port frees promptly; the
-			// in-flight callback response finishes on its own already-open socket.
-			close: () =>
-				new Promise<void>((resolve) => {
-					server.close();
-					server.closeIdleConnections();
-					resolve();
-				}),
-		};
-	};
+	return { start, complete, getStatus, cancel, open };
 }

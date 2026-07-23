@@ -26,14 +26,19 @@
  *   - Scopes — `org:create_api_key user:profile user:inference`, the Claude Code
  *     scope set (`EF=[bF,Yk]` plus `user:inference` in the bundle; `bF=
  *     "org:create_api_key"`, `Yk="user:profile"`, `yF="user:inference"`).
- *   - Loopback redirect — `http://127.0.0.1:<port>/callback`, the automatic-flow
- *     redirect the bundle binds (`http://127.0.0.1:${port}/callback`). The public
- *     client registers the loopback host per RFC 8252 §7.3, so any ephemeral port
- *     is accepted.
+ *   - Manual redirect — `https://platform.claude.com/oauth/code/callback`, the
+ *     bundle's `MANUAL_REDIRECT_URL`. The Claude *account* OAuth client (this
+ *     `client_id` at the `claude.com/cai` authorize surface) rejects loopback
+ *     redirects — a `127.0.0.1` `redirect_uri` fails token exchange with
+ *     "invalid 'redirect_uri' in request". The shipping desktop app therefore
+ *     drives the copy-the-code flow: the browser lands on the manual callback,
+ *     which renders the `code#state` for the user to paste back. Both the
+ *     authorize URL and the token exchange use this exact redirect.
  *
  * The token-exchange request mirrors the bundle exactly: a JSON body (NOT
  * form-encoded) `{grant_type:"authorization_code", client_id, code, redirect_uri,
- * code_verifier, state}` with `Content-Type: application/json`.
+ * code_verifier, state}` with `Content-Type: application/json` and the bundle's
+ * `anthropic-version: 2023-06-01` header.
  *
  * # Security
  *
@@ -57,6 +62,13 @@ export const CLAUDE_CODE_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 export const CLAUDE_AUTHORIZE_URL = "https://claude.com/cai/oauth/authorize";
 /** OAuth2 token endpoint (`TOKEN_URL`). */
 export const CLAUDE_TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
+/**
+ * Manual copy-the-code redirect (`MANUAL_REDIRECT_URL`). The Claude account
+ * OAuth client rejects loopback redirects, so the account-login flow authorizes
+ * and exchanges against this exact URI; the browser shows the user a `code#state`
+ * to paste back. See the module docstring.
+ */
+export const CLAUDE_MANUAL_REDIRECT_URL = "https://platform.claude.com/oauth/code/callback";
 /** Claude Code scope set, space-joined in the authorize URL. */
 export const CLAUDE_OAUTH_SCOPES: readonly string[] = [
 	"org:create_api_key",
@@ -134,7 +146,7 @@ export type AuthorizeUrlParams = {
 	authorizeUrl?: string;
 	/** OAuth client id; defaults to {@link CLAUDE_CODE_CLIENT_ID}. */
 	clientId?: string;
-	/** The loopback redirect the listener is bound to (`http://127.0.0.1:<port>/callback`). */
+	/** The redirect the flow uses — {@link CLAUDE_MANUAL_REDIRECT_URL} for account login. */
 	redirectUri: string;
 	/** Scopes to request; defaults to {@link CLAUDE_OAUTH_SCOPES}. */
 	scopes?: readonly string[];
@@ -166,7 +178,7 @@ export function buildAuthorizeUrl(params: AuthorizeUrlParams): string {
 
 /** Args for {@link exchangeAuthorizationCode}. */
 export type ExchangeOptions = {
-	/** The authorization `code` captured on the loopback callback. */
+	/** The authorization `code` the user pasted back from the manual callback. */
 	code: string;
 	/** The PKCE `verifier` that pairs with the challenge sent to authorize. */
 	codeVerifier: string;
@@ -238,6 +250,7 @@ export async function exchangeAuthorizationCode(opts: ExchangeOptions): Promise<
 			headers: {
 				"Content-Type": "application/json",
 				Accept: "application/json",
+				"anthropic-version": "2023-06-01",
 			},
 			body,
 		});

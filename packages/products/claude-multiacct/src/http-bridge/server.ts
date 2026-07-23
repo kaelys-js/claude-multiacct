@@ -34,6 +34,7 @@ import {
 	type AddAccountFn,
 	dispatch,
 	type LoginCancelFn,
+	type LoginCompleteFn,
 	type LoginOpenFn,
 	type LoginStartFn,
 	type LoginStatusFn,
@@ -73,6 +74,8 @@ export type StartOptions = {
 	loginStart?: LoginStartFn;
 	/** Poll a login (`GET /accounts/login/status/:loginId`). Optional. */
 	loginStatus?: LoginStatusFn;
+	/** Complete a login (`POST /accounts/login/complete`). Optional. */
+	loginComplete?: LoginCompleteFn;
 	/** Cancel a login (`POST /accounts/login/cancel/:loginId`). Optional. */
 	loginCancel?: LoginCancelFn;
 	/** Re-open a login's authorize URL (`POST /accounts/login/open/:loginId`). Optional. */
@@ -316,6 +319,7 @@ export async function start(opts: StartOptions): Promise<StartResult> {
 		removeAccount: opts.removeAccount,
 		...(opts.loginStart === undefined ? {} : { loginStart: opts.loginStart }),
 		...(opts.loginStatus === undefined ? {} : { loginStatus: opts.loginStatus }),
+		...(opts.loginComplete === undefined ? {} : { loginComplete: opts.loginComplete }),
 		...(opts.loginCancel === undefined ? {} : { loginCancel: opts.loginCancel }),
 		...(opts.loginOpen === undefined ? {} : { loginOpen: opts.loginOpen }),
 		verifyAccount: opts.verifyAccount,

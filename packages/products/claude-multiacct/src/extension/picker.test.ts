@@ -98,27 +98,19 @@ function q(doc: Document, sel: string): HTMLElement | null {
 	return getMenu(doc).querySelector<HTMLElement>(sel);
 }
 
-// A path-dispatching bridge client for the OAuth login flow. `statuses` is the
-// queue of `status` values the status endpoint returns (last one repeats);
-// `accountsAfter` is what `/accounts` reports after a successful login.
+// A path-dispatching bridge client for the manual OAuth login flow.
+// `completeResult` is what `POST /accounts/login/complete` returns (defaults to a
+// `done` status); `accountsAfter` is what `/accounts` reports after a login.
 function loginClient(cfg: {
 	startResult?: BridgeResult<unknown>;
-	statuses?: string[];
+	completeResult?: BridgeResult<unknown>;
 	accountsAfter?: PickerAccount[];
 	addTokenResult?: BridgeResult<unknown>;
 }): { client: BridgeClient; posts: Array<{ path: string; body: unknown }> } {
 	const posts: Array<{ path: string; body: unknown }> = [];
-	const statuses = [...(cfg.statuses ?? ["done"])];
-	const get = vi.fn<GetFn>((path: string) => {
-		if (path.startsWith("/accounts/login/status/")) {
-			const status = statuses.length > 1 ? statuses.shift() : statuses[0];
-			return Promise.resolve({ ok: true, data: { ok: true, status } });
-		}
-		return Promise.resolve({
-			ok: true,
-			data: { ok: true, accounts: cfg.accountsAfter ?? ACCOUNTS },
-		});
-	});
+	const get = vi.fn<GetFn>(() =>
+		Promise.resolve({ ok: true, data: { ok: true, accounts: cfg.accountsAfter ?? ACCOUNTS } }),
+	);
 	const post = vi.fn<PostFn>((path: string, body: unknown) => {
 		posts.push({ path, body });
 		if (path === "/accounts/login/start") {
@@ -127,11 +119,19 @@ function loginClient(cfg: {
 					ok: true,
 					data: {
 						ok: true,
-						loginId: "login-1",
+						loginId: "11111111-1111-4111-8111-111111111111",
 						authorizeUrl: "https://claude.com/cai/oauth/authorize?state=s&code_challenge=c",
 					},
 				},
 			);
+		}
+		if (path === "/accounts/login/complete") {
+			return Promise.resolve(
+				cfg.completeResult ?? { ok: true, data: { ok: true, status: "done" } },
+			);
+		}
+		if (path.startsWith("/accounts/login/open/")) {
+			return Promise.resolve({ ok: true, data: { ok: true } });
 		}
 		if (path.startsWith("/accounts/login/cancel/")) {
 			return Promise.resolve({ ok: true, data: { ok: true } });
@@ -148,15 +148,14 @@ function loginClient(cfg: {
 	};
 }
 
-// Sleep stub that resolves immediately so the poll loop advances by microtask.
-const noSleep = (): Promise<void> => Promise.resolve();
+const LOGIN_ID = "11111111-1111-4111-8111-111111111111";
 
-// Sleep stub that never resolves — parks the poll at its first await so the
-// "waiting" UI stays put while a test inspects or cancels it.
-const parkSleep = (): Promise<void> =>
-	new Promise<void>(() => {
-		/* never resolves — parks the poll */
-	});
+// Type into the code-paste field and click Add.
+function pasteCode(doc: Document, value: string): void {
+	const input = q(doc, "[data-cma-code-input]") as HTMLInputElement;
+	input.value = value;
+	q(doc, "[data-cma-code-submit]")?.click();
+}
 
 const CAROL: PickerAccount = { uuid: "cccccccc-cccc-4ccc-cccc-cccccccccccc", label: "Carol" };
 
@@ -609,217 +608,243 @@ describe("mountPicker", () => {
 		expect(getItems(doc)).toHaveLength(ACCOUNTS.length);
 	});
 
-	it("Add account starts an OAuth login: shows a waiting state (daemon opens the browser), then refetches on done", async () => {
+	it("Add account starts the manual OAuth flow: /start then daemon /open, reveals the paste panel, completes on paste, refetches", async () => {
 		const { client, posts } = loginClient({
-			statuses: ["pending", "done"],
 			accountsAfter: [...ACCOUNTS, CAROL],
 		});
-		mountPicker({
-			host: body,
-			client,
-			sessionUuid: SESSION,
-			doc,
-			accounts: ACCOUNTS,
-			sleep: noSleep,
-		});
+		mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS });
 		getButton(doc).click();
 		getAddRow(doc).click();
 		await tick();
-		// Started the login. The DAEMON opens the browser host-side (the renderer
-		// cannot); the picker never tries to open an external URL itself.
+		// Started the login, then asked the DAEMON to open the browser host-side
+		// (the renderer cannot open an external URL itself).
 		expect(posts[0]?.path).toBe("/accounts/login/start");
-		// It never falls back to the dead window.prompt or a token POST.
+		expect(posts.some((p) => p.path === `/accounts/login/open/${LOGIN_ID}`)).toBe(true);
+		// The paste panel is revealed; no waiting/poll UI, no token POST.
+		expect(q(doc, "[data-cma-code-form]")).not.toBeNull();
 		expect(posts.some((p) => p.path === "/accounts")).toBe(false);
-		// Poll ran to `done` and the pool was refetched → Carol appears.
+		// Paste the code#state and submit → /complete with {loginId, code}.
+		pasteCode(doc, "the-code#s");
 		await tick();
-		await tick();
+		const completePost = posts.find((p) => p.path === "/accounts/login/complete");
+		expect(completePost?.body).toStrictEqual({ loginId: LOGIN_ID, code: "the-code#s" });
+		// Completed done → the pool was refetched → Carol appears.
 		expect(getItems(doc).map((i) => i.dataset.uuid)).toContain(CAROL.uuid);
 	});
 
-	it("shows a waiting row with a cancel control while the sign-in is in flight", async () => {
-		const { client } = loginClient({ statuses: ["pending"] });
-		mountPicker({
-			host: body,
-			client,
-			sessionUuid: SESSION,
-			doc,
-			accounts: ACCOUNTS,
-			sleep: parkSleep, // poll parks so the waiting UI stays put
-		});
+	it("reveals the paste panel with a labeled field, Add/Cancel buttons, and the daemon re-open link", async () => {
+		const { client } = loginClient({});
+		mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS });
 		getButton(doc).click();
 		getAddRow(doc).click();
 		await tick();
-		expect(q(doc, "[data-cma-login-waiting]")?.textContent).toContain(
-			"Finish signing in in your browser",
-		);
-		expect(q(doc, "[data-cma-login-cancel]")).not.toBeNull();
+		const form = q(doc, "[data-cma-code-form]");
+		expect(form).not.toBeNull();
+		const labels = [...form!.querySelectorAll("label")].map((l) => l.textContent);
+		expect(labels.some((t) => t?.includes("Paste the code from your browser"))).toBe(true);
+		expect(q(doc, "[data-cma-code-input]")).not.toBeNull();
+		expect(q(doc, "[data-cma-code-submit]")?.textContent).toBe("Add");
+		expect(q(doc, "[data-cma-code-cancel]")?.textContent).toBe("Cancel");
 		// The "Open the sign-in page" link is present (the daemon re-open path).
 		expect(q(doc, "[data-cma-login-link]")?.textContent).toBe("Open the sign-in page");
 	});
 
 	it("the 'Open the sign-in page' link asks the DAEMON to re-open (POST /accounts/login/open/:id), never a renderer navigation", async () => {
-		const { client, posts } = loginClient({ statuses: ["pending"] });
-		mountPicker({
-			host: body,
-			client,
-			sessionUuid: SESSION,
-			doc,
-			accounts: ACCOUNTS,
-			sleep: parkSleep,
-		});
+		const { client, posts } = loginClient({});
+		mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS });
 		getButton(doc).click();
 		getAddRow(doc).click();
 		await tick();
 		const link = q(doc, "[data-cma-login-link]") as HTMLAnchorElement;
-		// A real click: preventDefault is called (no renderer nav) and the daemon
-		// open endpoint is hit for the in-flight login id.
 		const event = new doc.defaultView!.MouseEvent("click", { bubbles: true, cancelable: true });
 		link.dispatchEvent(event);
 		await tick();
 		expect(event.defaultPrevented).toBe(true);
-		expect(posts.some((p) => p.path === "/accounts/login/open/login-1")).toBe(true);
+		// Opened once on start plus once from the link → at least two open calls.
+		expect(
+			posts.filter((p) => p.path === `/accounts/login/open/${LOGIN_ID}`).length,
+		).toBeGreaterThanOrEqual(2);
 	});
 
 	it("surfaces an error in-DOM when the daemon refuses to start the login", async () => {
 		const { client } = loginClient({
 			startResult: { ok: false, kind: "unexpected", detail: "flag off" },
 		});
-		mountPicker({
-			host: body,
-			client,
-			sessionUuid: SESSION,
-			doc,
-			accounts: ACCOUNTS,
-			sleep: noSleep,
-		});
+		mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS });
 		getButton(doc).click();
 		getAddRow(doc).click();
 		await tick();
 		expect(q(doc, "[data-cma-add-error]")?.textContent).toContain("Couldn't start sign-in");
+		// No paste panel when the start failed.
+		expect(q(doc, "[data-cma-code-form]")).toBeNull();
 	});
 
-	it("cancel-sign-in tells the daemon to close the listener and returns to idle", async () => {
-		const { client, posts } = loginClient({ statuses: ["pending"] });
-		mountPicker({
-			host: body,
-			client,
-			sessionUuid: SESSION,
-			doc,
-			accounts: ACCOUNTS,
-			sleep: parkSleep,
-		});
+	it("empty code shows an inline error and keeps the paste panel (no complete request)", async () => {
+		const { client, posts } = loginClient({});
+		mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS });
 		getButton(doc).click();
 		getAddRow(doc).click();
 		await tick();
-		q(doc, "[data-cma-login-cancel]")?.click();
+		pasteCode(doc, "   ");
+		await tick();
+		expect(posts.some((p) => p.path === "/accounts/login/complete")).toBe(false);
+		expect(q(doc, "[data-cma-add-error]")?.textContent).toContain("Paste the code first");
+		// Still on the paste panel — the user just needs to paste.
+		expect(q(doc, "[data-cma-code-form]")).not.toBeNull();
+	});
+
+	it("cancel-sign-in tells the daemon to drop the login and returns to idle", async () => {
+		const { client, posts } = loginClient({});
+		mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS });
+		getButton(doc).click();
+		getAddRow(doc).click();
+		await tick();
+		q(doc, "[data-cma-code-cancel]")?.click();
 		await tick();
 		expect(posts.some((p) => p.path.startsWith("/accounts/login/cancel/"))).toBe(true);
-		// Back to the idle "+ Add account" entry.
+		// Back to the idle "+ Add account" entry; paste panel gone.
 		expect(q(doc, "[data-cma-add-account]")).not.toBeNull();
-		expect(q(doc, "[data-cma-login-waiting]")).toBeNull();
+		expect(q(doc, "[data-cma-code-form]")).toBeNull();
 	});
 
-	it("shows an error when the poll reports the sign-in failed", async () => {
-		const client = {
-			get: vi.fn<GetFn>((path: string) =>
-				path.startsWith("/accounts/login/status/")
-					? Promise.resolve({
-							ok: true,
-							data: { ok: true, status: "error", detail: "token exchange failed" },
-						})
-					: Promise.resolve({ ok: true, data: { ok: true, accounts: ACCOUNTS } }),
-			),
-			post: vi.fn<PostFn>(() =>
-				Promise.resolve({
-					ok: true,
-					data: { ok: true, loginId: "l1", authorizeUrl: "https://claude.com/x" },
-				}),
-			),
-			del: vi.fn<DelFn>(),
-		} as unknown as BridgeClient;
-		mountPicker({
-			host: body,
-			client,
-			sessionUuid: SESSION,
-			doc,
-			accounts: ACCOUNTS,
-			sleep: noSleep,
+	it("shows an error and drops to idle when /complete reports a rejected code", async () => {
+		const { client } = loginClient({
+			completeResult: {
+				ok: true,
+				data: { ok: true, status: "error", detail: "token exchange failed: invalid_grant" },
+			},
 		});
+		mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS });
 		getButton(doc).click();
 		getAddRow(doc).click();
 		await tick();
+		pasteCode(doc, "bad#s");
 		await tick();
 		expect(q(doc, "[data-cma-add-error]")?.textContent).toContain("token exchange failed");
+		// Consumed login → back to the idle add entry.
+		expect(q(doc, "[data-cma-add-account]")).not.toBeNull();
+		expect(q(doc, "[data-cma-code-form]")).toBeNull();
 	});
 
-	it("shows an error when the status poll request itself fails", async () => {
-		const client = {
-			get: vi.fn<GetFn>((path: string) =>
-				path.startsWith("/accounts/login/status/")
-					? Promise.resolve({ ok: false, kind: "network", detail: "x" })
-					: Promise.resolve({ ok: true, data: { ok: true, accounts: ACCOUNTS } }),
-			),
-			post: vi.fn<PostFn>(() =>
-				Promise.resolve({
+	it("keeps the paste panel for a retry when the /complete request itself fails", async () => {
+		const { client } = loginClient({
+			completeResult: { ok: false, kind: "network", detail: "offline" },
+		});
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS });
+			getButton(doc).click();
+			getAddRow(doc).click();
+			await tick();
+			pasteCode(doc, "code#s");
+			await tick();
+			expect(q(doc, "[data-cma-add-error]")?.textContent).toContain("Couldn't reach the sign-in");
+			// The login is still valid → keep the paste panel.
+			expect(q(doc, "[data-cma-code-form]")).not.toBeNull();
+			expect(warn).toHaveBeenCalledWith(
+				"[cma-extension] complete login failed:",
+				"network",
+				"offline",
+			);
+		} finally {
+			warn.mockRestore();
+		}
+	});
+
+	it("Enter in the code field submits the paste", async () => {
+		const { client, posts } = loginClient({ accountsAfter: [...ACCOUNTS, CAROL] });
+		mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS });
+		getButton(doc).click();
+		getAddRow(doc).click();
+		await tick();
+		const input = q(doc, "[data-cma-code-input]") as HTMLInputElement;
+		input.value = "code#s";
+		input.dispatchEvent(
+			new doc.defaultView!.KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+		);
+		await tick();
+		expect(posts.some((p) => p.path === "/accounts/login/complete")).toBe(true);
+	});
+
+	it("the code submit is disabled while the POST is in flight, and Enter can't re-fire it", async () => {
+		let resolvePost: ((v: BridgeResult<unknown>) => void) | undefined;
+		const post = vi.fn<PostFn>((path: string) => {
+			if (path === "/accounts/login/complete") {
+				return new Promise<BridgeResult<unknown>>((resolve) => {
+					resolvePost = resolve;
+				});
+			}
+			if (path === "/accounts/login/start") {
+				return Promise.resolve({
 					ok: true,
-					data: { ok: true, loginId: "l1", authorizeUrl: "https://claude.com/x" },
-				}),
+					data: { ok: true, loginId: LOGIN_ID, authorizeUrl: "https://claude.com/x" },
+				});
+			}
+			return Promise.resolve({ ok: true, data: { ok: true } });
+		});
+		const client: BridgeClient = {
+			get: vi.fn<GetFn>(() =>
+				Promise.resolve({ ok: true, data: { ok: true, accounts: ACCOUNTS } }),
 			),
+			post,
 			del: vi.fn<DelFn>(),
 		} as unknown as BridgeClient;
-		mountPicker({
-			host: body,
-			client,
-			sessionUuid: SESSION,
-			doc,
-			accounts: ACCOUNTS,
-			sleep: noSleep,
-		});
+		mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS });
 		getButton(doc).click();
 		getAddRow(doc).click();
 		await tick();
+		const input = q(doc, "[data-cma-code-input]") as HTMLInputElement;
+		input.value = "code#s";
+		const submit = q(doc, "[data-cma-code-submit]") as HTMLButtonElement;
+		submit.click();
+		await Promise.resolve();
+		expect(submit.disabled).toBe(true);
+		// A second Enter while disabled is a no-op — exactly one complete POST.
+		input.dispatchEvent(
+			new doc.defaultView!.KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+		);
+		await Promise.resolve();
+		const completeCalls = post.mock.calls.filter((c) => c[0] === "/accounts/login/complete");
+		expect(completeCalls).toHaveLength(1);
+		resolvePost?.({ ok: true, data: { ok: true, status: "done" } });
 		await tick();
-		expect(q(doc, "[data-cma-add-error]")?.textContent).toContain("Lost contact");
 	});
 
-	it("times out in-DOM when no terminal status arrives before the deadline", async () => {
-		const { client } = loginClient({ statuses: ["pending"] });
-		mountPicker({
-			host: body,
-			client,
-			sessionUuid: SESSION,
-			doc,
-			accounts: ACCOUNTS,
-			sleep: noSleep,
-			pollTimeoutMs: 0, // deadline already past → immediate timeout branch
+	it("swallows a failed daemon /open on start (the paste panel still shows with a retry link)", async () => {
+		const post = vi.fn<PostFn>((path: string) => {
+			if (path === "/accounts/login/start") {
+				return Promise.resolve({
+					ok: true,
+					data: { ok: true, loginId: LOGIN_ID, authorizeUrl: "https://claude.com/x" },
+				});
+			}
+			if (path.startsWith("/accounts/login/open/")) {
+				return Promise.reject(new Error("open exploded"));
+			}
+			return Promise.resolve({ ok: true, data: { ok: true } });
 		});
-		getButton(doc).click();
-		getAddRow(doc).click();
-		await tick();
-		expect(q(doc, "[data-cma-add-error]")?.textContent).toContain("timed out");
-	});
-
-	it("stops polling when the picker is destroyed mid-flight (no work on a dead picker)", async () => {
-		const { client } = loginClient({ statuses: ["pending"] });
-		let releaseSleep: (() => void) | undefined;
-		const handle = mountPicker({
-			host: body,
-			client,
-			sessionUuid: SESSION,
-			doc,
-			accounts: ACCOUNTS,
-			sleep: () =>
-				new Promise<void>((resolve) => {
-					releaseSleep = resolve;
-				}),
-		});
-		getButton(doc).click();
-		getAddRow(doc).click();
-		await tick(); // login started; the poll is parked at its first sleep
-		handle.destroy();
-		releaseSleep?.(); // sleep resolves → poll sees `destroyed` and bails
-		await tick();
-		expect(doc.body.querySelector("[data-cma-picker]")).toBeNull();
+		const client: BridgeClient = {
+			get: vi.fn<GetFn>(() =>
+				Promise.resolve({ ok: true, data: { ok: true, accounts: ACCOUNTS } }),
+			),
+			post,
+			del: vi.fn<DelFn>(),
+		} as unknown as BridgeClient;
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS });
+			getButton(doc).click();
+			getAddRow(doc).click();
+			await tick();
+			// The open failed but was swallowed → paste panel still shown.
+			expect(q(doc, "[data-cma-code-form]")).not.toBeNull();
+			expect(warn).toHaveBeenCalledWith(
+				"[cma-extension] open sign-in page failed:",
+				expect.anything(),
+			);
+		} finally {
+			warn.mockRestore();
+		}
 	});
 
 	it("recovers from a throw while starting the login (actionRow try/catch)", async () => {
@@ -832,14 +857,7 @@ describe("mountPicker", () => {
 		} as unknown as BridgeClient;
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 		try {
-			mountPicker({
-				host: body,
-				client,
-				sessionUuid: SESSION,
-				doc,
-				accounts: ACCOUNTS,
-				sleep: noSleep,
-			});
+			mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS });
 			getButton(doc).click();
 			getAddRow(doc).click();
 			await tick();
@@ -848,6 +866,23 @@ describe("mountPicker", () => {
 		} finally {
 			warn.mockRestore();
 		}
+	});
+
+	it("separates the account list from the add area with a divider, and the token form with its own divider", () => {
+		const { client } = loginClient({});
+		mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS });
+		getButton(doc).click();
+		// A hairline divider sits above the add area (Item 2A).
+		expect(q(doc, "[data-cma-add-divider]")).not.toBeNull();
+		// Opening the token fallback adds a second divider above the form (Item 2B).
+		q(doc, "[data-cma-add-token]")?.click();
+		expect(q(doc, "[data-cma-token-divider]")).not.toBeNull();
+		// The token form's Add button is the filled/accent variant (Item 2C).
+		const submit = q(doc, "[data-cma-token-submit]") as HTMLButtonElement;
+		expect(submit.style.background).toContain("--claude-text-100");
+		expect(submit.style.borderRadius).toBe("0.375rem");
+		const cancel = q(doc, "[data-cma-token-cancel]") as HTMLButtonElement;
+		expect(cancel.style.border).toContain("--claude-border");
 	});
 
 	it("token fallback: reveals an in-DOM form, submits a pasted token to /accounts, refetches", async () => {
@@ -1191,25 +1226,6 @@ describe("mountPicker", () => {
 		} finally {
 			confirmSpy.mockRestore();
 		}
-	});
-
-	it("defaults sleep to setTimeout when none is injected (poll advances on real timers)", async () => {
-		const { client } = loginClient({ statuses: ["done"], accountsAfter: [...ACCOUNTS, CAROL] });
-		mountPicker({
-			host: body,
-			client,
-			sessionUuid: SESSION,
-			doc,
-			accounts: ACCOUNTS,
-			pollIntervalMs: 1, // real 1ms sleep via defaultSleep
-		});
-		getButton(doc).click();
-		getAddRow(doc).click();
-		// Wait past the 1ms poll interval + microtasks.
-		await new Promise((resolve) => {
-			setTimeout(resolve, 25);
-		});
-		expect(getItems(doc).map((i) => i.dataset.uuid)).toContain(CAROL.uuid);
 	});
 
 	it("swallows a throw from the remove DELETE via the row-level try/catch", async () => {

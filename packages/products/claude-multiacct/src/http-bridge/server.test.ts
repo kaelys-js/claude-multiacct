@@ -294,6 +294,7 @@ describe("start", () => {
 					authorizeUrl: "https://claude.com/cai/oauth/authorize?x=1",
 				}),
 			loginStatus: () => ({ ok: true, status: "pending" }),
+			loginComplete: () => Promise.resolve({ ok: true, status: "done" }),
 			loginCancel: () => Promise.resolve({ ok: true, status: "cancelled" }),
 		});
 		alive.push(s);
@@ -310,6 +311,22 @@ describe("start", () => {
 		const body = (await res.json()) as { ok: boolean; loginId: string; authorizeUrl: string };
 		expect(body.loginId).toBe("11111111-1111-4111-8111-111111111111");
 		expect(body.authorizeUrl).toContain("oauth/authorize");
+
+		// The complete port is threaded too: POST /accounts/login/complete → 200.
+		const done = await fetch(`http://127.0.0.1:${String(s.port)}/accounts/login/complete`, {
+			method: "POST",
+			headers: {
+				origin: "https://claude.ai",
+				"x-cma-bridge-secret": s.secret,
+				"content-type": "application/json",
+			},
+			body: JSON.stringify({
+				loginId: "11111111-1111-4111-8111-111111111111",
+				code: "the-code#the-state",
+			}),
+		});
+		expect(done.status).toBe(200);
+		expect(((await done.json()) as { status: string }).status).toBe("done");
 	});
 
 	it("threads loginOpen through to POST /accounts/login/open/:loginId", async () => {

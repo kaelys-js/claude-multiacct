@@ -137,7 +137,14 @@ export type LoginStatusResult =
 /** Poll the progress of an in-app login by its `loginId`. */
 export type LoginStatusFn = (loginId: string) => LoginStatusResult | Promise<LoginStatusResult>;
 
-/** Cancel a pending in-app login by its `loginId` (closes its loopback listener). */
+/**
+ * Complete an in-app login from the `code#state` string the user pasted back
+ * from the manual redirect. Runs exchange → profile → register and returns the
+ * login's final status. Injected so the route stays pure.
+ */
+export type LoginCompleteFn = (loginId: string, code: string) => Promise<LoginStatusResult>;
+
+/** Cancel a pending in-app login by its `loginId`. */
 export type LoginCancelFn = (loginId: string) => Promise<LoginStatusResult>;
 
 /**
@@ -167,7 +174,13 @@ export type RouteDeps = {
 	loginStart?: LoginStartFn;
 	/** Poll a login's status. Optional (see `loginStart`); read-only. */
 	loginStatus?: LoginStatusFn;
-	/** Cancel a pending login. Optional (see `loginStart`); closes its listener. */
+	/**
+	 * Complete a login from the pasted `code#state`. Flag-gated (it mutates the
+	 * pool). Optional so a daemon that has not wired the login manager reports the
+	 * feature as unavailable (503) rather than crashing.
+	 */
+	loginComplete?: LoginCompleteFn;
+	/** Cancel a pending login. Optional (see `loginStart`). */
 	loginCancel?: LoginCancelFn;
 	/** Re-open a pending login's authorize URL. Optional (see `loginStart`). */
 	loginOpen?: LoginOpenFn;
@@ -213,6 +226,16 @@ const NonEmptyString = v.pipe(v.string(), v.minLength(1));
 const AddAccountBodySchema = v.strictObject({
 	label: NonEmptyString,
 	token: NonEmptyString,
+});
+
+/**
+ * `POST /accounts/login/complete` body — the login id to complete plus the
+ * `code#state` string the user pasted from the manual redirect. `strictObject`
+ * so a stray field is a 400, not silently accepted.
+ */
+const LoginCompleteBodySchema = v.strictObject({
+	loginId: UuidSchema,
+	code: NonEmptyString,
 });
 
 /**
@@ -395,9 +418,50 @@ export async function handleLoginStatus(deps: RouteDeps, loginId: string): Promi
 }
 
 /**
- * Cancel a pending in-app login — closes its loopback listener. Read/teardown
- * only (does not mutate the pool), so it is not flag-gated. 404s an unknown
- * `loginId`; 503s when the login manager is not wired.
+ * Complete an in-app login from the pasted `code#state`. **Requires the feature
+ * flag on** — it mutates the pool (registers the account), mirroring
+ * `handleLoginStart`. Flag-off returns 403; an unwired manager returns 503; a
+ * malformed body returns 400; an unknown `loginId` returns 404. On success
+ * returns 200 with the login's final status (and the created account on `done`).
+ *
+ * @param {RouteDeps} deps - Injected ports.
+ * @param {unknown} body - Parsed request body (`{loginId, code}`).
+ * @returns {Promise<RouteResult>} 200 with the status, or 400/403/404/503.
+ */
+export async function handleLoginComplete(deps: RouteDeps, body: unknown): Promise<RouteResult> {
+	if (!deps.flagOn) {
+		return { status: 403, body: { ok: false, skipped: true, reason: "flag-off" } };
+	}
+	if (deps.loginComplete === undefined) {
+		return {
+			status: 503,
+			body: { ok: false, reason: "login_unavailable", detail: "login manager not wired" },
+		};
+	}
+	const parsed = v.safeParse(LoginCompleteBodySchema, body);
+	if (!parsed.success) {
+		return badRequest(parsed.issues, "body");
+	}
+	const result = await deps.loginComplete(parsed.output.loginId, parsed.output.code);
+	if (!result.ok) {
+		return { status: 404, body: { ok: false, reason: result.reason, detail: result.detail } };
+	}
+	return {
+		status: 200,
+		body: {
+			ok: true,
+			status: result.status,
+			...(result.account === undefined ? {} : { account: result.account }),
+			...(result.updated === undefined ? {} : { updated: result.updated }),
+			...(result.detail === undefined ? {} : { detail: result.detail }),
+		},
+	};
+}
+
+/**
+ * Cancel a pending in-app login. Read/teardown only (does not mutate the pool),
+ * so it is not flag-gated. 404s an unknown `loginId`; 503s when the login
+ * manager is not wired.
  *
  * @param {RouteDeps} deps - Injected ports.
  * @param {string} loginId - Login id from the path.
@@ -563,6 +627,9 @@ export async function dispatch(req: RouteRequest, deps: RouteDeps): Promise<Rout
 	}
 	if (req.method === "POST" && req.pathname === "/accounts/login/start") {
 		return await handleLoginStart(deps);
+	}
+	if (req.method === "POST" && req.pathname === "/accounts/login/complete") {
+		return await handleLoginComplete(deps, req.body);
 	}
 	if (req.method === "GET" && req.pathname.startsWith("/accounts/login/status/")) {
 		const loginId = req.pathname.slice("/accounts/login/status/".length);

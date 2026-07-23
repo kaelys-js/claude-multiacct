@@ -39,7 +39,7 @@ import { signalSwap } from "./src/cli-shim/session-pid.ts";
 import { AtomicRegistryWriter, nodeRegistryFsPort } from "./src/registry/registry-writer.ts";
 import { verifyToken } from "./src/oauth/verify.ts";
 import { flagOn } from "./src/oauth/provisioning.ts";
-import { createLoginManager, nodeCallbackServer } from "./src/oauth/login-manager.ts";
+import { createLoginManager } from "./src/oauth/login-manager.ts";
 import { exchangeAuthorizationCode } from "./src/oauth/login.ts";
 import { fetchAccountProfile } from "./src/discovery/identity.ts";
 import { registerOrUpdateAccount } from "./src/oauth/register-account.ts";
@@ -223,11 +223,15 @@ const openAuthorizeUrl = (url) => {
 	});
 	child.unref();
 };
+// The Claude account OAuth client rejects loopback redirects, so this flow uses
+// the shipping app's MANUAL redirect (platform.claude.com/oauth/code/callback):
+// no 127.0.0.1 listener is bound. start() builds the authorize URL and the
+// daemon opens it host-side; the user pastes the code#state back and the picker
+// POSTs it to /accounts/login/complete, which drives exchange→profile→register.
 const loginManager = createLoginManager({
 	exchangeCode: (args) => exchangeAuthorizationCode({ ...args, fetchImpl: loginFetch }),
 	fetchProfile: (token) => fetchAccountProfile(token, loginFetch),
 	register: ({ profile, token }) => registerOrUpdateAccount({ profile, token, ports: cliPorts }),
-	openCallbackServer: nodeCallbackServer(),
 	openUrl: openAuthorizeUrl,
 	logger: {
 		log: (m) => { try { process.stderr.write("[login] " + m + "\\n"); } catch {} },
@@ -243,6 +247,7 @@ const loginStart = async () => {
 	}
 };
 const loginStatus = (loginId) => loginManager.getStatus(loginId);
+const loginComplete = (loginId, code) => loginManager.complete(loginId, code);
 const loginCancel = (loginId) => loginManager.cancel(loginId);
 const loginOpen = (loginId) => loginManager.open(loginId);
 
@@ -297,6 +302,7 @@ try {
 		removeAccount,
 		loginStart,
 		loginStatus,
+		loginComplete,
 		loginCancel,
 		loginOpen,
 		verifyAccount,

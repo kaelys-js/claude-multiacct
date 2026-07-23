@@ -12,8 +12,15 @@
  * still proving the daemon FIRES the host-side open (its "[login] opening
  * sign-in page in browser" breadcrumb lands on stderr).
  *
- * Adversarial: delete the `loginStart` (or `openUrl`) wiring in build-daemon.mjs
- * and the `login/start` assertion (or the open-breadcrumb assertion) reddens.
+ * It also pins the MANUAL-redirect switch: the authorize URL the production
+ * daemon returns carries the platform copy-the-code callback as its
+ * `redirect_uri` (NOT a 127.0.0.1 loopback, which the account client rejects),
+ * and `POST /accounts/login/complete` is actually served (a clean 400 on a
+ * malformed body — never the 404 "no route" or 503 an unwired daemon would give).
+ *
+ * Adversarial: delete the `loginStart` (or `openUrl`, or `loginComplete`) wiring
+ * in build-daemon.mjs, or bind a loopback redirect, and the matching assertion
+ * reddens.
  */
 
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
@@ -122,11 +129,45 @@ describe("production daemon build wires in-app OAuth login (not 503)", () => {
 		expect(body.loginId).not.toBe("");
 		expect(body.authorizeUrl).toContain("oauth/authorize");
 
+		// Manual redirect: the authorize URL carries the platform copy-the-code
+		// callback (url-encoded in the query), never a 127.0.0.1 loopback.
+		expect(body.authorizeUrl).toContain(
+			encodeURIComponent("https://platform.claude.com/oauth/code/callback"),
+		);
+		expect(body.authorizeUrl).not.toContain("127.0.0.1");
+
 		// B1: the daemon opened the URL host-side — its breadcrumb proves the spawn
 		// path ran (the renderer never opens; only this Node process can).
 		await new Promise<void>((resolve) => {
 			setTimeout(resolve, 200);
 		});
 		expect(daemon!.stderr()).toContain("opening sign-in page in browser");
+	}, 20_000);
+
+	it("POST /accounts/login/complete is served by the production daemon (clean 400 on a bad body, never 404/503)", async () => {
+		const secretRaw = await readFile(
+			join(home, ".config", "claude-multiacct", "bridge.json"),
+			"utf8",
+		);
+		const { secret } = JSON.parse(secretRaw) as { secret: string };
+		const res = await fetch(`http://127.0.0.1:${String(daemon!.port)}/accounts/login/complete`, {
+			method: "POST",
+			headers: {
+				origin: "https://claude.ai",
+				"x-cma-bridge-secret": secret,
+				"content-type": "application/json",
+			},
+			// Malformed body: proves the route is WIRED (validation runs) rather than
+			// hitting the 404 "no route" fall-through or the 503 an unwired daemon
+			// would return. Adversarial: drop the loginComplete wiring → 503 here.
+			body: JSON.stringify({}),
+		});
+		expect(res.status).toBe(400);
+		const body = (await res.json()) as { ok: boolean; reason: string };
+		expect(body.ok).toBe(false);
+		expect(body.reason).toContain("invalid body");
+		// Not the "no route" 404 and not the "login_unavailable" 503.
+		expect(body.reason).not.toContain("no route");
+		expect(body.reason).not.toContain("login_unavailable");
 	}, 20_000);
 });

@@ -7,10 +7,13 @@
  *      value in the authorize URL is a hash, never the secret verifier. A
  *      regression to plain (challenge === verifier) trips the pin.
  *   2. The authorize URL carries EXACTLY the standard OAuth2/PKCE params with the
- *      pinned Claude Code client_id + scopes + S256 method. Adversarial: drop
- *      `code_challenge_method` and the "well-formed authorize URL" test reddens.
- *   3. The token exchange body is the EXACT Claude Code shape (JSON, not form) and
- *      errors are CLASSIFIED — `invalid_grant` distinct from `network`/`malformed`.
+ *      pinned Claude Code client_id + scopes + S256 method AND the MANUAL redirect
+ *      (`platform.claude.com/oauth/code/callback`) — the account client rejects
+ *      loopback. Adversarial: drop `code_challenge_method`, or point the redirect
+ *      at a 127.0.0.1 loopback, and the "well-formed authorize URL" test reddens.
+ *   3. The token exchange body is the EXACT Claude Code shape (JSON, not form) at
+ *      the MANUAL redirect, with the pinned `anthropic-version` header, and errors
+ *      are CLASSIFIED — `invalid_grant` distinct from `network`/`malformed`.
  *   4. No secret leaks: the code + verifier never appear in the authorize URL.
  */
 
@@ -21,6 +24,7 @@ import {
 	buildAuthorizeUrl,
 	CLAUDE_AUTHORIZE_URL,
 	CLAUDE_CODE_CLIENT_ID,
+	CLAUDE_MANUAL_REDIRECT_URL,
 	CLAUDE_OAUTH_SCOPES,
 	CLAUDE_TOKEN_URL,
 	createPkcePair,
@@ -97,10 +101,10 @@ describe("createState", () => {
 });
 
 describe("buildAuthorizeUrl", () => {
-	it("is a well-formed authorize URL with the pinned client_id, scopes, and S256", () => {
+	it("is a well-formed authorize URL with the pinned client_id, scopes, S256, and the MANUAL redirect", () => {
 		const url = new URL(
 			buildAuthorizeUrl({
-				redirectUri: "http://127.0.0.1:54321/callback",
+				redirectUri: CLAUDE_MANUAL_REDIRECT_URL,
 				state: "st4te",
 				codeChallenge: "chall",
 			}),
@@ -108,7 +112,11 @@ describe("buildAuthorizeUrl", () => {
 		expect(`${url.origin}${url.pathname}`).toBe(CLAUDE_AUTHORIZE_URL);
 		expect(url.searchParams.get("response_type")).toBe("code");
 		expect(url.searchParams.get("client_id")).toBe(CLAUDE_CODE_CLIENT_ID);
-		expect(url.searchParams.get("redirect_uri")).toBe("http://127.0.0.1:54321/callback");
+		// The account client rejects loopback — the redirect is the manual
+		// copy-the-code callback, never a 127.0.0.1 URI.
+		expect(url.searchParams.get("redirect_uri")).toBe(CLAUDE_MANUAL_REDIRECT_URL);
+		expect(CLAUDE_MANUAL_REDIRECT_URL).toBe("https://platform.claude.com/oauth/code/callback");
+		expect(url.searchParams.get("redirect_uri")).not.toContain("127.0.0.1");
 		expect(url.searchParams.get("scope")).toBe(CLAUDE_OAUTH_SCOPES.join(" "));
 		expect(url.searchParams.get("state")).toBe("st4te");
 		expect(url.searchParams.get("code_challenge")).toBe("chall");
@@ -149,7 +157,7 @@ describe("exchangeAuthorizationCode", () => {
 			code: "the-code",
 			codeVerifier: "the-verifier",
 			state: "the-state",
-			redirectUri: "http://127.0.0.1:9/callback",
+			redirectUri: CLAUDE_MANUAL_REDIRECT_URL,
 			fetchImpl,
 		});
 		assertOk(result);
@@ -162,12 +170,17 @@ describe("exchangeAuthorizationCode", () => {
 		expect(calls[0]!.url).toBe(CLAUDE_TOKEN_URL);
 		expect(calls[0]!.method).toBe("POST");
 		expect(calls[0]!.headers["Content-Type"]).toBe("application/json");
+		// The bundle sends the anthropic-version header on the exchange; drop it
+		// and this reddens.
+		expect(calls[0]!.headers["anthropic-version"]).toBe("2023-06-01");
 		const sent = JSON.parse(calls[0]!.body) as Record<string, unknown>;
+		// The exchange redirect_uri MUST be the manual callback — the same URI the
+		// authorize request used. A loopback here fails with invalid redirect_uri.
 		expect(sent).toStrictEqual({
 			grant_type: "authorization_code",
 			client_id: CLAUDE_CODE_CLIENT_ID,
 			code: "the-code",
-			redirect_uri: "http://127.0.0.1:9/callback",
+			redirect_uri: CLAUDE_MANUAL_REDIRECT_URL,
 			code_verifier: "the-verifier",
 			state: "the-state",
 		});
