@@ -1,33 +1,29 @@
 /* oxlint-disable vitest/expect-expect, typescript/explicit-function-return-type, unicorn/numeric-separators-style, vitest/no-conditional-in-test, vitest/no-conditional-expect, jsdoc/require-returns, unicorn/no-useless-undefined */
 /**
  * Intent: the login manager owns the stateful half of the in-app OAuth flow —
- * the pending logins, their loopback listeners, and the callback pipeline.
- * Load-bearing behaviours pinned here:
+ * the pending logins and the paste-back callback pipeline. The Claude account
+ * client rejects loopback, so this is the MANUAL copy-the-code flow: no
+ * 127.0.0.1 listener is bound. Load-bearing behaviours pinned here:
  *
- *   1. `start()` binds a listener, builds an authorize URL carrying the SAME
- *      redirect + state, and returns a pollable loginId.
- *   2. The callback validates `state` BEFORE any exchange — a mismatch is a
- *      hard reject with NO token exchange (CSRF). Adversarial: drop the state
- *      check and the "rejects mismatched state without exchanging" test reddens.
- *   3. The happy path runs exchange → profile → register, flips status to `done`
- *      with the account, and CLOSES the listener.
+ *   1. `start()` builds an authorize URL carrying the MANUAL redirect
+ *      (`platform.claude.com/oauth/code/callback`) + a minted state, and returns
+ *      a pollable loginId. Adversarial: bind a loopback redirect and the
+ *      "manual redirect" assertion reddens.
+ *   2. `complete()` splits the pasted `code#state` on the FIRST `#`, validates
+ *      `state` BEFORE any exchange — a mismatch (or a paste with no `#`) is a hard
+ *      reject with NO token exchange (CSRF).
+ *   3. The happy path runs exchange → profile → register against the MANUAL
+ *      redirect, flips status to `done` with the account.
  *   4. Each failure stage (exchange / profile / register) yields `error` and a
- *      distinct browser status, and closes the listener.
- *   5. Abandoned pending logins are swept (closed + cancelled) once past the TTL.
- *   6. `nodeCallbackServer` really binds loopback and drives the handler.
+ *      distinct detail.
+ *   5. Abandoned pending logins are swept (cancelled) once past the TTL.
  */
 
 import { describe, expect, it } from "vitest";
 import type { AccountProfile } from "../discovery/identity.ts";
 import type { Account, ClaudeAccountUuid } from "../domain/account.ts";
-import {
-	type CallbackPage,
-	type CallbackQuery,
-	createLoginManager,
-	type LoginManagerDeps,
-	nodeCallbackServer,
-	type OpenCallbackServer,
-} from "./login-manager.ts";
+import { CLAUDE_MANUAL_REDIRECT_URL } from "./login.ts";
+import { createLoginManager, type LoginManagerDeps } from "./login-manager.ts";
 
 const UUID = "11111111-1111-4111-8111-111111111111";
 
@@ -53,61 +49,30 @@ function profile(): AccountProfile {
 	};
 }
 
-/** A fake opener that captures the handler so a test can fire the callback. */
-function fakeOpener(): {
-	opener: OpenCallbackServer;
-	fire: (q: CallbackQuery) => Promise<CallbackPage>;
-	closedCount: () => number;
-	closeThrows: () => void;
-} {
-	let handler: ((q: CallbackQuery) => Promise<CallbackPage>) | undefined;
-	let closed = 0;
-	let throwOnClose = false;
-	const opener: OpenCallbackServer = (h) => {
-		handler = h;
-		return Promise.resolve({
-			port: 5555,
-			redirectUri: "http://127.0.0.1:5555/callback",
-			close: () => {
-				closed += 1;
-				return throwOnClose ? Promise.reject(new Error("close boom")) : Promise.resolve();
-			},
-		});
-	};
-	return {
-		opener,
-		fire: (q) => {
-			if (handler === undefined) {
-				throw new Error("handler not registered");
-			}
-			return handler(q);
-		},
-		closedCount: () => closed,
-		closeThrows: () => {
-			throwOnClose = true;
-		},
-	};
-}
-
 function happyDeps(over: Partial<LoginManagerDeps> = {}): LoginManagerDeps {
 	return {
 		exchangeCode: () => Promise.resolve({ ok: true, tokens: { accessToken: "tok", scopes: [] } }),
 		fetchProfile: () => Promise.resolve({ ok: true, profile: profile() }),
 		register: () => Promise.resolve({ ok: true, account: account(), updated: false }),
-		openCallbackServer: fakeOpener().opener,
 		genLoginId: () => UUID,
 		...over,
 	};
 }
 
+// The minted state for a started login, read off the authorize URL.
+function stateOf(authorizeUrl: string): string {
+	return new URL(authorizeUrl).searchParams.get("state") ?? "";
+}
+
 describe("createLoginManager — start()", () => {
-	it("binds a listener and returns an authorize URL carrying the redirect + state", async () => {
-		const fake = fakeOpener();
-		const mgr = createLoginManager(happyDeps({ openCallbackServer: fake.opener }));
+	it("builds an authorize URL carrying the MANUAL redirect + a minted state", async () => {
+		const mgr = createLoginManager(happyDeps());
 		const { loginId, authorizeUrl } = await mgr.start();
 		expect(loginId).toBe(UUID);
 		const url = new URL(authorizeUrl);
-		expect(url.searchParams.get("redirect_uri")).toBe("http://127.0.0.1:5555/callback");
+		// The account client rejects loopback — the redirect is the manual callback.
+		expect(url.searchParams.get("redirect_uri")).toBe(CLAUDE_MANUAL_REDIRECT_URL);
+		expect(url.searchParams.get("redirect_uri")).not.toContain("127.0.0.1");
 		expect(url.searchParams.get("state")).not.toBeNull();
 		expect(mgr.getStatus(loginId)).toMatchObject({ ok: true, status: "pending" });
 	});
@@ -130,7 +95,6 @@ describe("createLoginManager — start()", () => {
 				logger: { log: () => undefined, warn: (m) => warnings.push(m) },
 			}),
 		);
-		// start() still resolves with a usable loginId despite the opener throwing.
 		const { loginId } = await mgr.start();
 		expect(mgr.getStatus(loginId)).toMatchObject({ ok: true, status: "pending" });
 		expect(warnings.some((w) => w.includes("open browser failed"))).toBe(true);
@@ -183,56 +147,75 @@ describe("createLoginManager — getStatus", () => {
 	});
 });
 
-describe("createLoginManager — callback happy path", () => {
-	it("valid state + code → exchange→profile→register → done, account set, listener closed", async () => {
-		const fake = fakeOpener();
-		const mgr = createLoginManager(happyDeps({ openCallbackServer: fake.opener }));
+describe("createLoginManager — complete (paste code#state) happy path", () => {
+	it("valid code#state → exchange→profile→register → done, account set", async () => {
+		const mgr = createLoginManager(happyDeps());
 		const { loginId, authorizeUrl } = await mgr.start();
-		const state = new URL(authorizeUrl).searchParams.get("state") ?? "";
+		const state = stateOf(authorizeUrl);
 
-		const page = await fake.fire({ code: "the-code", state });
-		expect(page.status).toBe(200);
-		expect(page.html).toContain("Signed in");
-
-		const view = mgr.getStatus(loginId);
+		const view = await mgr.complete(loginId, `the-code#${state}`);
 		expect(view).toMatchObject({ ok: true, status: "done", updated: false });
 		if (view.ok) {
 			expect(view.account?.uuid).toBe(UUID);
 		}
-		expect(fake.closedCount()).toBe(1);
+		expect(mgr.getStatus(loginId)).toMatchObject({ ok: true, status: "done" });
 	});
 
-	it("forwards the exact code + verifier + state to the exchange", async () => {
-		const fake = fakeOpener();
+	it("forwards the exact code + verifier + state + MANUAL redirect to the exchange", async () => {
 		let seen:
 			| { code: string; codeVerifier: string; state: string; redirectUri: string }
 			| undefined;
 		const mgr = createLoginManager(
 			happyDeps({
-				openCallbackServer: fake.opener,
 				exchangeCode: (args) => {
 					seen = args;
 					return Promise.resolve({ ok: true, tokens: { accessToken: "tok", scopes: [] } });
 				},
 			}),
 		);
-		const { authorizeUrl } = await mgr.start();
-		const state = new URL(authorizeUrl).searchParams.get("state") ?? "";
-		await fake.fire({ code: "xyz", state });
+		const { loginId, authorizeUrl } = await mgr.start();
+		const state = stateOf(authorizeUrl);
+		await mgr.complete(loginId, `xyz#${state}`);
 		expect(seen?.code).toBe("xyz");
 		expect(seen?.state).toBe(state);
-		expect(seen?.redirectUri).toBe("http://127.0.0.1:5555/callback");
+		expect(seen?.redirectUri).toBe(CLAUDE_MANUAL_REDIRECT_URL);
 		expect(seen?.codeVerifier).not.toBe("");
+	});
+
+	it("trims surrounding whitespace off the pasted code and state", async () => {
+		let seen: { code: string; state: string } | undefined;
+		const mgr = createLoginManager(
+			happyDeps({
+				exchangeCode: (args) => {
+					seen = { code: args.code, state: args.state };
+					return Promise.resolve({ ok: true, tokens: { accessToken: "tok", scopes: [] } });
+				},
+			}),
+		);
+		const { loginId, authorizeUrl } = await mgr.start();
+		const state = stateOf(authorizeUrl);
+		const view = await mgr.complete(loginId, `  the-code  #  ${state}  `);
+		expect(view).toMatchObject({ ok: true, status: "done" });
+		expect(seen?.code).toBe("the-code");
+	});
+
+	it("reports updated:true when register updates an existing account", async () => {
+		const mgr = createLoginManager(
+			happyDeps({
+				register: () => Promise.resolve({ ok: true, account: account(), updated: true }),
+			}),
+		);
+		const { loginId, authorizeUrl } = await mgr.start();
+		const view = await mgr.complete(loginId, `c#${stateOf(authorizeUrl)}`);
+		expect(view).toMatchObject({ ok: true, status: "done", updated: true });
 	});
 });
 
-describe("createLoginManager — callback failure + CSRF", () => {
+describe("createLoginManager — complete failure + CSRF", () => {
 	it("rejects a mismatched state WITHOUT exchanging (CSRF)", async () => {
-		const fake = fakeOpener();
 		let exchanged = false;
 		const mgr = createLoginManager(
 			happyDeps({
-				openCallbackServer: fake.opener,
 				exchangeCode: () => {
 					exchanged = true;
 					return Promise.resolve({ ok: true, tokens: { accessToken: "t", scopes: [] } });
@@ -240,113 +223,106 @@ describe("createLoginManager — callback failure + CSRF", () => {
 			}),
 		);
 		const { loginId } = await mgr.start();
-		const page = await fake.fire({ code: "c", state: "WRONG" });
-		expect(page.status).toBe(400);
+		const view = await mgr.complete(loginId, "the-code#WRONG");
 		expect(exchanged).toBe(false);
-		expect(mgr.getStatus(loginId)).toMatchObject({ ok: true, status: "error" });
-	});
-
-	it("missing state is also rejected as CSRF", async () => {
-		const fake = fakeOpener();
-		const mgr = createLoginManager(happyDeps({ openCallbackServer: fake.opener }));
-		await mgr.start();
-		const page = await fake.fire({ code: "c" });
-		expect(page.status).toBe(400);
-	});
-
-	it("authorize error param → error page, no exchange", async () => {
-		const fake = fakeOpener();
-		const mgr = createLoginManager(happyDeps({ openCallbackServer: fake.opener }));
-		const { loginId } = await mgr.start();
-		const page = await fake.fire({ error: "access_denied", errorDescription: "user said no" });
-		expect(page.status).toBe(400);
-		const view = mgr.getStatus(loginId);
 		expect(view).toMatchObject({ ok: true, status: "error" });
 		if (view.ok) {
-			expect(view.detail).toContain("access_denied");
+			expect(view.detail).toContain("state mismatch");
 		}
 	});
 
-	it("valid state but missing code → error", async () => {
-		const fake = fakeOpener();
-		const mgr = createLoginManager(happyDeps({ openCallbackServer: fake.opener }));
-		const { authorizeUrl } = await mgr.start();
-		const state = new URL(authorizeUrl).searchParams.get("state") ?? "";
-		const page = await fake.fire({ state });
-		expect(page.status).toBe(400);
-	});
-
-	it("exchange failure → error, browser 502", async () => {
-		const fake = fakeOpener();
+	it("a paste with no '#' (missing state) is rejected as CSRF, no exchange", async () => {
+		let exchanged = false;
 		const mgr = createLoginManager(
 			happyDeps({
-				openCallbackServer: fake.opener,
+				exchangeCode: () => {
+					exchanged = true;
+					return Promise.resolve({ ok: true, tokens: { accessToken: "t", scopes: [] } });
+				},
+			}),
+		);
+		const { loginId } = await mgr.start();
+		const view = await mgr.complete(loginId, "just-a-code-no-hash");
+		expect(exchanged).toBe(false);
+		expect(view).toMatchObject({ ok: true, status: "error" });
+	});
+
+	it("valid state but empty code → error, no exchange", async () => {
+		let exchanged = false;
+		const mgr = createLoginManager(
+			happyDeps({
+				exchangeCode: () => {
+					exchanged = true;
+					return Promise.resolve({ ok: true, tokens: { accessToken: "t", scopes: [] } });
+				},
+			}),
+		);
+		const { loginId, authorizeUrl } = await mgr.start();
+		const view = await mgr.complete(loginId, `#${stateOf(authorizeUrl)}`);
+		expect(exchanged).toBe(false);
+		expect(view).toMatchObject({ ok: true, status: "error" });
+		if (view.ok) {
+			expect(view.detail).toContain("no authorization code");
+		}
+	});
+
+	it("complete on an unknown login → unknown_login", async () => {
+		const mgr = createLoginManager(happyDeps());
+		const view = await mgr.complete("no-such", "c#s");
+		expect(view).toMatchObject({ ok: false, reason: "unknown_login" });
+	});
+
+	it("exchange failure → error with the classified detail", async () => {
+		const mgr = createLoginManager(
+			happyDeps({
 				exchangeCode: () =>
 					Promise.resolve({ ok: false, kind: "invalid_grant", detail: "expired" }),
 			}),
 		);
 		const { loginId, authorizeUrl } = await mgr.start();
-		const state = new URL(authorizeUrl).searchParams.get("state") ?? "";
-		const page = await fake.fire({ code: "c", state });
-		expect(page.status).toBe(502);
-		expect(mgr.getStatus(loginId)).toMatchObject({ ok: true, status: "error" });
+		const view = await mgr.complete(loginId, `c#${stateOf(authorizeUrl)}`);
+		expect(view).toMatchObject({ ok: true, status: "error" });
+		if (view.ok) {
+			expect(view.detail).toContain("invalid_grant");
+		}
 	});
 
-	it("profile failure → error, browser 502", async () => {
-		const fake = fakeOpener();
+	it("profile failure → error", async () => {
 		const mgr = createLoginManager(
 			happyDeps({
-				openCallbackServer: fake.opener,
 				fetchProfile: () => Promise.resolve({ ok: false, kind: "unauthorized", detail: "401" }),
 			}),
 		);
-		const { authorizeUrl } = await mgr.start();
-		const state = new URL(authorizeUrl).searchParams.get("state") ?? "";
-		const page = await fake.fire({ code: "c", state });
-		expect(page.status).toBe(502);
+		const { loginId, authorizeUrl } = await mgr.start();
+		const view = await mgr.complete(loginId, `c#${stateOf(authorizeUrl)}`);
+		expect(view).toMatchObject({ ok: true, status: "error" });
+		if (view.ok) {
+			expect(view.detail).toContain("profile fetch failed");
+		}
 	});
 
-	it("register failure → error, browser 500", async () => {
-		const fake = fakeOpener();
+	it("register failure → error", async () => {
 		const mgr = createLoginManager(
 			happyDeps({
-				openCallbackServer: fake.opener,
 				register: () =>
 					Promise.resolve({ ok: false, kind: "registry_write_failed", detail: "disk" }),
 			}),
 		);
-		const { authorizeUrl } = await mgr.start();
-		const state = new URL(authorizeUrl).searchParams.get("state") ?? "";
-		const page = await fake.fire({ code: "c", state });
-		expect(page.status).toBe(500);
-	});
-
-	it("a listener close that throws is warned, not fatal", async () => {
-		const fake = fakeOpener();
-		fake.closeThrows();
-		const warnings: string[] = [];
-		const mgr = createLoginManager(
-			happyDeps({
-				openCallbackServer: fake.opener,
-				logger: { log: () => undefined, warn: (m) => warnings.push(m) },
-			}),
-		);
-		const { authorizeUrl } = await mgr.start();
-		const state = new URL(authorizeUrl).searchParams.get("state") ?? "";
-		const page = await fake.fire({ code: "c", state });
-		expect(page.status).toBe(200);
-		expect(warnings.some((w) => w.includes("listener close failed"))).toBe(true);
+		const { loginId, authorizeUrl } = await mgr.start();
+		const view = await mgr.complete(loginId, `c#${stateOf(authorizeUrl)}`);
+		expect(view).toMatchObject({ ok: true, status: "error" });
+		if (view.ok) {
+			expect(view.detail).toContain("register failed");
+		}
 	});
 });
 
 describe("createLoginManager — cancel + sweep", () => {
-	it("cancel a pending login → cancelled + listener closed", async () => {
-		const fake = fakeOpener();
-		const mgr = createLoginManager(happyDeps({ openCallbackServer: fake.opener }));
+	it("cancel a pending login → cancelled", async () => {
+		const mgr = createLoginManager(happyDeps());
 		const { loginId } = await mgr.start();
 		const view = await mgr.cancel(loginId);
 		expect(view).toMatchObject({ ok: true, status: "cancelled" });
-		expect(fake.closedCount()).toBe(1);
 	});
 
 	it("cancel an unknown login → unknown_login", async () => {
@@ -354,101 +330,23 @@ describe("createLoginManager — cancel + sweep", () => {
 		expect(await mgr.cancel("nope")).toMatchObject({ ok: false, reason: "unknown_login" });
 	});
 
-	it("cancel a non-pending (done) login returns its view without re-closing", async () => {
-		const fake = fakeOpener();
-		const mgr = createLoginManager(happyDeps({ openCallbackServer: fake.opener }));
+	it("cancel a non-pending (done) login returns its view without changing status", async () => {
+		const mgr = createLoginManager(happyDeps());
 		const { loginId, authorizeUrl } = await mgr.start();
-		const state = new URL(authorizeUrl).searchParams.get("state") ?? "";
-		await fake.fire({ code: "c", state });
+		await mgr.complete(loginId, `c#${stateOf(authorizeUrl)}`);
 		const view = await mgr.cancel(loginId);
 		expect(view).toMatchObject({ ok: true, status: "done" });
-		// Only the completion close, not a second one from cancel.
-		expect(fake.closedCount()).toBe(1);
 	});
 
-	it("sweeps an abandoned pending login past the TTL (closed + cancelled)", async () => {
-		const fake = fakeOpener();
+	it("sweeps an abandoned pending login past the TTL (cancelled)", async () => {
 		let clock = 1_000_000;
-		const mgr = createLoginManager(
-			happyDeps({ openCallbackServer: fake.opener, now: () => clock, ttlMs: 1000 }),
-		);
+		const mgr = createLoginManager(happyDeps({ now: () => clock, ttlMs: 1000 }));
 		const { loginId } = await mgr.start();
 		clock += 5000; // past the TTL
 		const view = mgr.getStatus(loginId);
 		expect(view).toMatchObject({ ok: true, status: "cancelled" });
-		expect(fake.closedCount()).toBe(1);
-	});
-});
-
-describe("nodeCallbackServer — real loopback listener", () => {
-	it("serves /callback by invoking the handler and 404s other paths", async () => {
-		let seen: CallbackQuery | undefined;
-		const server = await nodeCallbackServer()((query) => {
-			seen = query;
-			return Promise.resolve({ status: 200, html: "<b>ok</b>" });
-		});
-		try {
-			const base = server.redirectUri.replace(/\/callback$/u, "");
-			const good = await fetch(`${server.redirectUri}?code=abc&state=st&error_description=none`);
-			expect(good.status).toBe(200);
-			expect(await good.text()).toContain("ok");
-			expect(seen).toStrictEqual({ code: "abc", state: "st", errorDescription: "none" });
-
-			const bad = await fetch(`${base}/nope`);
-			expect(bad.status).toBe(404);
-		} finally {
-			await server.close();
+		if (view.ok) {
+			expect(view.detail).toContain("timed out");
 		}
-	});
-
-	it("a handler that throws yields a 500", async () => {
-		const server = await nodeCallbackServer()(() => Promise.reject(new Error("handler boom")));
-		try {
-			const res = await fetch(`${server.redirectUri}?code=c`);
-			expect(res.status).toBe(500);
-			expect(await res.text()).toContain("handler boom");
-		} finally {
-			await server.close();
-		}
-	});
-
-	it("honors a custom host/path", async () => {
-		const server = await nodeCallbackServer({ path: "/cb" })(() =>
-			Promise.resolve({ status: 200, html: "hi" }),
-		);
-		try {
-			expect(server.redirectUri).toContain("/cb");
-			const res = await fetch(server.redirectUri);
-			expect(res.status).toBe(200);
-		} finally {
-			await server.close();
-		}
-	});
-});
-
-describe("createLoginManager over the REAL loopback listener (no deadlock)", () => {
-	it("start() → browser hits the real loopback redirect → done, no hang", async () => {
-		// Regression pin: the callback closes the listener from INSIDE its own
-		// request handler. If close() awaited the connection drain, this hangs
-		// (the drain waits for the response, the response waits for the handler,
-		// the handler waits for close). The 10s test timeout would trip.
-		const mgr = createLoginManager(happyDeps({ openCallbackServer: nodeCallbackServer() }));
-		const { loginId, authorizeUrl } = await mgr.start();
-		const url = new URL(authorizeUrl);
-		const redirect = url.searchParams.get("redirect_uri") ?? "";
-		const state = url.searchParams.get("state") ?? "";
-
-		// The loopback listener is really up (404 on an unknown path).
-		const base = redirect.replace(/\/callback$/u, "");
-		const probe = await fetch(`${base}/nope`);
-		expect(probe.status).toBe(404);
-
-		// The browser redirect lands with the synthetic code + minted state.
-		const page = await fetch(`${redirect}?code=SYNTH&state=${encodeURIComponent(state)}`);
-		expect(page.status).toBe(200);
-		expect(await page.text()).toContain("Signed in");
-
-		const view = mgr.getStatus(loginId);
-		expect(view).toMatchObject({ ok: true, status: "done" });
 	});
 });

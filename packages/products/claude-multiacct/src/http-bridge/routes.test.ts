@@ -25,6 +25,7 @@ import {
 	handleHealth,
 	handleListAccounts,
 	handleLoginCancel,
+	handleLoginComplete,
 	handleLoginOpen,
 	handleLoginStart,
 	handleLoginStatus,
@@ -32,6 +33,7 @@ import {
 	handleSetChoice,
 	handleUsage,
 	type LoginCancelFn,
+	type LoginCompleteFn,
 	type LoginOpenFn,
 	type LoginStartFn,
 	type LoginStatusFn,
@@ -80,6 +82,7 @@ function makeDeps(overrides: Partial<RouteDeps> = {}): RouteDeps {
 			),
 		...(overrides.loginStart === undefined ? {} : { loginStart: overrides.loginStart }),
 		...(overrides.loginStatus === undefined ? {} : { loginStatus: overrides.loginStatus }),
+		...(overrides.loginComplete === undefined ? {} : { loginComplete: overrides.loginComplete }),
 		...(overrides.loginCancel === undefined ? {} : { loginCancel: overrides.loginCancel }),
 		...(overrides.loginOpen === undefined ? {} : { loginOpen: overrides.loginOpen }),
 		choiceStore: overrides.choiceStore ?? {
@@ -426,6 +429,18 @@ describe("dispatch (routing table)", () => {
 		);
 		expect(r.status).toBe(200);
 	});
+	it("routes POST /accounts/login/complete", async () => {
+		const loginComplete: LoginCompleteFn = () => Promise.resolve({ ok: true, status: "done" });
+		const r = await dispatch(
+			{
+				method: "POST",
+				pathname: "/accounts/login/complete",
+				body: { loginId: acctUuid, code: "abc#def" },
+			},
+			makeDeps({ loginComplete }),
+		);
+		expect(r.status).toBe(200);
+	});
 	it("routes GET /accounts/login/status/:loginId", async () => {
 		const loginStatus: LoginStatusFn = () => ({ ok: true, status: "pending" });
 		const r = await dispatch(
@@ -523,6 +538,72 @@ describe("in-app OAuth login routes", () => {
 		const loginStatus: LoginStatusFn = () =>
 			({ ok: false, reason: "unknown_login", detail: "no login" }) as ReturnType<LoginStatusFn>;
 		const r = await handleLoginStatus(makeDeps({ loginStatus }), acctUuid);
+		expect(r.status).toBe(404);
+	});
+
+	it("complete: flag off → 403 skipped, no manager call", async () => {
+		const loginComplete = vi.fn<LoginCompleteFn>(() =>
+			Promise.resolve({ ok: true, status: "done" }),
+		);
+		const r = await handleLoginComplete(makeDeps({ flagOn: false, loginComplete }), {
+			loginId: acctUuid,
+			code: "c#s",
+		});
+		expect(r.status).toBe(403);
+		expect((r.body as { skipped: boolean }).skipped).toBe(true);
+		expect(loginComplete).not.toHaveBeenCalled();
+	});
+
+	it("complete: not wired → 503 login_unavailable", async () => {
+		const r = await handleLoginComplete(makeDeps({ flagOn: true }), {
+			loginId: acctUuid,
+			code: "c#s",
+		});
+		expect(r.status).toBe(503);
+		expect((r.body as { reason: string }).reason).toBe("login_unavailable");
+	});
+
+	it("complete: bad body (missing code) → 400 with body issue path", async () => {
+		const loginComplete: LoginCompleteFn = () => Promise.resolve({ ok: true, status: "done" });
+		const r = await handleLoginComplete(makeDeps({ loginComplete }), { loginId: acctUuid });
+		expect(r.status).toBe(400);
+		expect((r.body as { reason: string }).reason).toMatch(/body/u);
+	});
+
+	it("complete: non-uuid loginId → 400", async () => {
+		const loginComplete: LoginCompleteFn = () => Promise.resolve({ ok: true, status: "done" });
+		const r = await handleLoginComplete(makeDeps({ loginComplete }), {
+			loginId: "not-a-uuid",
+			code: "c#s",
+		});
+		expect(r.status).toBe(400);
+	});
+
+	it("complete: success → 200 with status + account + updated passed through, forwards loginId + code", async () => {
+		const loginComplete = vi.fn<LoginCompleteFn>(() =>
+			Promise.resolve({ ok: true, status: "done", account: sampleAccount, updated: false }),
+		);
+		const r = await handleLoginComplete(makeDeps({ loginComplete }), {
+			loginId: acctUuid,
+			code: "the-code#the-state",
+		});
+		expect(r.status).toBe(200);
+		expect(r.body).toStrictEqual({
+			ok: true,
+			status: "done",
+			account: sampleAccount,
+			updated: false,
+		});
+		expect(loginComplete).toHaveBeenCalledWith(acctUuid, "the-code#the-state");
+	});
+
+	it("complete: unknown login → 404", async () => {
+		const loginComplete: LoginCompleteFn = () =>
+			Promise.resolve({ ok: false, reason: "unknown_login", detail: "no login" });
+		const r = await handleLoginComplete(makeDeps({ loginComplete }), {
+			loginId: acctUuid,
+			code: "c#s",
+		});
 		expect(r.status).toBe(404);
 	});
 
