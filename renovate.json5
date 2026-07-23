@@ -86,6 +86,23 @@
 	// workspace's own minimumReleaseAge is 0; this is Renovate's independent gate.)
 	minimumReleaseAge: "7 days",
 
+	// --- Security / vulnerability updates ------------------------------------
+	// Dependabot security-update PRs are OFF fleet-wide (kaelys-js-infra
+	// terraform/security.tf: dependabot_security_updates = false). The exact
+	// engines.node pin makes Dependabot's updater fail with
+	// ERR_PNPM_UNSUPPORTED_ENGINE on every lockfile write, so it re-fails each
+	// advisory instead of shipping a fix. Renovate owns CVE remediation now:
+	// GitHub's vulnerability-alert stream stays on (the managed_repo
+	// vulnerability_alerts = true) and this block turns those alerts into
+	// Renovate security PRs. No automerge / platformAutomerge keys here on
+	// purpose — a security bump lands as a `security`-labelled review PR, and
+	// the fleet renovate-config audit (kaelys-js-infra
+	// scripts/audit-renovate-config.sh) stays balanced.
+	vulnerabilityAlerts: {
+		enabled: true,
+		labels: ["security"],
+	},
+
 	// Enabled managers:
 	//   - npm             -> package.json (× workspace) + pnpm-lock.yaml
 	//   - mise            -> mise.toml [tools] versions (all tools EXCEPT node + pnpm,
