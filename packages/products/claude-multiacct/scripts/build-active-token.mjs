@@ -40,6 +40,7 @@ const outfile = resolve(pkgRoot, "dist/active-token.js");
 const entryContents = `
 import { PACKAGE_VERSION } from "./src/index.ts";
 import { readRegistry } from "./src/cli-shim/registry-store.ts";
+import { SecurityCliTokenStore } from "./src/cli-shim/token-store.ts";
 import { FileTokenStore } from "./src/oauth/file-token-store.ts";
 import { makeActiveTokenPorts } from "./src/discovery/real-discovery-ports.ts";
 import { poolActiveToken, resolveActiveAccount } from "./src/active-token-agent/resolve.ts";
@@ -65,12 +66,14 @@ const outPath = defaultActiveAccountPath();
 // file. Never leaves the process hanging: the security reads are already
 // timeout-bounded inside makeRealDiscoveryPorts.
 async function main() {
-	// The shim, daemon, and this companion all read/write the SAME encrypted
-	// FileTokenStore (the keychain pool is unreadable under the daemon's
-	// SessionCreate=true and was the store mismatch that made this companion
-	// throw "no keychain entry" and publish null). Pooling the live token here
-	// also lets the shim swap a session TO the native/primary account.
-	const tokenStore = new FileTokenStore();
+	// Tokens can be split across two stores: the keychain pool (discovery/native
+	// accounts) and the encrypted FileTokenStore (accounts added via cma add).
+	// This companion runs in the gui session, so it can read the keychain; the
+	// shim reads only the FileTokenStore. So we RESOLVE against the keychain
+	// (where the native/live token lives) and MIRROR the live account's token
+	// into the FileTokenStore so the shim can swap a session TO it.
+	const keychainStore = new SecurityCliTokenStore();
+	const fileStore = new FileTokenStore();
 	const logger = { log: logLine, warn: logLine };
 	const activeTokenPorts = makeActiveTokenPorts(logger);
 
@@ -80,18 +83,22 @@ async function main() {
 		if (registry === undefined || registry.accounts.length === 0) {
 			logLine("no registry / empty pool — publishing null");
 		} else {
-			// Pool the live (native/primary) token FIRST so the sha-match below can
-			// resolve it too, then resolve which pooled account is active.
+			// Mirror the live account's token into the store the shim reads.
 			try {
-				const pooled = await poolActiveToken({ registry, activeTokenPorts, tokenStore });
-				logLine("pooled active token for uuid=" + String(pooled.pooledUuid));
+				const pooled = await poolActiveToken({
+					registry,
+					activeTokenPorts,
+					readStore: keychainStore,
+					writeStore: fileStore,
+				});
+				logLine("mirrored active token into file store for uuid=" + String(pooled.pooledUuid));
 			} catch (error) {
-				logLine("pool active token failed (non-fatal): " + String(error));
+				logLine("mirror active token failed (non-fatal): " + String(error));
 			}
 			const resolved = await resolveActiveAccount({
 				registry,
 				activeTokenPorts,
-				tokenStore,
+				tokenStore: keychainStore,
 			});
 			record = { ...resolved, computedAt: new Date().toISOString() };
 			logLine("resolved activeUuid=" + String(resolved.activeUuid));

@@ -228,8 +228,17 @@ export async function tokenShasFromStore(
 ): Promise<Map<AccountUuid, string>> {
 	const shas = new Map<AccountUuid, string>();
 	for (const account of registry.accounts) {
-		// eslint-disable-next-line no-await-in-loop -- serial per-account read; the pool is small and order is irrelevant
-		const token = await tokenStore.get(account.uuid);
+		// A store `get` may THROW on a miss (the keychain and file stores both do)
+		// rather than return undefined. In a split pool — some accounts in the
+		// keychain, some in the file store — one unreadable account must not sink
+		// the whole resolution, so treat a throw the same as a soft miss: skip it.
+		let token: string | undefined;
+		try {
+			// eslint-disable-next-line no-await-in-loop -- serial per-account read; the pool is small and order is irrelevant
+			token = await tokenStore.get(account.uuid);
+		} catch {
+			// Unreadable account — skip it (soft miss).
+		}
 		if (typeof token === "string") {
 			shas.set(account.uuid, sha256Hex(token));
 		}
