@@ -233,7 +233,7 @@ jobs:
       # The template stays as-is for the cross-account case it was designed
       # around; this file is the fork-local deviation.
       - name: Checkout fork main
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0
           token: ${{ secrets.GH_TOKEN }}
@@ -247,7 +247,7 @@ jobs:
       # markdownlint-cli2, oxfmt, oxlint) before node's binary lands on
       # PATH, and each fails with `exit code 127`.
       - name: Warm mise toolchain
-        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
         with:
           install: true
 
