@@ -34,6 +34,7 @@ import {
 	type AddAccountFn,
 	dispatch,
 	type LoginCancelFn,
+	type LoginOpenFn,
 	type LoginStartFn,
 	type LoginStatusFn,
 	type RemoveAccountFn,
@@ -74,6 +75,8 @@ export type StartOptions = {
 	loginStatus?: LoginStatusFn;
 	/** Cancel a login (`POST /accounts/login/cancel/:loginId`). Optional. */
 	loginCancel?: LoginCancelFn;
+	/** Re-open a login's authorize URL (`POST /accounts/login/open/:loginId`). Optional. */
+	loginOpen?: LoginOpenFn;
 	verifyAccount: VerifyAccountFn;
 	choiceStore: Pick<ChoiceStore, "write">;
 	flagOn: boolean;
@@ -314,6 +317,7 @@ export async function start(opts: StartOptions): Promise<StartResult> {
 		...(opts.loginStart === undefined ? {} : { loginStart: opts.loginStart }),
 		...(opts.loginStatus === undefined ? {} : { loginStatus: opts.loginStatus }),
 		...(opts.loginCancel === undefined ? {} : { loginCancel: opts.loginCancel }),
+		...(opts.loginOpen === undefined ? {} : { loginOpen: opts.loginOpen }),
 		verifyAccount: opts.verifyAccount,
 		choiceStore: opts.choiceStore,
 		flagOn: opts.flagOn,

@@ -6,16 +6,18 @@
  * menu can reach the page's own theme variables and match Claude's native
  * dropdown pixel-for-pixel.
  *
- * The menu also carries pool management: each account row has a small remove
- * control (`DELETE /accounts/:uuid`), and a trailing "+ Add account" row runs a
- * real in-app OAuth sign-in — it asks the daemon to start a login
- * (`POST /accounts/login/start`), opens the returned Anthropic authorize URL in
- * the browser, shows an in-DOM "signing in…" state, and polls
- * `GET /accounts/login/status/:loginId` until the account registers. Electron's
- * renderer has NO `window.prompt`, so there is no prompt-a-token path; an
- * explicit in-DOM token-paste form (`POST /accounts`) is offered as a fallback.
- * Every success re-fetches `/accounts` so the menu reflects the new pool without
- * a page reload.
+ * The menu also carries pool management: each removable account row has a small
+ * remove control (`DELETE /accounts/:uuid`) — the native/primary row shows none,
+ * since it can't be removed. A trailing "+ Add account" row runs a real in-app
+ * OAuth sign-in: it asks the daemon to start a login (`POST /accounts/login/start`),
+ * and the DAEMON opens the Anthropic authorize URL in the system browser host-side
+ * (the Electron renderer cannot — an external `window.open` is a no-op there). The
+ * picker shows an in-DOM waiting state with an "Open the sign-in page" link
+ * (`POST /accounts/login/open/:loginId` — a daemon re-open), and polls
+ * `GET /accounts/login/status/:loginId` until the account registers. An explicit
+ * in-DOM token-paste form (`POST /accounts`) is offered as a fallback. Every
+ * success re-fetches `/accounts` so the menu reflects the new pool without a
+ * page reload.
  *
  * The load-bearing surface values (panel background, border, text, radius,
  * shadow) are the real Claude design-system tokens, referenced as the page's
@@ -45,8 +47,9 @@ export type PickerAccount = {
 	/**
 	 * How the account entered the pool (from `/accounts`). The `native` account
 	 * is what Claude.app is signed into and the pool's primary — it cannot be
-	 * removed, so its row shows a disabled × with an explanatory tooltip. Absent
-	 * is treated as `explicit` (removable), mirroring the domain's default.
+	 * removed, so its row shows NO × control at all (an inert "×" that only ever
+	 * errors is worse than none). Absent is treated as `explicit` (removable),
+	 * mirroring the domain's default.
 	 */
 	source?: "native" | "explicit";
 };
@@ -65,12 +68,6 @@ export type MountPickerOptions = {
 	 */
 	activeUuid?: string;
 	onChoice?: (accountUuid: string) => void;
-	/**
-	 * Open the Anthropic authorize URL in the user's browser. Defaults to the
-	 * document view's `window.open(url, "_blank", "noopener")`. Injected so tests
-	 * never open a real browser window and can assert the exact URL.
-	 */
-	openUrl?: (url: string) => void;
 	/**
 	 * Sleep between login-status polls. Defaults to a real `setTimeout`. Injected
 	 * so tests drive the poll loop deterministically without wall-clock waits.
@@ -236,19 +233,19 @@ function styleRemoveButton(el: HTMLElement): void {
 export function mountPicker(opts: MountPickerOptions): PickerHandle {
 	const { doc } = opts;
 
-	// Browser + dialog ports. Default to the document view's own
-	// `window.open`/`window.confirm` (the content script always has a view);
-	// tests inject fakes. `defaultView` is non-null for both the extension
-	// document and jsdom, so the cast spends no runtime branch on the null case.
+	// Dialog + timer ports. Default to the document view's own `window.confirm` /
+	// `setTimeout` (the content script always has a view); tests inject fakes.
+	// `defaultView` is non-null for both the extension document and jsdom, so the
+	// cast spends no runtime branch on the null case.
 	//
-	// There is NO `window.prompt` here: Electron's renderer has no `prompt`, so
-	// the old prompt-a-token add path was a silent no-op. Adding an account now
-	// runs a real OAuth sign-in (see `startLogin`), with an in-DOM token-paste
-	// form as an explicit fallback (see `renderTokenForm`).
+	// There is NO renderer-side browser open here. Electron's content script
+	// cannot reach the system browser (an external `window.open` is a no-op, as
+	// `window.prompt` was), so the DAEMON opens the authorize URL host-side — once
+	// automatically when the login starts, and again when the user clicks "Open
+	// the sign-in page" (which POSTs `/accounts/login/open/:loginId`). Adding an
+	// account runs a real OAuth sign-in (see `startLogin`), with an in-DOM
+	// token-paste form as an explicit fallback (see `renderTokenForm`).
 	const view = doc.defaultView as Window & typeof globalThis;
-	function defaultOpenUrl(url: string): void {
-		view.open(url, "_blank", "noopener");
-	}
 	function defaultConfirm(message: string): boolean {
 		return view.confirm(message);
 	}
@@ -257,7 +254,6 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 			view.setTimeout(resolve, ms);
 		});
 	}
-	const openUrlFn = opts.openUrl ?? defaultOpenUrl;
 	const confirmFn = opts.confirm ?? defaultConfirm;
 	const sleepFn = opts.sleep ?? defaultSleep;
 	const pollIntervalMs = opts.pollIntervalMs ?? 1500;
@@ -306,6 +302,8 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 	let addState: "idle" | "waiting" | "error" = "idle";
 	let addMessage = "";
 	let tokenFormOpen = false;
+	// One-shot: focus the token input the render right after the form opens.
+	let focusTokenOnRender = false;
 	let activeLoginId: string | undefined;
 	// The authorize URL of the in-flight login, surfaced as a clickable link in
 	// the waiting state so the user always has a reliable way to open it.
@@ -376,27 +374,16 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 			label.textContent = account.label;
 			item.append(label);
 
-			const removeBtn = doc.createElement("button");
-			removeBtn.type = "button";
-			removeBtn.className = "cds-reset";
-			removeBtn.textContent = "×";
-			styleRemoveButton(removeBtn);
-			if (account.source === "native") {
-				// The native account is the pool anchor Claude.app is signed into;
-				// the daemon refuses to remove it (409), so the row shows a disabled
-				// × with a tooltip rather than an actionable control that only errors.
-				removeBtn.dataset.cmaRemoveDisabled = account.uuid;
-				removeBtn.disabled = true;
-				removeBtn.setAttribute(
-					"aria-label",
-					`${account.label} is the primary account and can't be removed`,
-				);
-				removeBtn.title = "Primary account — signed into Claude.app, can't be removed";
-				removeBtn.style.opacity = "0.3";
-				removeBtn.style.cursor = "not-allowed";
-				// Swallow clicks so a stray press never bubbles to the row's choose.
-				removeBtn.addEventListener("click", (event: Event) => event.stopPropagation());
-			} else {
+			// The native account is the pool anchor Claude.app is signed into; the
+			// daemon refuses to remove it (409). Rather than render an inert × that
+			// only ever errors, the native row gets NO remove control at all — every
+			// visible × is a working one. Explicit accounts get the real remove ×.
+			if (account.source !== "native") {
+				const removeBtn = doc.createElement("button");
+				removeBtn.type = "button";
+				removeBtn.className = "cds-reset";
+				removeBtn.textContent = "×";
+				styleRemoveButton(removeBtn);
 				removeBtn.dataset.cmaRemove = account.uuid;
 				removeBtn.setAttribute("aria-label", `Remove ${account.label}`);
 				removeBtn.addEventListener("mouseenter", () => {
@@ -418,8 +405,8 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 						}
 					})();
 				});
+				item.append(removeBtn);
 			}
-			item.append(removeBtn);
 
 			item.addEventListener("click", () => {
 				// eslint-disable-next-line typescript/no-floating-promises -- fire-and-forget click handler
@@ -477,17 +464,23 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 	function renderAddArea(): void {
 		if (addState === "waiting") {
 			inner.append(
-				statusRow("cmaLoginWaiting", addMessage || "Signing in… complete it in your browser"),
+				statusRow(
+					"cmaLoginWaiting",
+					addMessage || "Finish signing in in your browser, then come back here.",
+				),
 			);
-			// A real anchor to the authorize URL. `openUrl` (window.open) is fired
-			// automatically on start, but Electron can restrict programmatic opens
-			// (window.prompt is a no-op here, so window.open might be too). A user
-			// click on a genuine <a target="_blank"> is the reliable external-open
-			// path the host app always honors — the guaranteed fallback.
-			if (activeAuthorizeUrl !== undefined) {
+			// "Open the sign-in page" — the renderer can't reach the system browser
+			// (an external window.open is a no-op inside Claude's Electron content
+			// script), so this asks the DAEMON to open it: a POST to
+			// /accounts/login/open/:loginId. The daemon already opened it once when
+			// the login started; this is the reliable retry. `href` is kept for
+			// transparency, but the click is intercepted (never a renderer navigation).
+			if (activeLoginId !== undefined) {
 				const link = doc.createElement("a");
 				link.dataset.cmaLoginLink = "";
-				link.href = activeAuthorizeUrl;
+				if (activeAuthorizeUrl !== undefined) {
+					link.href = activeAuthorizeUrl;
+				}
 				link.target = "_blank";
 				link.rel = "noopener";
 				link.textContent = "Open the sign-in page";
@@ -496,7 +489,12 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 				link.style.color = "var(--claude-text-100, #f5f4ef)";
 				link.style.textDecoration = "underline";
 				link.style.cursor = "pointer";
-				link.addEventListener("click", (event: Event) => event.stopPropagation());
+				link.addEventListener("click", (event: Event) => {
+					event.preventDefault();
+					event.stopPropagation();
+					// eslint-disable-next-line typescript/no-floating-promises -- fire-and-forget: the daemon already opened once, this is a retry
+					openSignInPage();
+				});
 				inner.append(link);
 			}
 			inner.append(
@@ -522,7 +520,7 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 						await startLogin();
 					} catch (error: unknown) {
 						addState = "error";
-						addMessage = "Could not start sign-in.";
+						addMessage = "Couldn't start sign-in. Is the account pool enabled?";
 						renderItems();
 						// eslint-disable-next-line no-console
 						console.warn("[cma-extension] start login failed:", error);
@@ -537,6 +535,7 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 			inner.append(
 				actionRow("cmaAddToken", "Add via token instead", () => {
 					tokenFormOpen = true;
+					focusTokenOnRender = true;
 					addState = "idle";
 					renderItems();
 					positionMenu();
@@ -545,49 +544,125 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 		}
 	}
 
+	// A labelled input styled to sit on Claude's dark menu panel (not a bright
+	// white box). Returns the input so the caller can wire focus/keydown.
+	function tokenField(cfg: {
+		labelText: string;
+		dataAttr: string;
+		type: "text" | "password";
+		placeholder: string;
+	}): { field: HTMLLabelElement; input: HTMLInputElement } {
+		const field = doc.createElement("label");
+		field.style.display = "flex";
+		field.style.flexDirection = "column";
+		field.style.gap = "3px";
+		const caption = doc.createElement("span");
+		caption.textContent = cfg.labelText;
+		caption.style.fontSize = "0.75rem";
+		caption.style.color = "var(--claude-secondary-color, #a6a39a)";
+		const input = doc.createElement("input");
+		input.dataset[cfg.dataAttr] = "";
+		input.type = cfg.type;
+		input.placeholder = cfg.placeholder;
+		// Dark-panel field styling: a faint white wash on the #262624 menu, the
+		// same Claude border/text tokens the menu itself uses — never a white box.
+		input.style.width = "100%";
+		input.style.boxSizing = "border-box";
+		input.style.padding = "5px 8px";
+		input.style.background = "rgba(255, 255, 255, 0.04)";
+		input.style.border = "1px solid var(--claude-border, #eaddd81a)";
+		input.style.borderRadius = "0.375rem";
+		input.style.color = "var(--claude-text-100, #f5f4ef)";
+		input.style.font = "inherit";
+		input.style.outline = "none";
+		field.append(caption, input);
+		return { field, input };
+	}
+
 	// Explicit fallback: an in-DOM token-paste form (Electron has no
-	// window.prompt, so the collector must be real DOM). Label + token inputs
-	// POST straight to /accounts, the same provisioning path the OAuth flow ends
-	// in. This is a fallback IN ADDITION to the OAuth login, never instead of it.
+	// window.prompt, so the collector must be real DOM). Real <label>s + token
+	// inputs POST straight to /accounts, the same provisioning path the OAuth flow
+	// ends in. This is a fallback IN ADDITION to the OAuth login, never instead of
+	// it — a Cancel returns to the OAuth entry.
 	function renderTokenForm(): void {
 		const form = doc.createElement("div");
 		form.dataset.cmaTokenForm = "";
 		form.style.display = "flex";
 		form.style.flexDirection = "column";
-		form.style.gap = "4px";
+		form.style.gap = "6px";
 		form.style.padding = "6px 10px";
 
-		const labelInput = doc.createElement("input");
-		labelInput.dataset.cmaTokenLabel = "";
-		labelInput.type = "text";
-		labelInput.placeholder = "Label (optional)";
-		labelInput.style.width = "100%";
-		labelInput.style.boxSizing = "border-box";
-
-		const tokenInput = doc.createElement("input");
-		tokenInput.dataset.cmaTokenInput = "";
-		tokenInput.type = "password";
-		tokenInput.placeholder = "Paste OAuth token";
-		tokenInput.style.width = "100%";
-		tokenInput.style.boxSizing = "border-box";
+		const { field: labelField, input: labelInput } = tokenField({
+			labelText: "Account name (optional)",
+			dataAttr: "cmaTokenLabel",
+			type: "text",
+			placeholder: "e.g. Work",
+		});
+		const { field: tokenFieldEl, input: tokenInput } = tokenField({
+			labelText: "OAuth token",
+			dataAttr: "cmaTokenInput",
+			type: "password",
+			placeholder: "Paste OAuth token",
+		});
 
 		const submit = doc.createElement("button");
 		submit.type = "button";
 		submit.dataset.cmaTokenSubmit = "";
 		submit.className = "cds-reset";
 		submit.textContent = "Add";
+		const cancel = doc.createElement("button");
+		cancel.type = "button";
+		cancel.dataset.cmaTokenCancel = "";
+		cancel.className = "cds-reset";
+		cancel.textContent = "Cancel";
+
+		// Disable the submit while the POST is in flight so a double-click can't
+		// fire two provisioning requests; a re-render (error or refetch) restores it.
+		const runSubmit = (): void => {
+			if (submit.disabled) {
+				return;
+			}
+			submit.disabled = true;
+			// eslint-disable-next-line typescript/no-floating-promises -- fire-and-forget submit; submitToken re-renders on completion
+			submitToken(labelInput.value, tokenInput.value);
+		};
+
 		submit.addEventListener("click", (event: Event) => {
 			event.stopPropagation();
-			// eslint-disable-next-line typescript/no-floating-promises -- fire-and-forget click handler
-			(async (): Promise<void> => {
-				await submitToken(labelInput.value, tokenInput.value);
-			})();
+			runSubmit();
 		});
+		cancel.addEventListener("click", (event: Event) => {
+			event.stopPropagation();
+			// Back to the OAuth entry — close the form and clear any error.
+			tokenFormOpen = false;
+			addState = "idle";
+			addMessage = "";
+			renderItems();
+			positionMenu();
+		});
+		// Enter anywhere in the token field submits (the common one-field flow).
+		tokenInput.addEventListener("keydown", (event: KeyboardEvent) => {
+			if (event.key === "Enter") {
+				event.preventDefault();
+				runSubmit();
+			}
+		});
+
+		const buttons = doc.createElement("div");
+		buttons.style.display = "flex";
+		buttons.style.gap = "6px";
+		buttons.append(submit, cancel);
 
 		// Clicks inside the form must not bubble to the outside-close handler.
 		form.addEventListener("click", (event: Event) => event.stopPropagation());
-		form.append(labelInput, tokenInput, submit);
+		form.append(labelField, tokenFieldEl, buttons);
 		inner.append(form);
+		// Autofocus the token field when the form first opens (not on every
+		// re-render, or it would steal focus mid-typing).
+		if (focusTokenOnRender) {
+			focusTokenOnRender = false;
+			tokenInput.focus();
+		}
 	}
 
 	function positionMenu(): void {
@@ -662,8 +737,10 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 	}
 
 	// "+ Add account" — start a real OAuth sign-in. Ask the daemon to bind a
-	// loopback listener + build the authorize URL, open that URL in the browser,
-	// then poll the daemon until the sign-in completes and refresh the pool.
+	// loopback listener + build the authorize URL; the DAEMON opens that URL in
+	// the browser host-side (the renderer can't). Only once the start succeeds do
+	// we show the waiting state — so the user never sees "waiting" unless the
+	// browser open was actually requested. Then poll until sign-in completes.
 	async function startLogin(): Promise<void> {
 		type StartData = { ok: boolean; loginId?: string; authorizeUrl?: string };
 		const started: BridgeResult<StartData> = await opts.client.post("/accounts/login/start", {});
@@ -673,19 +750,26 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 			typeof started.data.authorizeUrl !== "string"
 		) {
 			addState = "error";
-			addMessage = "Could not start sign-in. Is the pool feature enabled?";
+			addMessage = "Couldn't start sign-in. Is the account pool enabled?";
 			renderItems();
 			return;
 		}
 		activeLoginId = started.data.loginId;
 		activeAuthorizeUrl = started.data.authorizeUrl;
 		addState = "waiting";
-		addMessage = "Signing in… complete it in your browser";
+		addMessage = "Finish signing in in your browser, then come back here.";
 		tokenFormOpen = false;
 		renderItems();
 		positionMenu();
-		openUrlFn(started.data.authorizeUrl);
 		await pollLogin(started.data.loginId);
+	}
+
+	// Ask the daemon to (re-)open the authorize URL host-side. Backs the "Open the
+	// sign-in page" link, which only renders while `activeLoginId` is set, so it
+	// is always defined here. Fire-and-forget (the daemon already opened once on
+	// start); a failure is non-fatal — the login keeps polling.
+	async function openSignInPage(): Promise<void> {
+		await opts.client.post(`/accounts/login/open/${String(activeLoginId)}`, {});
 	}
 
 	// Poll the login's status until it leaves `pending`/`exchanging`, the caller
@@ -706,7 +790,7 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 			);
 			if (!res.ok) {
 				addState = "error";
-				addMessage = "Lost contact with the sign-in.";
+				addMessage = "Lost contact with the sign-in. Try again.";
 				activeLoginId = undefined;
 				renderItems();
 				return;
@@ -730,7 +814,7 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 		}
 		// Deadline passed with no terminal status.
 		addState = "error";
-		addMessage = "Sign-in timed out.";
+		addMessage = "Sign-in timed out. Try again.";
 		activeLoginId = undefined;
 		renderItems();
 	}
@@ -765,7 +849,7 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 		const result: BridgeResult<unknown> = await opts.client.post("/accounts", { label, token });
 		if (!result.ok) {
 			addState = "error";
-			addMessage = "Token was rejected.";
+			addMessage = "That token was rejected.";
 			renderItems();
 			// eslint-disable-next-line no-console
 			console.warn("[cma-extension] add account (token) failed:", result.kind, result.detail);

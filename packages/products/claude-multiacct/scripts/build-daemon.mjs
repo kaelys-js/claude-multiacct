@@ -27,7 +27,7 @@ const pkgRoot = resolve(import.meta.dirname, "..");
 const outfile = resolve(pkgRoot, "dist/daemon.js");
 
 const entryContents = `
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { PACKAGE_VERSION } from "./src/index.ts";
 import { start } from "./src/http-bridge/server.ts";
@@ -208,11 +208,27 @@ const removeAccount = makeRemoveAccount({ cliPorts, env: process.env });
 // accountUuid, source=explicit). Tokens/codes are never written to stderr.
 bootLog("construct-loginmanager");
 const loginFetch = (url, init) => fetch(url, init);
+// Open the authorize URL in the user's REAL browser from here (a Node process).
+// The picker runs in Claude's Electron renderer, where an external window.open
+// is a no-op — only a host-side spawn reaches the system browser. Mirrors the
+// launch/wrapper.ts pattern: spawn macOS \`open "<url>"\`, detached, never awaited.
+// CMA_OPEN_BIN overrides the binary (tests point it at a harmless no-op so no
+// browser launches). The URL carries only a short-lived state/PKCE challenge,
+// so it is NOT logged; only a generic breadcrumb is.
+const openBin = process.env.CMA_OPEN_BIN ?? "open";
+const openAuthorizeUrl = (url) => {
+	const child = spawn(openBin, [url], { stdio: "ignore", detached: true });
+	child.on("error", (error) => {
+		try { process.stderr.write("[login] open failed: " + String(error) + "\\n"); } catch {}
+	});
+	child.unref();
+};
 const loginManager = createLoginManager({
 	exchangeCode: (args) => exchangeAuthorizationCode({ ...args, fetchImpl: loginFetch }),
 	fetchProfile: (token) => fetchAccountProfile(token, loginFetch),
 	register: ({ profile, token }) => registerOrUpdateAccount({ profile, token, ports: cliPorts }),
 	openCallbackServer: nodeCallbackServer(),
+	openUrl: openAuthorizeUrl,
 	logger: {
 		log: (m) => { try { process.stderr.write("[login] " + m + "\\n"); } catch {} },
 		warn: (m) => { try { process.stderr.write("[login] " + m + "\\n"); } catch {} },
@@ -228,6 +244,7 @@ const loginStart = async () => {
 };
 const loginStatus = (loginId) => loginManager.getStatus(loginId);
 const loginCancel = (loginId) => loginManager.cancel(loginId);
+const loginOpen = (loginId) => loginManager.open(loginId);
 
 const flag = flagOn(process.env);
 
@@ -240,7 +257,13 @@ const flag = flagOn(process.env);
 // hang indefinitely waiting on a nowhere-to-render password prompt; blocking
 // boot on that means the daemon never serves requests. Run in the background
 // with a 30-second timeout; log outcome/timeout to stderr.
-(async () => {
+// CMA_DISABLE_DISCOVERY=1 skips the keychain-touching auto-detect entirely.
+// Set by the daemon-boot integration test (and any headless/CI probe) so booting
+// the real daemon to exercise the HTTP surface never blocks on, or prompts for,
+// a \`Claude Safe Storage\` keychain read. Production leaves it unset.
+if (process.env.CMA_DISABLE_DISCOVERY === "1") {
+	try { process.stderr.write("[discovery] skipped (CMA_DISABLE_DISCOVERY=1)\\n"); } catch {}
+} else (async () => {
 	bootLog("discover-run");
 	const timeout = new Promise((_, reject) =>
 		setTimeout(() => reject(new Error("discovery timed out after 30s")), 30_000).unref(),
@@ -275,6 +298,7 @@ try {
 		loginStart,
 		loginStatus,
 		loginCancel,
+		loginOpen,
 		verifyAccount,
 		choiceStore,
 		flagOn: flag,

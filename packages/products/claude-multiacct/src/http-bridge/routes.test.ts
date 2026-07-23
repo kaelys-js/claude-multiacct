@@ -25,12 +25,14 @@ import {
 	handleHealth,
 	handleListAccounts,
 	handleLoginCancel,
+	handleLoginOpen,
 	handleLoginStart,
 	handleLoginStatus,
 	handleRemoveAccount,
 	handleSetChoice,
 	handleUsage,
 	type LoginCancelFn,
+	type LoginOpenFn,
 	type LoginStartFn,
 	type LoginStatusFn,
 	type RemoveAccountFn,
@@ -79,6 +81,7 @@ function makeDeps(overrides: Partial<RouteDeps> = {}): RouteDeps {
 		...(overrides.loginStart === undefined ? {} : { loginStart: overrides.loginStart }),
 		...(overrides.loginStatus === undefined ? {} : { loginStatus: overrides.loginStatus }),
 		...(overrides.loginCancel === undefined ? {} : { loginCancel: overrides.loginCancel }),
+		...(overrides.loginOpen === undefined ? {} : { loginOpen: overrides.loginOpen }),
 		choiceStore: overrides.choiceStore ?? {
 			write: vi.fn<() => Promise<void>>(() => Promise.resolve()),
 		},
@@ -439,6 +442,14 @@ describe("dispatch (routing table)", () => {
 		);
 		expect(r.status).toBe(200);
 	});
+	it("routes POST /accounts/login/open/:loginId", async () => {
+		const loginOpen: LoginOpenFn = () => ({ ok: true, status: "pending" });
+		const r = await dispatch(
+			{ method: "POST", pathname: `/accounts/login/open/${acctUuid}` },
+			makeDeps({ loginOpen }),
+		);
+		expect(r.status).toBe(200);
+	});
 });
 
 describe("in-app OAuth login routes", () => {
@@ -538,6 +549,43 @@ describe("in-app OAuth login routes", () => {
 		const loginCancel: LoginCancelFn = () =>
 			Promise.resolve({ ok: false, reason: "unknown_login", detail: "no login" });
 		const r = await handleLoginCancel(makeDeps({ loginCancel }), acctUuid);
+		expect(r.status).toBe(404);
+	});
+
+	it("open: not wired → 503", async () => {
+		const r = await handleLoginOpen(makeDeps(), acctUuid);
+		expect(r.status).toBe(503);
+		expect((r.body as { reason: string }).reason).toBe("login_unavailable");
+	});
+
+	it("open: bad loginId → 400", async () => {
+		const loginOpen: LoginOpenFn = () => ({ ok: true, status: "pending" });
+		const r = await handleLoginOpen(makeDeps({ loginOpen }), "not-a-uuid");
+		expect(r.status).toBe(400);
+	});
+
+	it("open: not flag-gated — opens even with the flag off (a login only exists post-start)", async () => {
+		const loginOpen = vi.fn<LoginOpenFn>(() => ({ ok: true, status: "pending" }));
+		const r = await handleLoginOpen(makeDeps({ flagOn: false, loginOpen }), acctUuid);
+		expect(r.status).toBe(200);
+		expect(loginOpen).toHaveBeenCalledWith(acctUuid);
+	});
+
+	it("open: success → 200 status + detail passed through", async () => {
+		const loginOpen: LoginOpenFn = () =>
+			Promise.resolve({ ok: true, status: "pending", detail: "reopened" });
+		const r = await handleLoginOpen(makeDeps({ loginOpen }), acctUuid);
+		expect(r.status).toBe(200);
+		expect(r.body).toStrictEqual({ ok: true, status: "pending", detail: "reopened" });
+	});
+
+	it("open: unknown login → 404", async () => {
+		const loginOpen: LoginOpenFn = () => ({
+			ok: false,
+			reason: "unknown_login",
+			detail: "no login",
+		});
+		const r = await handleLoginOpen(makeDeps({ loginOpen }), acctUuid);
 		expect(r.status).toBe(404);
 	});
 });

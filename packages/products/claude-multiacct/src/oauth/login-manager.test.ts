@@ -112,6 +112,36 @@ describe("createLoginManager — start()", () => {
 		expect(mgr.getStatus(loginId)).toMatchObject({ ok: true, status: "pending" });
 	});
 
+	it("opens the authorize URL in the browser via the injected openUrl on start", async () => {
+		const opened: string[] = [];
+		const mgr = createLoginManager(happyDeps({ openUrl: (u) => opened.push(u) }));
+		const { authorizeUrl } = await mgr.start();
+		// The daemon (a Node process) opens the URL host-side — the renderer can't.
+		expect(opened).toStrictEqual([authorizeUrl]);
+	});
+
+	it("a throwing openUrl is warned, not fatal to start()", async () => {
+		const warnings: string[] = [];
+		const mgr = createLoginManager(
+			happyDeps({
+				openUrl: () => {
+					throw new Error("spawn boom");
+				},
+				logger: { log: () => undefined, warn: (m) => warnings.push(m) },
+			}),
+		);
+		// start() still resolves with a usable loginId despite the opener throwing.
+		const { loginId } = await mgr.start();
+		expect(mgr.getStatus(loginId)).toMatchObject({ ok: true, status: "pending" });
+		expect(warnings.some((w) => w.includes("open browser failed"))).toBe(true);
+	});
+
+	it("start() with no openUrl injected simply does not open (no throw)", async () => {
+		const mgr = createLoginManager(happyDeps());
+		const { authorizeUrl } = await mgr.start();
+		expect(authorizeUrl).toContain("redirect_uri");
+	});
+
 	it("threads authorizeUrl/clientId/scope overrides into the URL", async () => {
 		const mgr = createLoginManager(
 			happyDeps({
@@ -125,6 +155,23 @@ describe("createLoginManager — start()", () => {
 		expect(url.origin + url.pathname).toBe("https://example.test/authorize");
 		expect(url.searchParams.get("client_id")).toBe("cid");
 		expect(url.searchParams.get("scope")).toBe("a");
+	});
+});
+
+describe("createLoginManager — open (re-open the browser)", () => {
+	it("re-opens a pending login's authorize URL and returns its view", async () => {
+		const opened: string[] = [];
+		const mgr = createLoginManager(happyDeps({ openUrl: (u) => opened.push(u) }));
+		const { loginId, authorizeUrl } = await mgr.start();
+		// One open from start; open() fires a second with the SAME url.
+		const view = mgr.open(loginId);
+		expect(view).toMatchObject({ ok: true, status: "pending" });
+		expect(opened).toStrictEqual([authorizeUrl, authorizeUrl]);
+	});
+
+	it("open on an unknown login → unknown_login", () => {
+		const mgr = createLoginManager(happyDeps({ openUrl: () => undefined }));
+		expect(mgr.open("no-such")).toMatchObject({ ok: false, reason: "unknown_login" });
 	});
 });
 
