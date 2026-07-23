@@ -48,7 +48,7 @@ Every PR must satisfy:
 - [ ] Every approved item shipped in full — no scope narrowed silently
 - [ ] Tests verify INTENT (Rule 9), not just behaviour
 - [ ] Runtime changes describe what was actually clicked / run + include
-      `claude-multiacct doctor` output before + after when a mirror is involved
+  `claude-multiacct doctor` output before + after when a mirror is involved
 
 ## Rule 13 — no forbidden vocabulary
 
