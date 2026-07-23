@@ -40,9 +40,9 @@ const outfile = resolve(pkgRoot, "dist/active-token.js");
 const entryContents = `
 import { PACKAGE_VERSION } from "./src/index.ts";
 import { readRegistry } from "./src/cli-shim/registry-store.ts";
-import { SecurityCliTokenStore } from "./src/cli-shim/token-store.ts";
+import { FileTokenStore } from "./src/oauth/file-token-store.ts";
 import { makeActiveTokenPorts } from "./src/discovery/real-discovery-ports.ts";
-import { resolveActiveAccount } from "./src/active-token-agent/resolve.ts";
+import { poolActiveToken, resolveActiveAccount } from "./src/active-token-agent/resolve.ts";
 import {
 	defaultActiveAccountPath,
 	writeActiveAccount,
@@ -65,7 +65,12 @@ const outPath = defaultActiveAccountPath();
 // file. Never leaves the process hanging: the security reads are already
 // timeout-bounded inside makeRealDiscoveryPorts.
 async function main() {
-	const tokenStore = new SecurityCliTokenStore();
+	// The shim, daemon, and this companion all read/write the SAME encrypted
+	// FileTokenStore (the keychain pool is unreadable under the daemon's
+	// SessionCreate=true and was the store mismatch that made this companion
+	// throw "no keychain entry" and publish null). Pooling the live token here
+	// also lets the shim swap a session TO the native/primary account.
+	const tokenStore = new FileTokenStore();
 	const logger = { log: logLine, warn: logLine };
 	const activeTokenPorts = makeActiveTokenPorts(logger);
 
@@ -75,6 +80,14 @@ async function main() {
 		if (registry === undefined || registry.accounts.length === 0) {
 			logLine("no registry / empty pool — publishing null");
 		} else {
+			// Pool the live (native/primary) token FIRST so the sha-match below can
+			// resolve it too, then resolve which pooled account is active.
+			try {
+				const pooled = await poolActiveToken({ registry, activeTokenPorts, tokenStore });
+				logLine("pooled active token for uuid=" + String(pooled.pooledUuid));
+			} catch (error) {
+				logLine("pool active token failed (non-fatal): " + String(error));
+			}
 			const resolved = await resolveActiveAccount({
 				registry,
 				activeTokenPorts,

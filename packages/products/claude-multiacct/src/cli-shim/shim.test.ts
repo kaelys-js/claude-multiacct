@@ -123,6 +123,64 @@ describe("runShim — the swap path (choice present, valid account, token availa
 	});
 });
 
+describe("runShim — per-account CLAUDE_CONFIG_DIR (so the model reports the swapped account)", () => {
+	const swapChoice: ChoiceStore = {
+		read: () =>
+			Promise.resolve({
+				[SESSION_A]: {
+					sessionUuid: SESSION_A,
+					accountUuid: UUID_B,
+					chosenAt: "2026-07-19T00:00:00.000Z",
+				},
+			}),
+		write: async () => {},
+	};
+
+	it("sets CLAUDE_CONFIG_DIR from prepareConfigDir, keyed on the resolved account uuid", async () => {
+		const prepareConfigDir = vi.fn<(uuid: AccountUuid) => Promise<string>>((uuid) =>
+			Promise.resolve(`/cfg/${uuid}`),
+		);
+		const { deps, calls } = makeDeps({
+			choiceStore: swapChoice,
+			tokenStore: { get: () => Promise.resolve("swapped-token"), put: async () => {} },
+			prepareConfigDir,
+		});
+		const result = await runShim(deps);
+		expect(result.swapped).toBe(true);
+		// The dir is keyed on the ACCOUNT the choice resolved to — not the session —
+		// so two sessions on the same account share one identity and two accounts
+		// never collide. Wrong key here is a cross-account identity leak.
+		expect(prepareConfigDir).toHaveBeenCalledWith(UUID_B);
+		expect(calls[0]?.env?.CLAUDE_CONFIG_DIR).toBe(`/cfg/${UUID_B}`);
+		expect(calls[0]?.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe("swapped-token");
+	});
+
+	it("still swaps the token when prepareConfigDir throws (token is load-bearing; identity dir is best-effort)", async () => {
+		const { deps, calls, warn } = makeDeps({
+			choiceStore: swapChoice,
+			tokenStore: { get: () => Promise.resolve("swapped-token"), put: async () => {} },
+			prepareConfigDir: () => Promise.reject(new Error("mkdir EACCES")),
+		});
+		const result = await runShim(deps);
+		expect(result.swapped).toBe(true);
+		expect(calls[0]?.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe("swapped-token");
+		expect(calls[0]?.env?.CLAUDE_CONFIG_DIR).toBeUndefined();
+		expect(warn).toHaveBeenCalledWith(expect.stringContaining("prepareConfigDir failed"));
+	});
+
+	it("leaves CLAUDE_CONFIG_DIR unset on the pass-through path (no config dir without a swap)", async () => {
+		const prepareConfigDir = vi.fn<(uuid: AccountUuid) => Promise<string>>((uuid) =>
+			Promise.resolve(`/cfg/${uuid}`),
+		);
+		// No choice for the session → pass-through; prepareConfigDir must not run.
+		const { deps, calls } = makeDeps({ prepareConfigDir });
+		const result = await runShim(deps);
+		expect(result.swapped).toBe(false);
+		expect(prepareConfigDir).not.toHaveBeenCalled();
+		expect(calls[0]?.env?.CLAUDE_CONFIG_DIR).toBeUndefined();
+	});
+});
+
 describe("runShim — the pass-through paths (load-bearing: primary must never be worse)", () => {
 	it("no choice for the session → exec with ORIGINAL env (adversarial: this is the negative case the whole design hangs on)", async () => {
 		const { deps, calls, warn } = makeDeps();
