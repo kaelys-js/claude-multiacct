@@ -3,19 +3,24 @@
  *
  * The desktop launcher `posix_spawn`s `.../Contents/MacOS/claude` with a
  * per-account OAuth token in `CLAUDE_CODE_OAUTH_TOKEN` and the session id in
- * `--resume=<uuid>`. When our shim binary sits at that path (installed by
- * `./installer.ts`), it runs first and gets a chance to swap the token
- * before re-execing the REAL Claude CLI (which the installer renamed to
- * `claude.real` in the same directory).
+ * `--session-id=<uuid>` (new sessions) or `--resume=<uuid>` (resumed ones).
+ * When our shim binary sits at that path (installed by `./installer.ts`), it
+ * runs first and gets a chance to swap the token before re-execing the REAL
+ * Claude CLI (which the installer renamed to `claude.real` in the same
+ * directory).
  *
  * The pipeline for one invocation:
  *
- *   1. Parse `--resume=<uuid>` out of argv (`env.parseResumeUuid`).
+ *   1. Parse the session uuid out of argv (`env.parseSessionUuid`, which reads
+ *      `--session-id`, `--resume`, and `-r`).
  *   2. Load the choice sidecar for that session uuid (`ChoiceStore.read`).
  *   3. Resolve the pinned account from the registry (`readRegistry` +
  *      `byUuid`). Missing/stale/absent → skip the swap.
  *   4. Fetch the account's opaque token handle (`TokenStore.get`).
- *   5. Build a swapped env (`env.applyTokenSwap`) and `spawnSync(claude.real,
+ *   5. Prepare a per-account `CLAUDE_CONFIG_DIR` (`prepareConfigDir`) so the
+ *      swapped session reports the swapped account's identity, not the
+ *      launcher's default one.
+ *   6. Build a swapped env (`env.applyTokenSwap`) and `spawnSync(claude.real,
  *      argv[2..], {env})`, forwarding the child's exit code.
  *
  * The load-bearing invariant: **every error path is pass-through**. Any
@@ -41,15 +46,17 @@ import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import type { Account, AccountUuid } from "../domain/account.ts";
 import { type AccountRegistry, byUuid } from "../domain/registry.ts";
-import { applyTokenSwap, parseResumeUuid } from "./env.ts";
+import { applyTokenSwap, parseSessionUuid } from "./env.ts";
 import type { ChoiceStore, TokenStore } from "../ports.ts";
-// session-pid helpers (writeSessionPid/removeSessionPid) are used at the
-// entry-point in `entry.ts` to bind the injected ports; not imported here.
+// session-pid helpers (writeSessionPid/removeSessionPid) and the config-dir
+// prep are bound at the entry-point (the `scripts/build-shim.mjs` glue) and
+// injected via `ShimDeps`; nothing here touches the real filesystem directly.
 
 /**
- * Injected orchestration surface. Real deps are wired in `./entry.ts`; tests
- * pass fakes to drive every branch (choice-present, choice-absent, stale
- * choice, corrupted store, token failure).
+ * Injected orchestration surface. Real deps are wired by the bundled entry the
+ * `scripts/build-shim.mjs` glue emits into `dist/shim.js`; tests pass fakes to
+ * drive every branch (choice-present, choice-absent, stale choice, corrupted
+ * store, token failure).
  */
 export type ShimDeps = {
 	argv: readonly string[];
@@ -104,6 +111,18 @@ export type ShimDeps = {
 	 * spawn proceeds silently.
 	 */
 	logSpawn?: (sessionUuid: string | undefined, tokenHash: string) => void;
+	/**
+	 * Resolve (creating if needed) a per-account config directory and return its
+	 * absolute path, or `undefined` to leave `CLAUDE_CONFIG_DIR` unset for this
+	 * swap. Bound at the entry-point to a real `mkdir -p` under
+	 * `~/.config/claude-multiacct/account-config/<accountUuid>/`; tests inject a
+	 * fake. When the dep is absent, the swap sets no `CLAUDE_CONFIG_DIR` and the
+	 * child reads the default `~/.claude.json` (legacy behaviour). The dir is
+	 * left empty on creation: Claude Code populates it with the correct
+	 * `oauthAccount` by fetching the profile for the swapped token, so each
+	 * account's reported identity stays isolated without any global write.
+	 */
+	prepareConfigDir?: (accountUuid: AccountUuid) => Promise<string>;
 };
 
 /** Result of one shim invocation. `swapped` tells the caller which path won. */
@@ -134,7 +153,7 @@ export async function runShim(deps: ShimDeps): Promise<ShimResult> {
 	// pieces (spawn + onSighup + writePidFile + removePidFile). Absence of
 	// ANY piece falls back to the classic spawnSync path — that's how the
 	// tests + prior behavior stay intact.
-	const sessionUuid = parseResumeUuid(deps.argv);
+	const sessionUuid = parseSessionUuid(deps.argv);
 	const canHotSwap =
 		sessionUuid !== undefined &&
 		deps.spawn !== undefined &&
@@ -327,7 +346,7 @@ function signalNumber(signal: NodeJS.Signals): number {
  * @returns {Promise<Record<string, string> | undefined>} Swapped env or fall-through signal.
  */
 async function computeSwappedEnv(deps: ShimDeps): Promise<Record<string, string> | undefined> {
-	const sessionUuid = parseResumeUuid(deps.argv);
+	const sessionUuid = parseSessionUuid(deps.argv);
 	if (sessionUuid === undefined) {
 		return undefined;
 	}
@@ -356,10 +375,25 @@ async function computeSwappedEnv(deps: ShimDeps): Promise<Record<string, string>
 		deps.warn(`cma-shim: token store returned undefined for ${account.uuid}; passing through`);
 		return undefined;
 	}
+	// Per-account config dir so the swapped session reports the swapped account's
+	// identity. A failure here must not sink the swap: the token is the load-
+	// bearing part, and losing config-dir isolation only degrades the reported
+	// email, so warn and continue with the token-only swap.
+	let configDir: string | undefined;
+	if (deps.prepareConfigDir !== undefined) {
+		try {
+			configDir = await deps.prepareConfigDir(account.uuid as AccountUuid);
+		} catch (error) {
+			deps.warn(
+				`cma-shim: prepareConfigDir failed for ${account.uuid} (${describe(error)}); swapping token without a per-account config dir`,
+			);
+		}
+	}
 	return applyTokenSwap(deps.env, {
 		oauthToken: token,
 		subscriptionType: account.subscriptionType,
 		rateLimitTier: account.rateLimitTier,
+		configDir,
 	});
 }
 

@@ -29,8 +29,9 @@ import {
 } from "../discovery/chromium-crypto.ts";
 import type { Account, AccountUuid } from "../domain/account.ts";
 import type { AccountRegistry } from "../domain/registry.ts";
+import type { MutableTokenStore } from "../oauth/token-store-mut.ts";
 import type { TokenStore } from "../ports.ts";
-import { resolveActiveAccount } from "./resolve.ts";
+import { poolActiveToken, resolveActiveAccount } from "./resolve.ts";
 
 const PASSWORD = "test-safe-storage-key";
 const KEY = deriveChromiumKey(PASSWORD);
@@ -47,6 +48,15 @@ function v10(plaintext: string): Buffer {
 /** A v10 blob carrying a single OAuth access token (sole-V2 → unambiguously active). */
 function tokenBlob(token: string): Buffer {
 	return v10(JSON.stringify({ access_token: token }));
+}
+
+/**
+ * A v10 blob in the modern MAP shape, keyed
+ * `"<accountUuid>:<workspaceUuid>:<audience>:<scopeSet>"`, so the decrypted
+ * entry carries an `accountUuid` (needed to pool the token under its account).
+ */
+function mapBlob(accountUuid: string, token: string): Buffer {
+	return v10(JSON.stringify({ [`${accountUuid}:ws-1:aud-1:scope-a`]: { token } }));
 }
 
 function makePorts(
@@ -121,5 +131,79 @@ describe("resolveActiveAccount", () => {
 			activeUuid: null,
 			activeTokenSha: sha256Hex("token-A"),
 		});
+	});
+});
+
+const CLAUDE_UUID_A = "aaaa1111-1111-4111-8111-111111111111";
+
+/** A `put`-only MutableTokenStore fake that records what it was asked to store. */
+function mkMutableStore(): {
+	store: Pick<MutableTokenStore, "put">;
+	puts: Array<{ uuid: string; token: string }>;
+} {
+	const puts: Array<{ uuid: string; token: string }> = [];
+	return {
+		puts,
+		store: {
+			put: (uuid: AccountUuid, token: string) => {
+				puts.push({ uuid, token });
+				return Promise.resolve();
+			},
+		},
+	};
+}
+
+describe("poolActiveToken", () => {
+	it("writes the live token under the pool account whose Claude account uuid matches", async () => {
+		// Account registered with accountUuid = the Claude-side uuid, but its own
+		// pool uuid (UUID_A) is what the token must be stored under (the key the
+		// shim's tokenStore.get uses).
+		const account = { ...acct(UUID_A, "A"), accountUuid: CLAUDE_UUID_A } as Account;
+		const { store, puts } = mkMutableStore();
+		const result = await poolActiveToken({
+			registry: { accounts: [account] },
+			activeTokenPorts: makePorts([[ACTIVE_TOKEN_KEY, mapBlob(CLAUDE_UUID_A, "live-token")]]),
+			tokenStore: store,
+		});
+		expect(result).toStrictEqual({ pooledUuid: UUID_A });
+		expect(puts).toStrictEqual([{ uuid: UUID_A, token: "live-token" }]);
+	});
+
+	it("no live entry (Safe Storage key absent) → pools nothing", async () => {
+		const { store, puts } = mkMutableStore();
+		const result = await poolActiveToken({
+			registry,
+			activeTokenPorts: makePorts([[ACTIVE_TOKEN_KEY, mapBlob(CLAUDE_UUID_A, "live-token")]], {
+				readKeychainPassword: () => Promise.resolve(undefined),
+			}),
+			tokenStore: store,
+		});
+		expect(result).toStrictEqual({ pooledUuid: null });
+		expect(puts).toStrictEqual([]);
+	});
+
+	it("live entry whose accountUuid is in no pool account → pools nothing (fail-closed)", async () => {
+		const { store, puts } = mkMutableStore();
+		const result = await poolActiveToken({
+			// registry accounts A/B have no accountUuid, so they only match on their
+			// own uuid — neither equals CLAUDE_UUID_A.
+			registry,
+			activeTokenPorts: makePorts([[ACTIVE_TOKEN_KEY, mapBlob(CLAUDE_UUID_A, "live-token")]]),
+			tokenStore: store,
+		});
+		expect(result).toStrictEqual({ pooledUuid: null });
+		expect(puts).toStrictEqual([]);
+	});
+
+	it("entry without an accountUuid (single-object cache shape) → pools nothing", async () => {
+		const { store, puts } = mkMutableStore();
+		const result = await poolActiveToken({
+			registry,
+			// single-object {access_token} blob → OauthEntry.accountUuid undefined
+			activeTokenPorts: makePorts([[ACTIVE_TOKEN_KEY, tokenBlob("token-A")]]),
+			tokenStore: store,
+		});
+		expect(result).toStrictEqual({ pooledUuid: null });
+		expect(puts).toStrictEqual([]);
 	});
 });

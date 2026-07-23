@@ -137,23 +137,23 @@ function entriesFromBlob(value: Buffer, key: Buffer): OauthEntry[] {
  *
  * @param {OauthEntry[]} v2 - Entries decrypted from `oauth:tokenCacheV2`.
  * @param {OauthEntry[]} legacy - Entries decrypted from `oauth:tokenCache`.
- * @returns {string | undefined} The active token sha256 (hex), or `undefined`.
+ * @returns {OauthEntry | undefined} The active entry (token + accountUuid), or `undefined`.
  */
-function selectActiveSha(v2: OauthEntry[], legacy: OauthEntry[]): string | undefined {
+function selectActiveEntry(v2: OauthEntry[], legacy: OauthEntry[]): OauthEntry | undefined {
 	const marker = legacy.find((e) => e.accountUuid !== undefined)?.accountUuid;
 	if (marker !== undefined) {
 		const v2Match = v2.find((e) => e.accountUuid === marker);
 		if (v2Match !== undefined) {
-			return sha256Hex(v2Match.token); // rule 1
+			return v2Match; // rule 1
 		}
 	}
 	const soleV2 = v2.length === 1 ? v2[0] : undefined;
 	if (soleV2 !== undefined) {
-		return sha256Hex(soleV2.token); // rule 2
+		return soleV2; // rule 2
 	}
 	const soleLegacy = legacy.length === 1 ? legacy[0] : undefined;
 	if (soleLegacy !== undefined) {
-		return sha256Hex(soleLegacy.token); // rule 3
+		return soleLegacy; // rule 3
 	}
 	return undefined; // rule 4 — fail closed
 }
@@ -173,6 +173,25 @@ function selectActiveSha(v2: OauthEntry[], legacy: OauthEntry[]): string | undef
  * @returns {Promise<string | undefined>} The active token sha256 (hex), or `undefined`.
  */
 export async function currentActiveTokenSha(ports: ActiveTokenPorts): Promise<string | undefined> {
+	const entry = await currentActiveEntry(ports);
+	return entry === undefined ? undefined : sha256Hex(entry.token);
+}
+
+/**
+ * Resolve the full OAuth entry Claude.app is CURRENTLY authenticated as (the
+ * live token string plus its `accountUuid`), or `undefined` when it cannot be
+ * determined. Same decrypt + active-marker rule as {@link currentActiveTokenSha}
+ * — that function is now a sha-only view over this one.
+ *
+ * The active-token companion uses this to POOL the live token: the sha alone
+ * only tells the daemon which account is highlighted, but the shim needs the
+ * token itself to swap a session TO the native/primary account, whose token is
+ * otherwise never captured by the explicit `cma add` flow.
+ *
+ * @param {ActiveTokenPorts} ports - Injected keychain + config.json IO.
+ * @returns {Promise<OauthEntry | undefined>} The active entry, or `undefined`.
+ */
+export async function currentActiveEntry(ports: ActiveTokenPorts): Promise<OauthEntry | undefined> {
 	const password = await ports.readKeychainPassword(SAFE_STORAGE_SERVICE, SAFE_STORAGE_ACCOUNT);
 	if (password === undefined) {
 		return undefined;
@@ -188,7 +207,7 @@ export async function currentActiveTokenSha(ports: ActiveTokenPorts): Promise<st
 			legacy.push(...entriesFromBlob(entry.value, key));
 		}
 	}
-	return selectActiveSha(v2, legacy);
+	return selectActiveEntry(v2, legacy);
 }
 
 /**

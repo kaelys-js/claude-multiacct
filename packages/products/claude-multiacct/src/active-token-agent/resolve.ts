@@ -24,11 +24,14 @@
  */
 
 import {
+	currentActiveEntry,
 	currentActiveTokenSha,
 	type ActiveTokenPorts,
 	tokenShasFromStore,
 } from "../discovery/active-token.ts";
+import type { AccountUuid } from "../domain/account.ts";
 import type { AccountRegistry } from "../domain/registry.ts";
+import type { MutableTokenStore } from "../oauth/token-store-mut.ts";
 import type { TokenStore } from "../ports.ts";
 
 /** Injected dependencies `resolveActiveAccount` needs. */
@@ -72,4 +75,53 @@ export async function resolveActiveAccount(
 	const shaByUuid = await tokenShasFromStore(deps.registry, deps.tokenStore);
 	const matched = deps.registry.accounts.find((a) => shaByUuid.get(a.uuid) === activeSha);
 	return { activeUuid: matched?.uuid ?? null, activeTokenSha: activeSha };
+}
+
+/** Injected dependencies `poolActiveToken` needs. */
+export type PoolActiveTokenDeps = {
+	/** The current account pool (already read from disk by the caller). */
+	registry: AccountRegistry;
+	/** Keychain + config.json IO for `currentActiveEntry`. */
+	activeTokenPorts: ActiveTokenPorts;
+	/** Encrypted store to write the pooled token into (the shim reads it here). */
+	tokenStore: Pick<MutableTokenStore, "put">;
+};
+
+/**
+ * Capture the token Claude.app is CURRENTLY authenticated as into the pool, so
+ * the shim can swap a session TO that account.
+ *
+ * The native/primary account is discovered from Claude.app's own login, but the
+ * explicit `cma add` flow never stores its token — so `TokenStore.get(nativeUuid)`
+ * misses and a choice pinning a session to the primary account silently passes
+ * through instead of switching. This closes that gap: the gui-session companion
+ * (the only context that can read `Claude Safe Storage`) reads the live entry,
+ * finds the pool account whose Claude account uuid matches, and writes the token
+ * into the same encrypted `FileTokenStore` the shim reads. It runs every time
+ * the companion fires (login + on Claude's config.json change), so the pooled
+ * token refreshes as Claude.app rotates it.
+ *
+ * Fail-closed: no live entry, an entry without an `accountUuid`, or no pool
+ * account matching that uuid all resolve to `{ pooledUuid: null }` and write
+ * nothing. Matching is on the real Claude account uuid (`accountUuid`, falling
+ * back to `uuid` for records minted before the field existed).
+ *
+ * @param {PoolActiveTokenDeps} deps - Registry + injected keychain/token IO.
+ * @returns {Promise<{ pooledUuid: string | null }>} The pooled account uuid, or `null`.
+ */
+export async function poolActiveToken(
+	deps: PoolActiveTokenDeps,
+): Promise<{ pooledUuid: string | null }> {
+	const entry = await currentActiveEntry(deps.activeTokenPorts);
+	if (entry === undefined || entry.accountUuid === undefined) {
+		return { pooledUuid: null };
+	}
+	const account = deps.registry.accounts.find(
+		(a) => (a.accountUuid ?? a.uuid) === entry.accountUuid,
+	);
+	if (account === undefined) {
+		return { pooledUuid: null };
+	}
+	await deps.tokenStore.put(account.uuid as AccountUuid, entry.token);
+	return { pooledUuid: account.uuid };
 }

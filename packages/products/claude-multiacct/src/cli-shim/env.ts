@@ -4,12 +4,24 @@
  * Two pure helpers the shim uses on every invocation. Zero I/O so the same
  * functions can be exercised from tests without any mock scaffolding.
  *
- * `parseResumeUuid` extracts the Code session UUID from the CLI argv. Claude
- * Code's desktop launcher passes the session as `--resume=<uuid>` or
- * `--resume <uuid>` anywhere in the argv; we scan both forms and validate the
- * value against `AccountUuidSchema` (the same uuid shape session ids share)
- * before returning. Anything malformed → `undefined`, so the shim's
+ * `parseSessionUuid` extracts the Code session UUID from the CLI argv. Claude
+ * Code v2.1.x identifies a session two ways, and the desktop launcher uses
+ * both depending on whether the session is new or resumed:
+ *   - `--session-id <uuid>` / `--session-id=<uuid>` — pins a FRESH session to a
+ *     specific id (what the launcher passes when it opens a new Code session).
+ *   - `--resume <uuid>` / `--resume=<uuid>` / `-r <uuid>` — resumes an existing
+ *     session by id.
+ * We scan every form at any argv position and validate the value against the
+ * uuid shape session ids share before returning. Only `--resume`/`-r` take an
+ * OPTIONAL value (bare `--resume` opens the interactive picker), so a missing
+ * or malformed value there yields `undefined`; `--session-id` always carries a
+ * uuid. Anything malformed → `undefined`, so the shim's
  * fall-through-to-passthrough path handles it uniformly.
+ *
+ * Parsing only `--resume` (the pre-2.1 behaviour) was the fresh-session gap:
+ * the picker writes a choice keyed on the session uuid the launcher will pass
+ * as `--session-id`, so a shim blind to `--session-id` never engaged the swap
+ * for a brand-new session, only for a resumed one.
  *
  * `applyTokenSwap` returns a NEW env with the four Anthropic OAuth env vars
  * replaced from the resolved pool account. Every OTHER key in the incoming
@@ -26,28 +38,41 @@ import * as v from "valibot";
 /** UUID validator shared with account ids — session ids use the same shape. */
 const UuidSchema = v.pipe(v.string(), v.uuid());
 
+/** Flags whose value is the Code session uuid, longest match tried first. */
+const SESSION_FLAGS = ["--session-id", "--resume", "-r"] as const;
+
 /**
- * Extract `--resume`'s UUID value from the CLI argv, or `undefined` if the
- * flag is absent or its value is not a valid uuid. Accepts both the
- * `--resume=UUID` and space-separated `--resume UUID` forms, at any position.
+ * Extract the Code session UUID from the CLI argv, or `undefined` when no
+ * session flag carries a valid uuid. Handles both `--flag=UUID` and the
+ * space-separated `--flag UUID` forms, at any argv position, for every flag
+ * Claude Code uses to identify a session: `--session-id` (fresh sessions),
+ * `--resume` and its `-r` alias (resumed sessions).
+ *
+ * The first flag that resolves to a valid uuid wins; a flag present with a
+ * missing or malformed value is skipped rather than short-circuiting to
+ * `undefined`, so `claude --resume --session-id <uuid>` (bare `--resume`
+ * opening the picker, id supplied separately) still resolves the id.
  *
  * @param {readonly string[]} argv - The full argv (including argv[0]/argv[1]).
  * @returns {string | undefined} The valid uuid, or `undefined`.
  */
-export function parseResumeUuid(argv: readonly string[]): string | undefined {
+export function parseSessionUuid(argv: readonly string[]): string | undefined {
 	for (let i = 0; i < argv.length; i += 1) {
 		const arg = argv[i];
 		if (arg !== undefined) {
-			if (arg.startsWith("--resume=")) {
-				const candidate = arg.slice("--resume=".length);
-				return v.safeParse(UuidSchema, candidate).success ? candidate : undefined;
-			}
-			if (arg === "--resume") {
-				const candidate = argv[i + 1];
-				if (candidate === undefined) {
-					return undefined;
+			for (const flag of SESSION_FLAGS) {
+				const eq = `${flag}=`;
+				if (arg.startsWith(eq)) {
+					const candidate = arg.slice(eq.length);
+					if (v.safeParse(UuidSchema, candidate).success) {
+						return candidate;
+					}
+				} else if (arg === flag) {
+					const candidate = argv[i + 1];
+					if (candidate !== undefined && v.safeParse(UuidSchema, candidate).success) {
+						return candidate;
+					}
 				}
-				return v.safeParse(UuidSchema, candidate).success ? candidate : undefined;
 			}
 		}
 	}
@@ -64,22 +89,41 @@ export type TokenSwapAccount = {
 	refreshToken?: string;
 	subscriptionType?: string;
 	rateLimitTier?: string;
+	/**
+	 * Per-account config directory. When present, the swap sets
+	 * `CLAUDE_CONFIG_DIR` to it so the downstream CLI reads (and populates) an
+	 * identity separate from the default `~/.claude.json`. This is what makes
+	 * the account the model REPORTS match the swapped token: Claude Code fetches
+	 * the profile for `CLAUDE_CODE_OAUTH_TOKEN` and persists it into this dir's
+	 * `.claude.json`, keeping each session's identity isolated without ever
+	 * writing the shared global config. Omitted → `CLAUDE_CONFIG_DIR` is left
+	 * out of the swapped env (the pass-through/default-identity behaviour).
+	 */
+	configDir?: string;
 };
 
-/** Env keys the shim overwrites; every other key is preserved unchanged. */
+/**
+ * Env keys the shim fully controls on a swap; every other key is preserved
+ * unchanged. `CLAUDE_CONFIG_DIR` is included so a swap deterministically owns
+ * the config dir — an inherited value is dropped and re-set (or removed) from
+ * the account, never left to leak the launcher's default identity into a
+ * swapped session.
+ */
 const SWAPPED_KEYS = [
 	"CLAUDE_CODE_OAUTH_TOKEN",
 	"CLAUDE_CODE_OAUTH_REFRESH_TOKEN",
 	"CLAUDE_CODE_SUBSCRIPTION_TYPE",
 	"CLAUDE_CODE_RATE_LIMIT_TIER",
+	"CLAUDE_CONFIG_DIR",
 ] as const;
 
 /**
- * Return a NEW env with the four Anthropic OAuth env vars replaced from
- * `account`; every other key is preserved. Optional account fields that are
- * omitted delete the corresponding env var rather than leaving the caller's
- * primary-account value in place — a partial swap would still identify as
- * the primary to the downstream CLI.
+ * Return a NEW env with the Anthropic OAuth env vars replaced from `account`;
+ * every other key is preserved. Optional account fields that are omitted delete
+ * the corresponding env var rather than leaving the caller's primary-account
+ * value in place — a partial swap would still identify as the primary to the
+ * downstream CLI. When `account.configDir` is set, `CLAUDE_CONFIG_DIR` points
+ * the CLI at that per-account dir so its reported identity matches the swap.
  *
  * @param {Record<string,string>} env - The source env (usually process.env).
  * @param {TokenSwapAccount} account - The pool account to swap in.
@@ -104,6 +148,9 @@ export function applyTokenSwap(
 	}
 	if (account.rateLimitTier !== undefined) {
 		next.CLAUDE_CODE_RATE_LIMIT_TIER = account.rateLimitTier;
+	}
+	if (account.configDir !== undefined) {
+		next.CLAUDE_CONFIG_DIR = account.configDir;
 	}
 	return next;
 }
