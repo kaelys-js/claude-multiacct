@@ -50,15 +50,6 @@ function tokenBlob(token: string): Buffer {
 	return v10(JSON.stringify({ access_token: token }));
 }
 
-/**
- * A v10 blob in the modern MAP shape, keyed
- * `"<accountUuid>:<workspaceUuid>:<audience>:<scopeSet>"`, so the decrypted
- * entry carries an `accountUuid` (needed to pool the token under its account).
- */
-function mapBlob(accountUuid: string, token: string): Buffer {
-	return v10(JSON.stringify({ [`${accountUuid}:ws-1:aud-1:scope-a`]: { token } }));
-}
-
 function makePorts(
 	entries: ReadonlyArray<[string, Buffer]>,
 	overrides: Partial<ActiveTokenPorts> = {},
@@ -92,6 +83,47 @@ const registry: AccountRegistry = { accounts: [acct(UUID_A, "A"), acct(UUID_B, "
 
 function mkTokenStore(entries: Record<string, string | undefined>): Pick<TokenStore, "get"> {
 	return { get: (uuid: AccountUuid) => Promise.resolve(entries[uuid]) };
+}
+
+/**
+ * A read store whose `get` RESOLVES for uuids present in `entries` and REJECTS
+ * for everything else — models the keychain/file store contract where a miss
+ * throws rather than returning undefined. Lives at module scope so the throw
+ * decision stays out of the test body (vitest/no-conditional-in-test).
+ */
+function mkThrowingReadStore(entries: Record<string, string>): Pick<TokenStore, "get"> {
+	return {
+		get: (uuid: AccountUuid) => {
+			const token = entries[uuid];
+			return token === undefined
+				? Promise.reject(new Error(`no entry for ${uuid}`))
+				: Promise.resolve(token);
+		},
+	};
+}
+
+/**
+ * A read store that returns `token` for `uuid` on the FIRST get and rejects on
+ * every later get (any other uuid resolves to undefined). Models a token that
+ * is readable during the sha match but vanishes before the mirror re-read.
+ * Module scope so the branching stays out of the test body.
+ */
+function mkReadableOnceStore(uuid: AccountUuid, token: string): Pick<TokenStore, "get"> {
+	let served = false;
+	const first = new Map<string, string>([[uuid, token]]);
+	return {
+		get: (requested: AccountUuid) => {
+			const value = first.get(requested);
+			if (value === undefined) {
+				return Promise.resolve(undefined);
+			}
+			if (served) {
+				return Promise.reject(new Error("token vanished between resolve and mirror"));
+			}
+			served = true;
+			return Promise.resolve(value);
+		},
+	};
 }
 
 describe("resolveActiveAccount", () => {
@@ -134,8 +166,6 @@ describe("resolveActiveAccount", () => {
 	});
 });
 
-const CLAUDE_UUID_A = "aaaa1111-1111-4111-8111-111111111111";
-
 /** A `put`-only MutableTokenStore fake that records what it was asked to store. */
 function mkMutableStore(): {
 	store: Pick<MutableTokenStore, "put">;
@@ -154,56 +184,74 @@ function mkMutableStore(): {
 }
 
 describe("poolActiveToken", () => {
-	it("writes the live token under the pool account whose Claude account uuid matches", async () => {
-		// Account registered with accountUuid = the Claude-side uuid, but its own
-		// pool uuid (UUID_A) is what the token must be stored under (the key the
-		// shim's tokenStore.get uses).
-		const account = { ...acct(UUID_A, "A"), accountUuid: CLAUDE_UUID_A } as Account;
+	it("mirrors the live account's token from the read store into the write store", async () => {
+		// Active token is token-A; the read store (keychain) holds it for UUID_A.
+		// The mirror must write UUID_A's token into the write store (the file store
+		// the shim reads) — this is what lets a session switch TO that account.
 		const { store, puts } = mkMutableStore();
 		const result = await poolActiveToken({
-			registry: { accounts: [account] },
-			activeTokenPorts: makePorts([[ACTIVE_TOKEN_KEY, mapBlob(CLAUDE_UUID_A, "live-token")]]),
-			tokenStore: store,
+			registry,
+			activeTokenPorts: makePorts([[ACTIVE_TOKEN_KEY, tokenBlob("token-A")]]),
+			readStore: mkTokenStore({ [UUID_A]: "token-A", [UUID_B]: "token-B" }),
+			writeStore: store,
 		});
 		expect(result).toStrictEqual({ pooledUuid: UUID_A });
-		expect(puts).toStrictEqual([{ uuid: UUID_A, token: "live-token" }]);
+		expect(puts).toStrictEqual([{ uuid: UUID_A, token: "token-A" }]);
 	});
 
-	it("no live entry (Safe Storage key absent) → pools nothing", async () => {
+	it("no live sha (Safe Storage key absent) → mirrors nothing", async () => {
 		const { store, puts } = mkMutableStore();
 		const result = await poolActiveToken({
 			registry,
-			activeTokenPorts: makePorts([[ACTIVE_TOKEN_KEY, mapBlob(CLAUDE_UUID_A, "live-token")]], {
+			activeTokenPorts: makePorts([[ACTIVE_TOKEN_KEY, tokenBlob("token-A")]], {
 				readKeychainPassword: () => Promise.resolve(undefined),
 			}),
-			tokenStore: store,
+			readStore: mkTokenStore({ [UUID_A]: "token-A" }),
+			writeStore: store,
 		});
 		expect(result).toStrictEqual({ pooledUuid: null });
 		expect(puts).toStrictEqual([]);
 	});
 
-	it("live entry whose accountUuid is in no pool account → pools nothing (fail-closed)", async () => {
-		const { store, puts } = mkMutableStore();
-		const result = await poolActiveToken({
-			// registry accounts A/B have no accountUuid, so they only match on their
-			// own uuid — neither equals CLAUDE_UUID_A.
-			registry,
-			activeTokenPorts: makePorts([[ACTIVE_TOKEN_KEY, mapBlob(CLAUDE_UUID_A, "live-token")]]),
-			tokenStore: store,
-		});
-		expect(result).toStrictEqual({ pooledUuid: null });
-		expect(puts).toStrictEqual([]);
-	});
-
-	it("entry without an accountUuid (single-object cache shape) → pools nothing", async () => {
+	it("live sha that no pooled account holds → mirrors nothing (fail-closed)", async () => {
 		const { store, puts } = mkMutableStore();
 		const result = await poolActiveToken({
 			registry,
-			// single-object {access_token} blob → OauthEntry.accountUuid undefined
+			// Active token is token-A, but the read store holds neither account's
+			// token as token-A, so no account resolves as active.
 			activeTokenPorts: makePorts([[ACTIVE_TOKEN_KEY, tokenBlob("token-A")]]),
-			tokenStore: store,
+			readStore: mkTokenStore({ [UUID_A]: "other-1", [UUID_B]: "other-2" }),
+			writeStore: store,
 		});
 		expect(result).toStrictEqual({ pooledUuid: null });
 		expect(puts).toStrictEqual([]);
+	});
+
+	it("resolves an active account but its token becomes unreadable on re-read → mirrors nothing", async () => {
+		// The sha match reads token-A once; the subsequent mirror read throws.
+		// Defensive: rather than write a garbage/undefined token, fail closed.
+		const { store, puts } = mkMutableStore();
+		const result = await poolActiveToken({
+			registry,
+			activeTokenPorts: makePorts([[ACTIVE_TOKEN_KEY, tokenBlob("token-A")]]),
+			readStore: mkReadableOnceStore(UUID_A, "token-A"),
+			writeStore: store,
+		});
+		expect(result).toStrictEqual({ pooledUuid: null });
+		expect(puts).toStrictEqual([]);
+	});
+
+	it("tolerates a read store whose get() throws for an unmatched account (split pool)", async () => {
+		// UUID_B's token is keychain-only and throws here; UUID_A resolves fine.
+		// A throw on B must NOT sink the mirror of the active account A.
+		const { store, puts } = mkMutableStore();
+		const result = await poolActiveToken({
+			registry,
+			activeTokenPorts: makePorts([[ACTIVE_TOKEN_KEY, tokenBlob("token-A")]]),
+			readStore: mkThrowingReadStore({ [UUID_A]: "token-A" }),
+			writeStore: store,
+		});
+		expect(result).toStrictEqual({ pooledUuid: UUID_A });
+		expect(puts).toStrictEqual([{ uuid: UUID_A, token: "token-A" }]);
 	});
 });
