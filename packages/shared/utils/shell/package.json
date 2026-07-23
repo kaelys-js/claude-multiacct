@@ -7,7 +7,7 @@
 	"description": "Foundation shell primitives: execa-backed sh() with pipefail equivalents, enforced timeouts, closed stdin, structured errors, and a journal for streaming child output.",
 	"license": "SEE LICENSE IN LICENSE",
 	"dependencies": {
-		"execa": "9.6.1"
+		"execa": "10.0.0"
 	},
 	"devDependencies": {
 		"@foundation/config": "workspace:*"
