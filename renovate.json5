@@ -94,13 +94,21 @@
 	// advisory instead of shipping a fix. Renovate owns CVE remediation now:
 	// GitHub's vulnerability-alert stream stays on (the managed_repo
 	// vulnerability_alerts = true) and this block turns those alerts into
-	// Renovate security PRs. No automerge / platformAutomerge keys here on
-	// purpose — a security bump lands as a `security`-labelled review PR, and
-	// the fleet renovate-config audit (kaelys-js-infra
-	// scripts/audit-renovate-config.sh) stays balanced.
+	// Renovate security PRs. With Dependabot gone, an open CVE would otherwise
+	// sit waiting on a review no second human can give, so security bumps
+	// auto-merge once CI is green. Same merge path as everything else in this
+	// file: automerge on, native platform auto-merge off so Renovate merges
+	// through its App bypass token past the main-protection review gate, and the
+	// 7-day cool-down dropped to zero so a fix is not held back. The audit
+	// (kaelys-js-infra scripts/audit-renovate-config.sh) still balances: this
+	// automerge pairs with the platform-automerge-off flag on the line below.
 	vulnerabilityAlerts: {
 		enabled: true,
 		labels: ["security"],
+		automerge: true,
+		automergeType: "pr",
+		platformAutomerge: false, // native platform-automerge is deliberately off (main-protection review gate); Renovate merges via its App bypass token after CI green
+		minimumReleaseAge: "0 days", // fast-track security past the global 7-day cooldown
 	},
 
 	// Enabled managers:
