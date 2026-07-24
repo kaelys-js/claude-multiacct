@@ -17,6 +17,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import type { Account } from "../domain/account.ts";
+import type { SessionAccountChoice } from "../domain/session-choice.ts";
 import type { VerifyResult } from "../oauth/models.ts";
 import {
 	type AddAccountFn,
@@ -30,6 +31,7 @@ import {
 	handleLoginStart,
 	handleLoginStatus,
 	handleRemoveAccount,
+	handleSetActiveChoice,
 	handleSetChoice,
 	handleUsage,
 	type LoginCancelFn,
@@ -93,6 +95,9 @@ function makeDeps(overrides: Partial<RouteDeps> = {}): RouteDeps {
 		port: overrides.port ?? 12_345,
 		secretRotatedAt: overrides.secretRotatedAt ?? "2026-07-20T00:00:00.000Z",
 		signalSwap: overrides.signalSwap ?? vi.fn<SignalSwapFn>(() => Promise.resolve("no-owner")),
+		resolveActiveSession:
+			overrides.resolveActiveSession ??
+			vi.fn<() => Promise<string | undefined>>(() => Promise.resolve(sessUuid)),
 		logger: overrides.logger ?? {
 			log: vi.fn<(m: string) => void>(),
 			warn: vi.fn<(m: string) => void>(),
@@ -282,6 +287,86 @@ describe("handleSetChoice (flag gate + validation)", () => {
 	});
 });
 
+describe("handleSetActiveChoice (daemon resolves the shim's session)", () => {
+	it("flag-off → 403 skipped, resolves nothing and writes nothing (bypass flag → RED)", async () => {
+		const write = vi.fn<() => Promise<void>>(() => Promise.resolve());
+		const resolveActiveSession = vi.fn<() => Promise<string | undefined>>(() =>
+			Promise.resolve(sessUuid),
+		);
+		const deps = makeDeps({ flagOn: false, choiceStore: { write }, resolveActiveSession });
+		const r = await handleSetActiveChoice(deps, { accountUuid: acctUuid });
+		expect(r.status).toBe(403);
+		expect(r.body).toEqual({ ok: false, skipped: true, reason: "flag-off" });
+		expect(resolveActiveSession).not.toHaveBeenCalled();
+		expect(write).not.toHaveBeenCalled();
+	});
+
+	it("no active session → 200 resolved:none, no write, no signal (nothing live to bind)", async () => {
+		const write = vi.fn<() => Promise<void>>(() => Promise.resolve());
+		const signalSwap = vi.fn<SignalSwapFn>(() => Promise.resolve("signalled"));
+		const resolveActiveSession = vi.fn<() => Promise<string | undefined>>(() =>
+			Promise.resolve(undefined),
+		);
+		const deps = makeDeps({ choiceStore: { write }, signalSwap, resolveActiveSession });
+		const r = await handleSetActiveChoice(deps, { accountUuid: acctUuid });
+		expect(r.status).toBe(200);
+		expect(r.body).toEqual({ ok: true, resolved: "none" });
+		expect(write).not.toHaveBeenCalled();
+		expect(signalSwap).not.toHaveBeenCalled();
+	});
+
+	it("active session → writes the choice under the RESOLVED uuid, signals it, returns the uuid", async () => {
+		const write = vi.fn<(c: SessionAccountChoice) => Promise<void>>(() => Promise.resolve());
+		const signalSwap = vi.fn<SignalSwapFn>(() => Promise.resolve("signalled"));
+		// The resolved uuid is NOT the picker-supplied one — the picker supplies no
+		// session uuid at all (that is the whole point); the daemon supplies it.
+		const resolveActiveSession = vi.fn<() => Promise<string | undefined>>(() =>
+			Promise.resolve(sessUuid),
+		);
+		const deps = makeDeps({
+			choiceStore: { write } as unknown as RouteDeps["choiceStore"],
+			signalSwap,
+			resolveActiveSession,
+		});
+		const r = await handleSetActiveChoice(deps, { accountUuid: acctUuid });
+		expect(r.status).toBe(200);
+		expect((r.body as { sessionUuid: string }).sessionUuid).toBe(sessUuid);
+		const [firstWrite] = write.mock.calls;
+		const [written] = firstWrite!;
+		expect(written.sessionUuid).toBe(sessUuid);
+		expect(written.accountUuid).toBe(acctUuid);
+		expect(written.chosenAt).toMatch(/^\d{4}-\d{2}-\d{2}T/u);
+		expect(signalSwap).toHaveBeenCalledTimes(1);
+		expect(signalSwap).toHaveBeenCalledWith(sessUuid);
+	});
+
+	it("signalSwap that throws is swallowed and logged (choice still persists, 200)", async () => {
+		const write = vi.fn<() => Promise<void>>(() => Promise.resolve());
+		const warn = vi.fn<(m: string) => void>();
+		const signalSwap = vi.fn<SignalSwapFn>(() => Promise.reject(new Error("boom")));
+		const deps = makeDeps({
+			choiceStore: { write },
+			signalSwap,
+			logger: { log: vi.fn<(m: string) => void>(), warn },
+		});
+		const r = await handleSetActiveChoice(deps, { accountUuid: acctUuid });
+		expect(r.status).toBe(200);
+		expect(write).toHaveBeenCalledOnce();
+		expect(warn).toHaveBeenCalledOnce();
+	});
+
+	it("bad body (missing accountUuid) → 400 before resolving anything", async () => {
+		const resolveActiveSession = vi.fn<() => Promise<string | undefined>>(() =>
+			Promise.resolve(sessUuid),
+		);
+		const deps = makeDeps({ resolveActiveSession });
+		const r = await handleSetActiveChoice(deps, {});
+		expect(r.status).toBe(400);
+		expect((r.body as { reason: string }).reason).toMatch(/body/u);
+		expect(resolveActiveSession).not.toHaveBeenCalled();
+	});
+});
+
 describe("handleAddAccount (flag gate + validation + status mapping)", () => {
 	it("flag-off → 403 skipped:true and addAccount is NOT called (bypass flag → RED)", async () => {
 		const addAccount = vi.fn<AddAccountFn>(() =>
@@ -404,12 +489,25 @@ describe("dispatch (routing table)", () => {
 		const r = await dispatch({ method: "DELETE", pathname: `/accounts/${acctUuid}` }, makeDeps());
 		expect(r.status).toBe(200);
 	});
-	it("routes POST /choice/:uuid", async () => {
+	it("routes POST /choice/:uuid to handleSetChoice (direct binding)", async () => {
 		const r = await dispatch(
 			{ method: "POST", pathname: `/choice/${sessUuid}`, body: { accountUuid: acctUuid } },
 			makeDeps(),
 		);
 		expect(r.status).toBe(200);
+		expect((r.body as { choice: { sessionUuid: string } }).choice.sessionUuid).toBe(sessUuid);
+	});
+	it("routes exact POST /choice to handleSetActiveChoice (daemon-resolved, wins over the /choice/ prefix)", async () => {
+		const resolveActiveSession = vi.fn<() => Promise<string | undefined>>(() =>
+			Promise.resolve(sessUuid),
+		);
+		const r = await dispatch(
+			{ method: "POST", pathname: "/choice", body: { accountUuid: acctUuid } },
+			makeDeps({ resolveActiveSession }),
+		);
+		expect(r.status).toBe(200);
+		expect((r.body as { sessionUuid: string }).sessionUuid).toBe(sessUuid);
+		expect(resolveActiveSession).toHaveBeenCalledOnce();
 	});
 	it("returns 404 JSON for unknown paths (drop the default → RED)", async () => {
 		const r = await dispatch({ method: "GET", pathname: "/nope" }, makeDeps());

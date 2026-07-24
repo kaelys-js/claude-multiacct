@@ -12,7 +12,7 @@
 
 import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, type Mock, vi } from "vitest";
-import type { AccountUuid } from "../domain/account.ts";
+import type { Account, AccountUuid } from "../domain/account.ts";
 import type { AccountRegistry } from "../domain/registry.ts";
 import type { ChoiceStore, TokenStore } from "../ports.ts";
 import { runShim, type ShimDeps } from "./shim.ts";
@@ -136,9 +136,9 @@ describe("runShim — per-account CLAUDE_CONFIG_DIR (so the model reports the sw
 		write: async () => {},
 	};
 
-	it("sets CLAUDE_CONFIG_DIR from prepareConfigDir, keyed on the resolved account uuid", async () => {
-		const prepareConfigDir = vi.fn<(uuid: AccountUuid) => Promise<string>>((uuid) =>
-			Promise.resolve(`/cfg/${uuid}`),
+	it("sets CLAUDE_CONFIG_DIR from prepareConfigDir, resolving the full account (identity view keyed on that account)", async () => {
+		const prepareConfigDir = vi.fn<(account: Account) => Promise<string | undefined>>((account) =>
+			Promise.resolve(`/cfg/${account.uuid}`),
 		);
 		const { deps, calls } = makeDeps({
 			choiceStore: swapChoice,
@@ -147,11 +147,31 @@ describe("runShim — per-account CLAUDE_CONFIG_DIR (so the model reports the sw
 		});
 		const result = await runShim(deps);
 		expect(result.swapped).toBe(true);
-		// The dir is keyed on the ACCOUNT the choice resolved to — not the session —
-		// so two sessions on the same account share one identity and two accounts
-		// never collide. Wrong key here is a cross-account identity leak.
-		expect(prepareConfigDir).toHaveBeenCalledWith(UUID_B);
+		// prepareConfigDir receives the ACCOUNT the choice resolved to — the identity
+		// view (oauthAccount override + shared-store symlinks) is built from the whole
+		// account, not just its uuid. Passing the wrong account is a cross-account
+		// identity leak.
+		expect(prepareConfigDir).toHaveBeenCalledWith(expect.objectContaining({ uuid: UUID_B }));
 		expect(calls[0]?.env?.CLAUDE_CONFIG_DIR).toBe(`/cfg/${UUID_B}`);
+		expect(calls[0]?.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe("swapped-token");
+	});
+
+	it("leaves CLAUDE_CONFIG_DIR unset when prepareConfigDir returns undefined (native reads the shared config)", async () => {
+		// The native account's identity view is `undefined` — the swap still
+		// happens (token, tier), but no CLAUDE_CONFIG_DIR so the child reads the
+		// shared config directly rather than a forked per-account one.
+		const prepareConfigDir = vi.fn<(account: Account) => Promise<string | undefined>>(() =>
+			Promise.resolve(undefined),
+		);
+		const { deps, calls } = makeDeps({
+			choiceStore: swapChoice,
+			tokenStore: { get: () => Promise.resolve("swapped-token"), put: async () => {} },
+			prepareConfigDir,
+		});
+		const result = await runShim(deps);
+		expect(result.swapped).toBe(true);
+		expect(prepareConfigDir).toHaveBeenCalledWith(expect.objectContaining({ uuid: UUID_B }));
+		expect(calls[0]?.env?.CLAUDE_CONFIG_DIR).toBeUndefined();
 		expect(calls[0]?.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe("swapped-token");
 	});
 
@@ -169,8 +189,8 @@ describe("runShim — per-account CLAUDE_CONFIG_DIR (so the model reports the sw
 	});
 
 	it("leaves CLAUDE_CONFIG_DIR unset on the pass-through path (no config dir without a swap)", async () => {
-		const prepareConfigDir = vi.fn<(uuid: AccountUuid) => Promise<string>>((uuid) =>
-			Promise.resolve(`/cfg/${uuid}`),
+		const prepareConfigDir = vi.fn<(account: Account) => Promise<string | undefined>>((account) =>
+			Promise.resolve(`/cfg/${account.uuid}`),
 		);
 		// No choice for the session → pass-through; prepareConfigDir must not run.
 		const { deps, calls } = makeDeps({ prepareConfigDir });

@@ -199,6 +199,14 @@ export type RouteDeps = {
 	 * `cli-shim/session-pid.ts::signalSwap` in production; tests inject a spy.
 	 */
 	signalSwap: SignalSwapFn;
+	/**
+	 * Resolve the uuid of the live CLI session the shim is actually reading its
+	 * choice under (the newest registered session whose pid is alive). Backs
+	 * `POST /choice` — the picker can't supply that uuid because the tab uuid it
+	 * scrapes is a different namespace. Wired to
+	 * `cli-shim/session-pid.ts::resolveActiveSessionUuid`; tests inject a spy.
+	 */
+	resolveActiveSession: () => Promise<string | undefined>;
 	/** Info-level log sink for signalling outcomes. */
 	logger: { log: (m: string) => void; warn: (m: string) => void };
 };
@@ -604,6 +612,60 @@ export async function handleSetChoice(
 }
 
 /**
+ * Set an account choice for the ACTIVE CLI session — the one the shim is
+ * reading under, resolved by the daemon rather than named in the path. The
+ * picker POSTs here because the session uuid it scrapes from the Code tab is a
+ * different namespace than the shim's key, so it cannot address the session
+ * directly; the daemon binds the choice to the newest live registered session
+ * instead (`resolveActiveSession`). **Requires the feature flag on** — flag-off
+ * returns 403 `{ok:false, skipped:true, reason:"flag-off"}`, mirroring
+ * `handleSetChoice`.
+ *
+ * When no live CLI session resolves, returns 200 `{ok:true, resolved:"none"}` —
+ * not an error: there is simply nothing to bind (the user's visual pick stands).
+ * When one resolves, it writes the choice under THAT uuid, fires the same
+ * fire-and-forget hot-swap signal, and returns the resolved uuid + choice.
+ *
+ * @param {RouteDeps} deps - Injected ports.
+ * @param {unknown} body - Parsed request body (`{accountUuid}`).
+ * @returns {Promise<RouteResult>} 200 with the choice or `resolved:"none"`, 400/403 otherwise.
+ */
+export async function handleSetActiveChoice(deps: RouteDeps, body: unknown): Promise<RouteResult> {
+	if (!deps.flagOn) {
+		return {
+			status: 403,
+			body: { ok: false, skipped: true, reason: "flag-off" },
+		};
+	}
+	const bodyParsed = v.safeParse(ChoiceBodySchema, body);
+	if (!bodyParsed.success) {
+		return badRequest(bodyParsed.issues, "body");
+	}
+	const resolved = await deps.resolveActiveSession();
+	if (resolved === undefined) {
+		return { status: 200, body: { ok: true, resolved: "none" } };
+	}
+	const choice: SessionAccountChoice = {
+		sessionUuid: resolved as SessionAccountChoice["sessionUuid"],
+		accountUuid: bodyParsed.output.accountUuid as SessionAccountChoice["accountUuid"],
+		chosenAt: new Date().toISOString(),
+	};
+	await deps.choiceStore.write(choice);
+	// Fire-and-forget hot-swap signal — same contract as handleSetChoice: the
+	// outcome is logged, never surfaced on the wire, since the choice is
+	// persisted regardless of whether a live shim picks up SIGHUP now.
+	try {
+		const outcome = await deps.signalSwap(resolved);
+		deps.logger.log(`bridge: hot-swap signal for ${resolved} → ${outcome}`);
+	} catch (error) {
+		deps.logger.warn(
+			`bridge: hot-swap signal for ${resolved} threw: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	}
+	return { status: 200, body: { ok: true, sessionUuid: resolved, choice } };
+}
+
+/**
  * Dispatch a request to the right handler. Returns 404 JSON for unknown
  * routes/methods. Path parameters are extracted here so handlers stay
  * signature-simple.
@@ -650,6 +712,11 @@ export async function dispatch(req: RouteRequest, deps: RouteDeps): Promise<Rout
 	if (req.method === "GET" && req.pathname.startsWith("/usage/")) {
 		const uuid = req.pathname.slice("/usage/".length);
 		return await handleUsage(deps, uuid);
+	}
+	// Exact `/choice` (no path uuid) → the daemon resolves the active session.
+	// Must precede the `/choice/` prefix branch so the exact match wins.
+	if (req.method === "POST" && req.pathname === "/choice") {
+		return await handleSetActiveChoice(deps, req.body);
 	}
 	if (req.method === "POST" && req.pathname.startsWith("/choice/")) {
 		const uuid = req.pathname.slice("/choice/".length);

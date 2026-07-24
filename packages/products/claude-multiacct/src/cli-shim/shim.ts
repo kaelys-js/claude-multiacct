@@ -112,17 +112,18 @@ export type ShimDeps = {
 	 */
 	logSpawn?: (sessionUuid: string | undefined, tokenHash: string) => void;
 	/**
-	 * Resolve (creating if needed) a per-account config directory and return its
-	 * absolute path, or `undefined` to leave `CLAUDE_CONFIG_DIR` unset for this
-	 * swap. Bound at the entry-point to a real `mkdir -p` under
-	 * `~/.config/claude-multiacct/account-config/<accountUuid>/`; tests inject a
-	 * fake. When the dep is absent, the swap sets no `CLAUDE_CONFIG_DIR` and the
-	 * child reads the default `~/.claude.json` (legacy behaviour). The dir is
-	 * left empty on creation: Claude Code populates it with the correct
-	 * `oauthAccount` by fetching the profile for the swapped token, so each
-	 * account's reported identity stays isolated without any global write.
+	 * Build the per-session identity view of the config dir for the resolved
+	 * account and return its absolute path, or `undefined` to leave
+	 * `CLAUDE_CONFIG_DIR` unset (the native/primary account reads the shared
+	 * config directly). Bound at the entry-point to `buildSessionConfigDir`,
+	 * which copies the shared `~/.claude.json` with `oauthAccount` overridden to
+	 * this account and symlinks the transcript/session stores back to the shared
+	 * `~/.claude`, so the swapped session self-reports the swapped account while
+	 * its transcript stays in the one shared tree. Tests inject a fake. When the
+	 * dep is absent, the swap sets no `CLAUDE_CONFIG_DIR` and the child reads the
+	 * default config (legacy token-only behaviour).
 	 */
-	prepareConfigDir?: (accountUuid: AccountUuid) => Promise<string>;
+	prepareConfigDir?: (account: Account) => Promise<string | undefined>;
 };
 
 /** Result of one shim invocation. `swapped` tells the caller which path won. */
@@ -382,7 +383,7 @@ async function computeSwappedEnv(deps: ShimDeps): Promise<Record<string, string>
 	let configDir: string | undefined;
 	if (deps.prepareConfigDir !== undefined) {
 		try {
-			configDir = await deps.prepareConfigDir(account.uuid as AccountUuid);
+			configDir = await deps.prepareConfigDir(account);
 		} catch (error) {
 			deps.warn(
 				`cma-shim: prepareConfigDir failed for ${account.uuid} (${describe(error)}); swapping token without a per-account config dir`,

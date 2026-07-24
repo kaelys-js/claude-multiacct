@@ -20,7 +20,7 @@
  * @module
  */
 
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -31,6 +31,18 @@ import { join } from "node:path";
  */
 export function defaultSessionDir(): string {
 	return join(homedir(), ".claude-multiacct", "sessions");
+}
+
+/**
+ * Default parent dir the app materializes per CLI session as `<uuid>/`. The
+ * `<uuid>` here is the SAME namespace the shim keys on (the
+ * `--session-id`/`--resume` id the desktop launcher passes), so this dir's
+ * per-session mtime is the freshness signal the daemon ranks live sessions by.
+ *
+ * @returns {string} Absolute path — `~/.claude/session-env/`.
+ */
+export function defaultSessionEnvDir(): string {
+	return join(homedir(), ".claude", "session-env");
 }
 
 /**
@@ -157,4 +169,117 @@ export async function signalSwap(
 		await removeSessionPid(sessionUuid, dir);
 		return "stale";
 	}
+}
+
+/**
+ * Modification time (ms) of `path`, or `undefined` when it can't be stat'd
+ * (missing dir/entry). Swallows the error so the caller ranks by "no signal"
+ * rather than throwing on an absent session-env dir.
+ *
+ * @param {string} path - Filesystem path to stat.
+ * @returns {Promise<number | undefined>} `mtimeMs`, or `undefined` when absent.
+ */
+async function defaultStatMtime(path: string): Promise<number | undefined> {
+	try {
+		const stats = await stat(path);
+		return stats.mtimeMs;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * List a directory's entries, or `[]` when the dir is absent/unreadable. An
+ * empty sessions dir and a missing sessions dir are the same thing to the
+ * resolver: no live session.
+ *
+ * @param {string} dir - Directory to list.
+ * @returns {Promise<string[]>} Entry names, or `[]` on error.
+ */
+async function defaultReaddir(dir: string): Promise<string[]> {
+	try {
+		return await readdir(dir);
+	} catch {
+		return [];
+	}
+}
+
+/**
+ * Recency rank for a live session uuid: the session-env dir's mtime when it
+ * exists, else the pid file's own mtime. Newest-first ranking uses this.
+ *
+ * @param {string} uuid - Session uuid.
+ * @param {(path: string) => Promise<number | undefined>} statMtime - Injectable stat.
+ * @param {string} sessionPidDir - Parent dir of the pid files.
+ * @param {string} sessionEnvDir - Parent dir of the per-session env dirs.
+ * @returns {Promise<number>} Rank mtime (ms); `0` when neither is available.
+ */
+async function rankMtime(
+	uuid: string,
+	statMtime: (path: string) => Promise<number | undefined>,
+	sessionPidDir: string,
+	sessionEnvDir: string,
+): Promise<number> {
+	const envMtime = await statMtime(join(sessionEnvDir, uuid));
+	if (envMtime !== undefined) {
+		return envMtime;
+	}
+	return (await statMtime(sessionPidPath(uuid, sessionPidDir))) ?? 0;
+}
+
+/**
+ * Resolve the uuid of the newest LIVE registered CLI session — the session the
+ * shim is actually reading its account choice under. The account picker's tab
+ * uuid lives in a different namespace than the shim's key, so a UI pick can't
+ * bind directly; the daemon binds it here instead, by construction: it keeps
+ * only sessions whose registered pid is alive and returns the most recent,
+ * ranked by the app's per-session `~/.claude/session-env/<uuid>` mtime (that
+ * `<uuid>` IS the shim's key), falling back to the pid file's own mtime when
+ * the session-env dir is absent.
+ *
+ * Concurrency caveat: with two live sessions the picker can't say WHICH tab it
+ * came from, so "newest" is the best available guess; the direct
+ * `POST /choice/:sessionUuid` path stays for callers that already know the id.
+ *
+ * @param {(pid: number) => boolean} [alive] - Injectable liveness probe.
+ * @param {(path: string) => Promise<number | undefined>} [statMtime] - Injectable stat.
+ * @param {string} [sessionPidDir] - Parent dir of the pid files.
+ * @param {string} [sessionEnvDir] - Parent dir of the per-session env dirs.
+ * @param {(dir: string) => Promise<string[]>} [readdirFn] - Injectable dir list.
+ * @returns {Promise<string | undefined>} Newest live session uuid, or `undefined`.
+ */
+export async function resolveActiveSessionUuid(
+	alive: (pid: number) => boolean = isPidAlive,
+	statMtime: (path: string) => Promise<number | undefined> = defaultStatMtime,
+	sessionPidDir: string = defaultSessionDir(),
+	sessionEnvDir: string = defaultSessionEnvDir(),
+	readdirFn: (dir: string) => Promise<string[]> = defaultReaddir,
+): Promise<string | undefined> {
+	const entries = await readdirFn(sessionPidDir);
+	const uuids = entries
+		.filter((name) => name.endsWith(".pid"))
+		.map((name) => name.slice(0, -".pid".length));
+
+	// Resolve every candidate in parallel: keep the ones whose pid is alive,
+	// tagged with a recency rank. Sequential awaits would serialise a dir full
+	// of pid files for no reason — each probe is independent.
+	const probed = await Promise.all(
+		uuids.map(async (uuid) => {
+			const pid = await readSessionPid(uuid, sessionPidDir);
+			if (pid === undefined || !alive(pid)) {
+				return;
+			}
+			const rank = await rankMtime(uuid, statMtime, sessionPidDir, sessionEnvDir);
+			return { uuid, rank };
+		}),
+	);
+	const live = probed.filter(
+		(entry): entry is { uuid: string; rank: number } => entry !== undefined,
+	);
+	if (live.length === 0) {
+		return undefined;
+	}
+	live.sort((a, b) => b.rank - a.rank);
+	const [newest] = live;
+	return newest?.uuid;
 }

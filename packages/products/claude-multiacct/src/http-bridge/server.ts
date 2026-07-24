@@ -26,7 +26,10 @@ import { readFile, unlink } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { signalSwap as defaultSignalSwap } from "../cli-shim/session-pid.ts";
+import {
+	resolveActiveSessionUuid,
+	signalSwap as defaultSignalSwap,
+} from "../cli-shim/session-pid.ts";
 import type { Account } from "../domain/account.ts";
 import type { ChoiceStore } from "../ports.ts";
 import { atomicWriteJson } from "./atomic-json.ts";
@@ -98,6 +101,12 @@ export type StartOptions = {
 	 * session). Tests inject a spy so they never SIGHUP a live process.
 	 */
 	signalSwap?: SignalSwapFn;
+	/**
+	 * Resolve the active CLI session uuid for `POST /choice`. Defaults to
+	 * `cli-shim/session-pid.ts::resolveActiveSessionUuid` (newest live registered
+	 * session). Tests inject a spy so they never touch the real sessions dir.
+	 */
+	resolveActiveSession?: () => Promise<string | undefined>;
 	/** Structured log sink. Defaults to `console`. */
 	logger?: { log: (m: string) => void; warn: (m: string) => void };
 };
@@ -329,6 +338,11 @@ export async function start(opts: StartOptions): Promise<StartResult> {
 		port: 0, // filled after listen
 		secretRotatedAt,
 		signalSwap: opts.signalSwap ?? ((sessionUuid: string) => defaultSignalSwap(sessionUuid)),
+		/* c8 ignore next 2 -- the real resolver enumerates the live sessions dir and
+		   could SIGHUP a real session, so it is never invoked from a unit test;
+		   route tests inject a spy. Default wiring is exercised in production only. */
+		resolveActiveSession:
+			opts.resolveActiveSession ?? ((): Promise<string | undefined> => resolveActiveSessionUuid()),
 		logger: opts.logger ?? {
 			// eslint-disable-next-line no-console -- daemon runs under launchd; stdout/stderr are its log
 			log: (m: string) => console.log(m),

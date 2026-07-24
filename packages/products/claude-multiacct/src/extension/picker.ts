@@ -819,14 +819,20 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 		renderItems();
 		opts.onChoice?.(uuid);
 		closeMenu();
-		// Only persist the choice when we're inside a real session
-		// (`/new` and other pre-session URLs have no session uuid). The
-		// visual switch above happens either way so the user gets feedback
-		// on the click.
+		// Only persist when the tab is inside a Code session (`/new` and other
+		// pre-session URLs carry no session uuid). The visual switch above happens
+		// either way so the click always gives feedback.
+		//
+		// The uuid this tab exposes is the claude.ai SESSION id, a different
+		// namespace from the CLI `--session-id` the shim keys on, so it can't be
+		// used to bind the choice. Post to the daemon's active-session endpoint
+		// instead: the daemon resolves the live registered CLI session (the shim's
+		// own key) and writes the choice there, so the pick and the shim's lookup
+		// agree by construction.
 		if (opts.sessionUuid === undefined) {
 			return;
 		}
-		const result: BridgeResult<unknown> = await opts.client.post(`/choice/${opts.sessionUuid}`, {
+		const result: BridgeResult<unknown> = await opts.client.post("/choice", {
 			accountUuid: uuid,
 		});
 		if (!result.ok) {

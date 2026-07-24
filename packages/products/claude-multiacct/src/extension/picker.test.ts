@@ -6,7 +6,7 @@
  *
  *  - Button label mirrors the current pick (or, before any pick, the first
  *    account as a hint, or the "…" fallback when the pool is empty).
- *  - Clicking a menu item POSTs the choice to `/choice/<sessionUuid>` and
+ *  - Clicking a menu item POSTs the choice to the daemon's `/choice` active-session endpoint and
  *    calls `onChoice`; a POST failure reverts the optimistic label.
  *  - Menu open/close toggles on the button, closes on outside click.
  *  - `destroy()` removes both the button and the portal menu from the doc.
@@ -200,14 +200,18 @@ describe("mountPicker", () => {
 		expect(menu.hidden).toBe(true);
 	});
 
-	it("clicking a menu item POSTs the choice with the session uuid and body", async () => {
+	it("clicking a menu item POSTs the choice to the active-session endpoint (not the tab uuid)", async () => {
+		// The tab uuid is the claude.ai session id, a different namespace from the
+		// CLI session id the shim keys on. Binding must go through the daemon's
+		// `/choice` active-session resolver, never `/choice/<tab-uuid>` — asserting
+		// the bare `/choice` path is what keeps the namespaces from drifting apart.
 		const client = mockClient();
 		mountPicker({ host: body, client, sessionUuid: SESSION, doc, accounts: ACCOUNTS });
 		getButton(doc).click();
 		const items = getItems(doc);
 		items[1]?.click();
 		await Promise.resolve();
-		expect(client.post).toHaveBeenCalledWith(`/choice/${SESSION}`, {
+		expect(client.post).toHaveBeenCalledWith("/choice", {
 			accountUuid: ACCOUNTS[1]?.uuid,
 		});
 	});

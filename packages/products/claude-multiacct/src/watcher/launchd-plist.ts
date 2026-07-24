@@ -5,11 +5,16 @@
  * The plist is fed to `launchctl bootstrap gui/<uid> <plist>` by
  * `agent-installer.ts`. Its shape is load-bearing on the runtime contract:
  *
- *   - `WatchPaths` — launchd re-fires the agent whenever anything under this
- *     path changes; we watch the claude-code parent so a new sibling triggers
- *     a re-apply pass.
- *   - `RunAtLoad=false`, `KeepAlive=false` — the watcher is fire-and-forget,
- *     not a daemon. launchd only launches it on a `WatchPaths` event.
+ *   - `RunAtLoad=true`, `KeepAlive=true` — the watcher is a resident daemon.
+ *     It boots at login and launchd restarts it if it dies. The process holds
+ *     its own recursive `fs.watch` on the claude-code parent and re-plants the
+ *     shim synchronously the instant Claude rewrites the `claude` binary, which
+ *     is the race a spawned-per-event agent lost (it woke ~13-19s after launch,
+ *     well after the session already started on the vanilla binary).
+ *   - `WatchPaths` — a coarse backup. launchd still relaunches the process on a
+ *     change under this path, so if the resident watch ever misses an event or
+ *     the process crashed between the fire and the restart, the parent-dir
+ *     change re-loads it and a catch-up pass runs.
  *   - `EnvironmentVariables → CLAUDE_MULTIACCT_ENABLE_SHIM=1` — launchd's env
  *     is empty by default, so the flag must be baked in. Without it, the
  *     watcher would run under launchd but still refuse to install (flag off),
@@ -78,9 +83,9 @@ ${args}
 \t\t<string>${xmlEscape(input.watchedPath)}</string>
 \t</array>
 \t<key>RunAtLoad</key>
-\t<false/>
+\t<true/>
 \t<key>KeepAlive</key>
-\t<false/>
+\t<true/>
 \t<key>StandardOutPath</key>
 \t<string>${xmlEscape(input.stdoutPath)}</string>
 \t<key>StandardErrorPath</key>
