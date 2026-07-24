@@ -14,11 +14,33 @@
  * whenever the picker fires `onChoice`, and we re-render if the menu is
  * currently open.
  *
+ * ## The context-window popup (investigated 2026-07-24)
+ *
+ * Users see a "context-window" popup to the LEFT of our account picker in the
+ * Code-tab bottom bar that does not change when the account is switched. It is
+ * NOT ours. Our extension renders exactly two surfaces, and neither sits there:
+ * the picker button + dropdown next to the model selector (`picker.ts`, marked
+ * `data-cma-picker`), and this per-account usage section injected INTO Claude's
+ * own avatar user-menu popup (keyed off `[data-testid="user-menu-header"]`).
+ * There is no cma-authored element to the left of the picker. The bottom-bar
+ * context-window / token indicator is Claude.app's own native UI, and its own
+ * usage section here already re-renders on every switch (`notifyActive` →
+ * `renderIfOpen`), so a popup that never updates cannot be this code.
+ *
+ * That native indicator reflects the account Claude.app is SIGNED INTO plus the
+ * conversation's own token budget. Our per-session switch swaps only the CLI
+ * child process's OAuth token + `CLAUDE_CONFIG_DIR`; it never re-authenticates
+ * the desktop app, so the app's own chip structurally cannot follow the switch,
+ * and the content script cannot rewrite it with account-correct numbers it has
+ * no trustworthy source for. The honest, achievable behavior is what this file
+ * already does: our OWN per-account usage rows track the active account. We do
+ * not fake an update on the app's element.
+ *
  * @module
  */
 
 import type { BridgeClient } from "./bridge-client.ts";
-import type { PickerAccount } from "./picker.ts";
+import { accountDisplayLabel, type PickerAccount } from "./picker.ts";
 
 export type UsageMountOptions = {
 	doc: Document;
@@ -249,7 +271,7 @@ export function mountUsage(opts: UsageMountOptions): UsageHandle {
 			label.style.overflow = "hidden";
 			label.style.textOverflow = "ellipsis";
 			label.style.whiteSpace = "nowrap";
-			label.textContent = account.label;
+			label.textContent = accountDisplayLabel(account);
 			row.append(label);
 
 			const detail = detailLabel(usageByAccount.get(account.uuid));

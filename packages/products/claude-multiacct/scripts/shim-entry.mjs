@@ -32,6 +32,7 @@ import { buildSessionConfigDir } from "./src/cli-shim/session-config-dir.ts";
 import { removeSessionPid, writeSessionPid } from "./src/cli-shim/session-pid.ts";
 import { readRegistry } from "./src/cli-shim/registry-store.ts";
 import { FsChoiceStore, defaultChoiceStoreDir } from "./src/cli-shim/choice-store.ts";
+import { FsHostChoiceStore, defaultHostChoiceStoreDir } from "./src/cli-shim/host-choice-store.ts";
 import { FileTokenStore } from "./src/oauth/file-token-store.ts";
 
 if (process.env.CMA_SHIM_SELFTEST === "1") {
@@ -41,6 +42,12 @@ if (process.env.CMA_SHIM_SELFTEST === "1") {
 
 const binDir = dirname(fileURLToPath(import.meta.url));
 const choiceStore = new FsChoiceStore(defaultChoiceStoreDir());
+// Per-conversation choice store keyed on the app's stable host session id. This
+// is what lets a chosen account survive a Claude.app restart: the CLI uuid is
+// minted fresh on the post-restart spawn (so its choiceStore entry is gone), but
+// the host session id is the app's durable conversation handle, so the shim
+// re-resolves the account through here.
+const hostChoiceStore = new FsHostChoiceStore(defaultHostChoiceStoreDir());
 // Read tokens from the SAME encrypted file store the daemon writes. The shim
 // runs in the GUI session, but the daemon (keychain-blind under
 // SessionCreate=true) can only write the file store — so the shim must read it
@@ -59,6 +66,10 @@ const result = await runShim({
 	env: process.env,
 	binDir,
 	choiceStore,
+	hostChoiceStore,
+	// The app's stable conversation id; absent for non-app spawns, which leaves
+	// the restart-survival path inert (classic CLI-uuid behaviour).
+	hostSessionId: process.env.CLAUDE_CODE_HOST_SESSION_ID,
 	readRegistry: () => readRegistry(),
 	tokenStore,
 	spawnSync,

@@ -21,7 +21,7 @@
 import { JSDOM } from "jsdom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BridgeClient, BridgeErrorKind, BridgeResult } from "./bridge-client.ts";
-import { mountPicker, type PickerAccount } from "./picker.ts";
+import { accountDisplayLabel, mountPicker, type PickerAccount } from "./picker.ts";
 
 type GetFn = (path: string) => Promise<BridgeResult<unknown>>;
 type PostFn = (path: string, body: unknown) => Promise<BridgeResult<unknown>>;
@@ -92,6 +92,12 @@ function getAddRow(doc: Document): HTMLElement {
 
 function getRemoveButtons(doc: Document): HTMLElement[] {
 	return [...getMenu(doc).querySelectorAll<HTMLElement>("[data-cma-remove]")];
+}
+
+// The rendered name of a menu row: the label is the second <span> (after the
+// checkmark slot). Used to assert the display transform (native → "Primary").
+function rowLabel(row: HTMLElement): string {
+	return row.querySelectorAll("span")[1]?.textContent ?? "";
 }
 
 function q(doc: Document, sel: string): HTMLElement | null {
@@ -1048,7 +1054,10 @@ describe("mountPicker", () => {
 			messages.push(m);
 			return false; // decline — we only care about the prompt text
 		});
-		// Alice is the native primary; removing Bob must name Alice as the target.
+		// Alice is the native primary; removing Bob must name the target account.
+		// The native account renders as "Primary" everywhere it is shown, the
+		// confirmation included, so the user reads the same name they see in the
+		// picker rather than the incidental registry label ("Alice").
 		const withNative: PickerAccount[] = [
 			{ ...ACCOUNTS[0]!, source: "native" },
 			{ ...ACCOUNTS[1]!, source: "explicit" },
@@ -1058,7 +1067,7 @@ describe("mountPicker", () => {
 		getRemoveButtons(doc)[0]!.click(); // the sole removable × is Bob's
 		await tick();
 		expect(messages[0]).toContain('Sessions using "Bob"');
-		expect(messages[0]).toContain('switch to "Alice"');
+		expect(messages[0]).toContain('switch to "Primary"');
 	});
 
 	it("the native account's row shows NO × at all (not even a disabled one); only the explicit row is removable", () => {
@@ -1079,6 +1088,44 @@ describe("mountPicker", () => {
 		// The native row (first menuitem) contains no <button> child at all.
 		const nativeRow = getItems(doc)[0]!;
 		expect(nativeRow.querySelector("button")).toBeNull();
+	});
+
+	it('renders the native account as "Primary" and a non-native account as its own label', () => {
+		// The name a native account shows must NOT be its incidental registry
+		// label (an email, "icloud"): whichever account Claude.app is signed into
+		// is the pool's anchor and always reads "Primary". A non-native account
+		// keeps its own label. This is the display contract Item 1 pins.
+		const client = mockClientWithDel();
+		const accounts: PickerAccount[] = [
+			{ ...ACCOUNTS[0]!, label: "icloud", source: "native" },
+			{ ...ACCOUNTS[1]!, source: "explicit" },
+		];
+		// activeUuid = the native account, so the button reflects it too.
+		mountPicker({
+			host: body,
+			client,
+			sessionUuid: SESSION,
+			doc,
+			accounts,
+			activeUuid: accounts[0]!.uuid,
+		});
+		getButton(doc).click();
+		const rows = getItems(doc);
+		// Row labels: the label is the second <span> (after the checkmark slot).
+		expect(rowLabel(rows[0]!)).toBe("Primary");
+		// The registry label never leaks into the rendered name.
+		expect(rowLabel(rows[0]!)).not.toContain("icloud");
+		expect(rowLabel(rows[1]!)).toBe("Bob");
+		// The button (active = native) shows "Primary", not the registry label.
+		expect(getButton(doc).textContent).toBe("Primary");
+	});
+
+	it("accountDisplayLabel: native → Primary, explicit/absent → own label", () => {
+		// Unit-pin the pure transform so the mapping cannot silently invert.
+		expect(accountDisplayLabel({ uuid: "u", label: "icloud", source: "native" })).toBe("Primary");
+		expect(accountDisplayLabel({ uuid: "u", label: "Work", source: "explicit" })).toBe("Work");
+		// Absent source is the domain default `explicit`, never the native anchor.
+		expect(accountDisplayLabel({ uuid: "u", label: "Work" })).toBe("Work");
 	});
 
 	it("remove aborts (no DELETE) when the confirm is declined", async () => {

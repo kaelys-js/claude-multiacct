@@ -56,6 +56,23 @@ export type PickerAccount = {
 	source?: "native" | "explicit";
 };
 
+/**
+ * Display name for an account. The native account — the identity Claude.app is
+ * signed into — always renders as "Primary", whichever account happens to be
+ * native, rather than exposing its incidental registry label (`icloud`, an
+ * email). Every other account shows its own label. This is a DISPLAY-only
+ * transform: the registry label and the uuid-keyed config/token/choice stores
+ * are untouched, so nothing that keys on identity changes. Absent `source`
+ * means `explicit` (the domain's default), so a pre-`source` account is never
+ * mislabeled "Primary".
+ *
+ * @param {PickerAccount} account - The account whose row/button name is rendered.
+ * @returns {string} `"Primary"` for the native account, else its own label.
+ */
+export function accountDisplayLabel(account: PickerAccount): string {
+	return account.source === "native" ? "Primary" : account.label;
+}
+
 export type MountPickerOptions = {
 	host: Element;
 	client: BridgeClient;
@@ -301,11 +318,12 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 	function labelFor(uuid: string | undefined): string {
 		const found = accounts.find((a) => a.uuid === uuid);
 		if (found !== undefined) {
-			return found.label;
+			return accountDisplayLabel(found);
 		}
 		// No current pick yet: fall back to the first account in pool order,
 		// which mirrors the runtime active-account fallback in the domain.
-		return accounts[0]?.label ?? "…";
+		const [first] = accounts;
+		return first === undefined ? "…" : accountDisplayLabel(first);
 	}
 
 	function refreshButton(): void {
@@ -360,7 +378,7 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 			label.style.overflow = "hidden";
 			label.style.textOverflow = "ellipsis";
 			label.style.whiteSpace = "nowrap";
-			label.textContent = account.label;
+			label.textContent = accountDisplayLabel(account);
 			item.append(label);
 
 			// The native account is the pool anchor Claude.app is signed into; the
@@ -993,7 +1011,7 @@ export function mountPicker(opts: MountPickerOptions): PickerHandle {
 	function primaryLabelExcept(exceptUuid: string): string {
 		const native = accounts.find((a) => a.source === "native" && a.uuid !== exceptUuid);
 		if (native !== undefined) {
-			return native.label;
+			return accountDisplayLabel(native);
 		}
 		const other = accounts.find((a) => a.uuid !== exceptUuid);
 		return other?.label ?? "the primary account";
