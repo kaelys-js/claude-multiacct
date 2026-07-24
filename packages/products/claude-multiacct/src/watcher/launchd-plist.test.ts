@@ -44,9 +44,9 @@ describe("renderWatcherPlist", () => {
 \t\t<string>/Users/alice/Library/Application Support/Claude/claude-code</string>
 \t</array>
 \t<key>RunAtLoad</key>
-\t<false/>
+\t<true/>
 \t<key>KeepAlive</key>
-\t<false/>
+\t<true/>
 \t<key>StandardOutPath</key>
 \t<string>/tmp/cma-watcher.out</string>
 \t<key>StandardErrorPath</key>

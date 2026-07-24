@@ -1,10 +1,13 @@
 /**
  * `@foundation/claude-multiacct` — watcher runtime entry.
  *
- * `runWatcher` is the fire-and-forget body that a launchd `WatchPaths` agent
- * invokes when Claude Desktop writes a new sibling into
- * `~/Library/Application Support/Claude/claude-code/`. It stitches
- * `scan → reconcile → install` and returns a summary the caller may log.
+ * `runWatcher` is the idempotent body of a single pass: it stitches
+ * `scan → reconcile → install` over the claude-code siblings under
+ * `~/Library/Application Support/Claude/claude-code/` and returns a summary the
+ * caller may log. `watchResident` wraps it in a resident daemon loop that holds
+ * one recursive `fs.watch` on that parent and fires a debounced pass on every
+ * change, re-planting the shim sub-second instead of waiting for launchd to
+ * cold-spawn a fresh agent after the session already started.
  *
  * A Claude auto-update is the exact event this agent reacts to: the updated app
  * drops a new `claude-code/<version>/` sibling (which fires `WatchPaths`) AND
@@ -128,6 +131,97 @@ export async function runWatcher(opts: RunWatcherOpts): Promise<WatcherSummary> 
 	// so it cannot mask or abort the CLI-shim outcome above.
 	summary.extension = await healExtension(ensureExtension, log, flag);
 	return summary;
+}
+
+/** A live recursive watch. `close()` detaches it. Matches `fs.watch`'s handle. */
+export type ResidentWatch = { close: () => void };
+
+/**
+ * Deps for `watchResident`. Extends `RunWatcherOpts` with the ports the
+ * resident loop needs, all injectable so the loop is unit-testable without a
+ * real filesystem or wall-clock:
+ *
+ *   - `watch` — register ONE recursive watch on a path; each change calls
+ *     `onEvent`. Runtime binds `fs.watch(path, { recursive: true }, ...)`.
+ *   - `setTimer` / `clearTimer` — schedule and cancel the debounce. Default to
+ *     `setTimeout` / `clearTimeout` when omitted.
+ *   - `debounceMs` — collapse a burst of change events into one pass. Default
+ *     150ms. Claude's relaunch writes several files in quick succession (and our
+ *     own rename+plant fires more), so debouncing keeps that to a single pass.
+ */
+export type ResidentWatchDeps = RunWatcherOpts & {
+	watch: (path: string, onEvent: () => void) => ResidentWatch;
+	setTimer?: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
+	clearTimer?: (t: ReturnType<typeof setTimeout>) => void;
+	debounceMs?: number;
+};
+
+/** Handle for a running resident watch. `close()` tears it fully down. */
+export type ResidentWatchHandle = { close: () => void };
+
+const DEFAULT_DEBOUNCE_MS = 150;
+
+/**
+ * Hold a resident recursive watch on the claude-code parent and re-plant the
+ * shim the instant Claude rewrites the `claude` binary.
+ *
+ * This replaces the spawned-per-event model that lost the launch race: the
+ * daemon runs an initial catch-up pass on boot, then reacts to every change
+ * under `parentDir` with a debounced `runWatcher`. Because `runWatcher` (via
+ * `reconcile`) skips already-installed dirs, the pass is idempotent, so the
+ * writes OUR OWN plant triggers collapse into one no-op pass rather than an
+ * install loop.
+ *
+ * The event path never throws: a failing pass is logged through `opts.log`,
+ * not propagated, so one bad reconcile can't kill the resident process (launchd
+ * would restart it, but a silent live loop is worse than a logged miss).
+ *
+ * @param {ResidentWatchDeps} deps - Watcher opts plus the watch/timer ports.
+ * @returns {ResidentWatchHandle} Handle whose `close()` closes the watch and
+ *   cancels any pending debounced pass.
+ */
+export function watchResident(deps: ResidentWatchDeps): ResidentWatchHandle {
+	// Pin the token type: the ambient `setTimeout` merges the DOM (`number`) and
+	// Node (`Timeout`) overloads, so annotate the bindings to the single return
+	// the injected port declares and keep `pending` assignable from both.
+	type TimerToken = ReturnType<typeof setTimeout>;
+	const setTimer: (fn: () => void, ms: number) => TimerToken = deps.setTimer ?? setTimeout;
+	const clearTimer: (t: TimerToken) => void = deps.clearTimer ?? clearTimeout;
+	const debounceMs = deps.debounceMs ?? DEFAULT_DEBOUNCE_MS;
+	// `runWatcher` already catches per-dir and extension failures; this guard
+	// covers a throw from the scan/reconcile prelude so the event path is total.
+	const runPass = async (): Promise<void> => {
+		try {
+			await runWatcher(deps);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			deps.log(`watch pass failed: ${message}`);
+		}
+	};
+	let pending: TimerToken | undefined;
+	// Fire-and-forget: the initial catch-up runs, errors land in the log, and we
+	// don't block registering the watch on it.
+	// eslint-disable-next-line typescript/no-floating-promises -- fire-and-forget; runPass catches its own errors
+	runPass();
+	const watch = deps.watch(deps.parentDir, () => {
+		if (pending !== undefined) {
+			clearTimer(pending);
+		}
+		pending = setTimer(() => {
+			pending = undefined;
+			// eslint-disable-next-line typescript/no-floating-promises -- fire-and-forget; runPass catches its own errors
+			runPass();
+		}, debounceMs);
+	});
+	return {
+		close: () => {
+			if (pending !== undefined) {
+				clearTimer(pending);
+				pending = undefined;
+			}
+			watch.close();
+		},
+	};
 }
 
 /**

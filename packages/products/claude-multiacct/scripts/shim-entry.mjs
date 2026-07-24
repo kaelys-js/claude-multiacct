@@ -22,16 +22,16 @@ import { chmodSync } from "node:fs";
 export const shimEntryContents = `
 import { spawn, spawnSync } from "node:child_process";
 import { appendFileSync, mkdirSync, openSync, closeSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PACKAGE_VERSION } from "./src/index.ts";
 import { runShim } from "./src/cli-shim/shim.ts";
+import { buildSessionConfigDir } from "./src/cli-shim/session-config-dir.ts";
 import { removeSessionPid, writeSessionPid } from "./src/cli-shim/session-pid.ts";
 import { readRegistry } from "./src/cli-shim/registry-store.ts";
 import { FsChoiceStore, defaultChoiceStoreDir } from "./src/cli-shim/choice-store.ts";
-import { FileTokenStore, defaultRoot } from "./src/oauth/file-token-store.ts";
+import { FileTokenStore } from "./src/oauth/file-token-store.ts";
 
 if (process.env.CMA_SHIM_SELFTEST === "1") {
 	process.stdout.write(\`cma-shim selftest OK \${PACKAGE_VERSION}\\n\`);
@@ -48,14 +48,12 @@ const choiceStore = new FsChoiceStore(defaultChoiceStoreDir());
 const tokenStore = new FileTokenStore();
 
 const result = await runShim({
-	prepareConfigDir: async (accountUuid) => {
-		// One config dir per account, so a swapped session reads and populates
-		// its OWN identity (Claude Code writes oauthAccount there by fetching the
-		// profile for the swapped token) instead of the shared ~/.claude.json.
-		const dir = join(defaultRoot(), "account-config", accountUuid);
-		await mkdir(dir, { recursive: true, mode: 0o700 });
-		return dir;
-	},
+	// Per-session identity view: a config dir whose .claude.json copies the shared
+	// one with oauthAccount overridden to the swapped account, and whose
+	// transcript/session stores symlink back to the shared ~/.claude. The model
+	// self-reports the swapped account while its transcript stays in the one
+	// shared tree. Native returns undefined (reads the shared config directly).
+	prepareConfigDir: (account) => buildSessionConfigDir(account),
 	argv: process.argv,
 	env: process.env,
 	binDir,

@@ -26,6 +26,7 @@ const pkgRoot = resolve(import.meta.dirname, "..", "..");
 const entryContents = `
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { watch as fsWatch } from "node:fs";
 import {
 	access,
 	copyFile,
@@ -38,7 +39,7 @@ import {
 	writeFile,
 } from "node:fs/promises";
 import { PACKAGE_VERSION } from "./src/index.ts";
-import { runWatcher } from "./src/watcher/watcher.ts";
+import { watchResident } from "./src/watcher/watcher.ts";
 import { nodeFsPort } from "./src/watcher/fs-port.ts";
 import { install as installShim, FLAG_ENV_VAR, FLAG_ENABLED_VALUE } from "./src/cli-shim/installer.ts";
 import {
@@ -86,7 +87,7 @@ const ensureExtension = async () => {
 	});
 };
 
-const summary = await runWatcher({
+watchResident({
 	parentDir,
 	fs: nodeFsPort(),
 	install: async (macosDir) => {
@@ -95,9 +96,11 @@ const summary = await runWatcher({
 	ensureExtension,
 	log: (m) => { console.error(m); },
 	flag,
+	watch: (path, onEvent) => {
+		const w = fsWatch(path, { recursive: true }, () => onEvent());
+		return { close: () => { w.close(); } };
+	},
 });
-
-process.stdout.write(\`cma-watcher: installed=\${summary.installed.length} failed=\${summary.failed.length} skipped=\${summary.skipped.length} extension=\${summary.extension.status}\\n\`);
 `;
 
 describe("build-watcher: bundled dist/watcher.js is a runnable node script", () => {
