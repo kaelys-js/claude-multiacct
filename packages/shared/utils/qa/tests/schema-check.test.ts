@@ -259,6 +259,42 @@ describe("schema-check", () => {
 		expect(`${out}${err}`).toContain("bad.json");
 	});
 
+	it("fails a real violation whose failing VALUE contains a download-failure signature (spoof regression, SR8 fail-closed)", async () => {
+		// The security regression this change closes. A config that GENUINELY violates
+		// its schema, where the offending value happens to contain a network-error
+		// phrase ("Max retries exceeded"), must still FAIL (exit 1). It must never be
+		// mistaken for an offline download and warned-and-passed.
+		//
+		// check-jsonschema echoes the offending INSTANCE value on STDOUT, while a real
+		// download failure's traceback lands on STDERR. Since #70 keys warn-unreachable
+		// on the signatures alone (no `isRemote` guard), the old `${stdout}${stderr}`
+		// match let the stdout-echoed phrase spoof the offline path for ANY config, so
+		// an invalid file silently passed the gate. Matching STDERR only closes it
+		// while keeping the offline warn-and-pass resilience (the other tests here pin
+		// that half). Adversarial: revert `r.stderr` back to `${r.stdout}${r.stderr}`
+		// and this test flips red — the stdout-echoed signature re-routes the genuine
+		// failure to warn-unreachable (exit 0).
+		const enumSchema = JSON.stringify({
+			$schema: "http://json-schema.org/draft-07/schema#",
+			type: "object",
+			properties: { kind: { enum: ["a", "b"] } },
+			required: ["kind"],
+		});
+		const root = fixture([
+			{ path: "schema.json", content: enumSchema },
+			{
+				path: "evil.json",
+				content: '{"$schema":"./schema.json","kind":"Max retries exceeded"}\n',
+			},
+		]);
+		const { code, out, err } = await runCheck(root);
+		expect(code).toBe(1);
+		const combined = `${out}${err}`;
+		// The offending value is surfaced (genuine failure), not swallowed as offline.
+		expect(combined).toContain("evil.json");
+		expect(combined).not.toContain("unreachable");
+	});
+
 	it("fails the coverage gate when a config file declares NO schema marker", async () => {
 		// `orphan.yaml` is a gate-eligible config file with no marker and no exclusion
 		// → missingSchemaRefs flags it → hard fail (exit 1), listing it by name.
