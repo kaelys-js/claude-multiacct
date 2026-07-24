@@ -347,7 +347,6 @@ function validate(d: Discovered): Outcome {
 	if (cleanup !== null) {
 		rmSync(cleanup, { recursive: true, force: true });
 	}
-	const combined = `${r.stdout}${r.stderr}`;
 	if (r.status === 0) {
 		process.stdout.write(r.stdout);
 		return "pass";
@@ -360,7 +359,17 @@ function validate(d: Discovered): Outcome {
 	// these only for network/download errors, while a missing LOCAL schema raises
 	// `FileNotFoundError` and a real schema violation raises validation output —
 	// so a genuine failure never masquerades as unreachable.
-	if (DOWNLOAD_FAILURE_SIGNATURES.some((s) => combined.includes(s))) {
+	//
+	// Match STDERR ONLY, never a combined stdout+stderr string. check-jsonschema
+	// writes the unreachable-schema traceback (FailedDownloadError, ConnectionError,
+	// "Max retries exceeded", …) to stderr, but echoes a GENUINE validation
+	// failure's offending instance VALUE to stdout. A combined match let a config
+	// whose failing value merely contained a signature phrase (e.g.
+	// `{"kind":"Max retries exceeded"}` against an enum) be mis-read as offline and
+	// warned-and-passed — the gate would swallow an invalid config. Download errors
+	// are stderr-exclusive on check-jsonschema 0.37.4 (top-level AND transitive-$ref
+	// outages alike), so stderr-only keeps the offline resilience and closes the spoof.
+	if (DOWNLOAD_FAILURE_SIGNATURES.some((s) => r.stderr.includes(s))) {
 		process.stderr.write(
 			`WARN: ${d.file} — schema ${d.ref} (or a schema it references) unreachable (offline?); skipping validation.\n`,
 		);
