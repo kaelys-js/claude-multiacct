@@ -286,6 +286,33 @@ describe("schema-check", () => {
 		expect(err).toContain("unreachable");
 	});
 
+	it("WARNS (not fails) when a LOCAL schema transitively $refs an unreachable REMOTE schema", async () => {
+		// The regression case behind the pre-push offline hard-fail: a config file
+		// declares a LOCAL vendored schema (relative ref), but that schema `$ref`s a
+		// REMOTE one — exactly the shape of `.schemas/markdownlint-cli2.json`, which
+		// pulls a `raw.githubusercontent.com` `$ref` when check-jsonschema builds the
+		// validator. Offline that fetch fails with a download signature. The outcome
+		// must be `warn-unreachable`, NOT `fail`: keying only on `isRemote(topLevelRef)`
+		// (the old guard) mislabelled this a hard failure and forced `--no-verify`.
+		const root = fixture([
+			// Local schema whose $ref targets an unresolvable host. check-jsonschema
+			// resolves the $ref while building the validator → download failure. No
+			// top-level `$schema` marker, so discovery skips the schema file itself and
+			// the test stays focused on `cfg.json`'s local→remote-$ref path.
+			{
+				path: "local.schema.json",
+				content: JSON.stringify({
+					$ref: "https://nonexistent.invalid.example/remote-sub.json",
+				}),
+			},
+			// Config file declares the LOCAL schema by relative path (isRemote → false).
+			{ path: "cfg.json", content: '{"$schema":"./local.schema.json","n":1}\n' },
+		]);
+		const { code, err } = await runCheck(root);
+		expect(code).toBe(0);
+		expect(err).toContain("unreachable");
+	});
+
 	it("treats a tracked-but-deleted config file as compliant/refless (unreadable guards)", async () => {
 		// `git ls-files` lists a committed file even after it is deleted on disk; both
 		// refForFile (discovery) and lacksSchemaMarker (coverage gate) then hit their
