@@ -70,9 +70,19 @@ describe("corsPreflight", () => {
 		const res = corsPreflight("https://claude.ai");
 		expect(res.status).toBe(204);
 		expect(res.headers["access-control-allow-origin"]).toBe("https://claude.ai");
-		expect(res.headers["access-control-allow-methods"]).toBe("GET,POST,OPTIONS");
+		expect(res.headers["access-control-allow-methods"]).toBe("GET,POST,DELETE,OPTIONS");
 		expect(res.headers["access-control-allow-headers"]).toContain(BRIDGE_SECRET_HEADER);
 		expect(res.headers["access-control-allow-headers"]).toContain("content-type");
+	});
+	it("authorizes DELETE in the preflight so the picker's Remove account reaches the daemon", () => {
+		// Regression: the DELETE /accounts/:uuid route (routes.ts) exists and
+		// works, but the browser sends a CORS preflight before it and blocks
+		// the real request unless DELETE is in access-control-allow-methods.
+		// With "GET,POST,OPTIONS" the Remove-account button silently did
+		// nothing — reproduced live on the mini. This asserts the method is
+		// listed; it flips RED on the old value and GREEN on the fix.
+		const res = corsPreflight("https://claude.ai");
+		expect(res.headers["access-control-allow-methods"]).toContain("DELETE");
 	});
 	it("acknowledges Chrome Private Network Access (Chrome 104+) so an HTTPS page can reach 127.0.0.1", () => {
 		// Adversarial: drop `access-control-allow-private-network` from
