@@ -350,3 +350,33 @@ describe("createLoginManager — cancel + sweep", () => {
 		}
 	});
 });
+
+describe("createLoginManager — passes the token bag to register", () => {
+	it("forwards refreshToken + expiresAt from the exchanged tokens to register", async () => {
+		let captured: { refreshToken?: string; expiresAt?: string } | undefined;
+		const mgr = createLoginManager(
+			happyDeps({
+				exchangeCode: () =>
+					Promise.resolve({
+						ok: true,
+						tokens: {
+							accessToken: "tok",
+							refreshToken: "rt",
+							expiresAt: "2099-01-01T00:00:00.000Z",
+							scopes: [],
+						},
+					}),
+				register: (args) => {
+					captured = { refreshToken: args.refreshToken, expiresAt: args.expiresAt };
+					return Promise.resolve({ ok: true, account: account(), updated: false });
+				},
+			}),
+		);
+		const { loginId, authorizeUrl } = await mgr.start();
+		await mgr.complete(loginId, `code#${stateOf(authorizeUrl)}`);
+		expect(captured).toStrictEqual({
+			refreshToken: "rt",
+			expiresAt: "2099-01-01T00:00:00.000Z",
+		});
+	});
+});

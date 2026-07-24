@@ -95,6 +95,8 @@ describe("migrateKeychainTokensToFile", () => {
 		const failingStore: MutableTokenStore = {
 			get: () => Promise.resolve(undefined),
 			put: () => Promise.reject(new Error("disk full")),
+			getRecord: () => Promise.resolve(undefined),
+			putRecord: () => Promise.reject(new Error("disk full")),
 			delete: () => Promise.resolve(),
 		};
 		const logger = noopLogger();
@@ -113,6 +115,9 @@ describe("migrateKeychainTokensToFile", () => {
 			get: () => Promise.resolve(undefined),
 			// eslint-disable-next-line prefer-promise-reject-errors -- deliberately a non-Error to exercise the String(error) branch
 			put: () => Promise.reject("bare-string-fault"),
+			getRecord: () => Promise.resolve(undefined),
+			// eslint-disable-next-line prefer-promise-reject-errors -- mirror of put, unused here
+			putRecord: () => Promise.reject("bare-string-fault"),
 			delete: () => Promise.resolve(),
 		};
 		const logger = noopLogger();

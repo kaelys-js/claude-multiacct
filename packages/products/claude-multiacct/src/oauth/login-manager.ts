@@ -70,6 +70,8 @@ export type FetchProfileFn = (token: string) => Promise<ProfileResult>;
 export type RegisterFn = (args: {
 	profile: AccountProfile;
 	token: string;
+	refreshToken?: string;
+	expiresAt?: string;
 }) => Promise<RegisterResult>;
 
 /** Injected deps for {@link createLoginManager}. */
@@ -228,6 +230,8 @@ export function createLoginManager(deps: LoginManagerDeps): LoginManager {
 		const registered = await deps.register({
 			profile: profile.profile,
 			token: exchanged.tokens.accessToken,
+			refreshToken: exchanged.tokens.refreshToken,
+			expiresAt: exchanged.tokens.expiresAt,
 		});
 		if (!registered.ok) {
 			session.status = "error";

@@ -7,11 +7,29 @@
  *
  *   - `install(cliDir, {shimSourcePath?, force?, overrideFlag?})` — renames
  *     the real CLI to `claude.real`, copies `shimSourcePath` into place as
- *     `claude`, chmods +x, ad-hoc codesigns. Idempotent: a second `install`
- *     on the same dir without `force` is a no-op. When `shimSourcePath` is
- *     omitted, the installer resolves to the bundled shim at
- *     `packages/products/claude-multiacct/dist/shim.js` (produced by
- *     `pnpm build:shim`). Missing default → loud throw (Rule 12).
+ *     `claude`, chmods +x, ad-hoc codesigns, then sets the macOS `uchg`
+ *     immutable flag on BOTH `claude` (the shim) and `claude.real` (the real
+ *     binary). Idempotent: a second `install` on the same dir without `force`
+ *     is a no-op. When `shimSourcePath` is omitted, the installer resolves to
+ *     the bundled shim at `packages/products/claude-multiacct/dist/shim.js`
+ *     (produced by `pnpm build:shim`). Missing default → loud throw (Rule 12).
+ *
+ * # Immutability (the install-race fix — `uchg` on both binaries)
+ *
+ * Claude Desktop re-materializes its `app.asar.unpacked/claude-code/<version>/`
+ * bundle from the packaged asar on every launch. Without a guard, that launch
+ * overwrites our planted shim back to the stock CLI before the watcher can heal
+ * it — the account switch silently stops working for the first session after an
+ * app restart. Setting the `uchg` user-immutable flag on the planted `claude`
+ * (and on the renamed `claude.real`) is the fix: the app's re-materialize does
+ * a plain write, and macOS refuses to overwrite a `uchg` file, so the shim
+ * survives the launch. This is the INTENDED mechanism, not a side effect. The
+ * cost is that our own mutating ops (`force` reinstall, `uninstall`) must clear
+ * the flag first — `chflags nouchg` — before they can rename or replace either
+ * file; both paths below do exactly that. A brand-new Claude version drops a
+ * fresh `claude-code/<newver>/` sibling with an unlocked stock CLI, so the
+ * watcher's per-version `install()` re-plants AND re-locks the shim there (a
+ * lock on the old version's bundle never covers a new one).
  *
  *   - `uninstall(cliDir, {overrideFlag?})` — deletes `claude`, restores
  *     `claude.real` back to `claude`. Snapshots the removed shim to
@@ -241,6 +259,40 @@ async function exists(path: string): Promise<boolean> {
 	}
 }
 
+/**
+ * Set the macOS `uchg` user-immutable flag on `path` so Claude Desktop's
+ * launch-time bundle re-materialize cannot overwrite it. See the module
+ * docstring for why this is the load-bearing mechanism, not a nicety.
+ *
+ * @param {(file: string, args: readonly string[]) => Promise<{stdout: string; stderr: string}>} exec - Injected `execFile`.
+ * @param {string} path - Absolute path to lock.
+ * @returns {Promise<void>} Resolves once `chflags uchg` completes.
+ */
+async function lockImmutable(
+	exec: (file: string, args: readonly string[]) => Promise<{ stdout: string; stderr: string }>,
+	path: string,
+): Promise<void> {
+	await exec("chflags", ["uchg", path]);
+}
+
+/**
+ * Clear the `uchg` flag on `path` if it exists, so a rename/replace can touch
+ * it. No-op when the file is absent — a mid-install crash may leave only one of
+ * the pair, and clearing a flag we never set is harmless.
+ *
+ * @param {(file: string, args: readonly string[]) => Promise<{stdout: string; stderr: string}>} exec - Injected `execFile`.
+ * @param {string} path - Absolute path to unlock.
+ * @returns {Promise<void>} Resolves once `chflags nouchg` completes (or is skipped).
+ */
+async function unlockImmutable(
+	exec: (file: string, args: readonly string[]) => Promise<{ stdout: string; stderr: string }>,
+	path: string,
+): Promise<void> {
+	if (await exists(path)) {
+		await exec("chflags", ["nouchg", path]);
+	}
+}
+
 function isoStamp(): string {
 	return new Date().toISOString().replaceAll(/[:.]/gu, "-");
 }
@@ -334,6 +386,14 @@ export async function install(
 		};
 	}
 
+	if (alreadyInstalled) {
+		// A prior install locked both files `uchg`. Clear the flag before any
+		// rename/unlink, or the force reinstall below fails on the immutable
+		// bit. (See the module docstring — the lock is deliberate.)
+		await unlockImmutable(exec, claudePath);
+		await unlockImmutable(exec, realPath);
+	}
+
 	const backup = await snapshot(cliDir, backupRoot);
 
 	if (alreadyInstalled) {
@@ -355,7 +415,12 @@ export async function install(
 	await copyFile(shimSourcePath, claudePath);
 	await chmod(claudePath, 0o755);
 	await exec("codesign", ["--force", "--sign", "-", claudePath]);
-	log.info(`install: shim installed at ${cliDir}; backup=${String(backup)}`);
+	// Lock both so Claude Desktop's launch-time re-materialize cannot overwrite
+	// the shim (claude) or the real binary (claude.real). Real must be locked
+	// AFTER codesign so the sign write is not itself blocked.
+	await lockImmutable(exec, realPath);
+	await lockImmutable(exec, claudePath);
+	log.info(`install: shim installed + locked at ${cliDir}; backup=${String(backup)}`);
 
 	return { skipped: false, installed: true, alreadyInstalled, backup };
 }
@@ -374,7 +439,7 @@ export async function uninstall(
 	opts: MutateOptions = {},
 	deps: InstallerDeps = {},
 ): Promise<UninstallResult> {
-	const { env, log, backupRoot } = resolveDeps(deps);
+	const { env, log, exec, backupRoot } = resolveDeps(deps);
 
 	const gate = resolveGate("uninstall", opts, env, cliDir);
 	if (gate !== undefined) {
@@ -389,6 +454,10 @@ export async function uninstall(
 		log.info(`uninstall: nothing to do at ${cliDir}`);
 		return { skipped: false, uninstalled: true, wasInstalled: false, backup: undefined };
 	}
+	// Both files were locked `uchg` at install time; clear the flag before the
+	// snapshot copy and the restore rename can touch them.
+	await unlockImmutable(exec, claudePath);
+	await unlockImmutable(exec, realPath);
 	const backup = await snapshot(cliDir, backupRoot);
 	if (await exists(claudePath)) {
 		await unlink(claudePath);

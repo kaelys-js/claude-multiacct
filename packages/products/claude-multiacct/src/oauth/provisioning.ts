@@ -184,9 +184,13 @@ export async function provisionAccount(opts: ProvisionOptions): Promise<Provisio
 		source: opts.source ?? "explicit",
 	};
 
-	// Step 4a — token store put.
+	// Step 4a — token store put. Persist a full record (not a bare access-token
+	// string) so this add path matches the OAuth-login path: every pooled entry
+	// lands as a `TokenRecord` the encrypted store can later refresh. The
+	// paste-a-token flow carries no refresh token, so the record holds only the
+	// access token — but the shape is uniform and no bare string is ever stored.
 	try {
-		await opts.ports.tokenStore.put(accountUuid, opts.token);
+		await opts.ports.tokenStore.putRecord(accountUuid, { accessToken: opts.token });
 	} catch (error) {
 		return {
 			ok: false,

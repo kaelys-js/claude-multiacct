@@ -15,6 +15,7 @@
  */
 
 import type { AccountUuid } from "../domain/account.ts";
+import type { TokenRecord } from "../ports.ts";
 import type { MutableTokenStore } from "./token-store-mut.ts";
 
 /**
@@ -63,6 +64,34 @@ export class LayeredTokenStore implements MutableTokenStore {
 		} catch (error) {
 			if (isKeychainInteractionError(error)) {
 				await this.secondary.put(accountUuid, encryptedTokenRef);
+				return;
+			}
+			throw error;
+		}
+	}
+
+	async getRecord(accountUuid: AccountUuid): Promise<TokenRecord | undefined> {
+		// Unlike `get` (which throws on a miss), `getRecord` reports a miss as
+		// `undefined`. Fall back to secondary on EITHER an undefined primary hit
+		// or a primary throw, so a record written to secondary during a
+		// locked-keychain session is still readable later.
+		try {
+			const primaryHit = await this.primary.getRecord(accountUuid);
+			if (primaryHit !== undefined) {
+				return primaryHit;
+			}
+		} catch {
+			// fall through to secondary
+		}
+		return await this.secondary.getRecord(accountUuid);
+	}
+
+	async putRecord(accountUuid: AccountUuid, record: TokenRecord): Promise<void> {
+		try {
+			await this.primary.putRecord(accountUuid, record);
+		} catch (error) {
+			if (isKeychainInteractionError(error)) {
+				await this.secondary.putRecord(accountUuid, record);
 				return;
 			}
 			throw error;

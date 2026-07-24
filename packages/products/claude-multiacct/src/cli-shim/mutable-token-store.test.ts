@@ -105,6 +105,28 @@ describe("SecurityCliMutableTokenStore", () => {
 		]);
 	});
 
+	it("getRecord wraps the base access token as a record (bare-string adapter)", async () => {
+		const exec = vi.fn<ExecFileAsync>().mockResolvedValue({ stdout: "handle-1\n", stderr: "" });
+		const store = new SecurityCliMutableTokenStore(exec);
+		await expect(store.getRecord(UUID_A)).resolves.toStrictEqual({ accessToken: "handle-1" });
+	});
+
+	it("putRecord persists the record's access token via the base add-generic-password argv", async () => {
+		const exec = vi.fn<ExecFileAsync>().mockResolvedValue({ stdout: "", stderr: "" });
+		const store = new SecurityCliMutableTokenStore(exec);
+		await store.putRecord(UUID_A, { accessToken: "handle-x", refreshToken: "rt" });
+		expect(exec).toHaveBeenCalledWith("security", [
+			"add-generic-password",
+			"-U",
+			"-s",
+			KEYCHAIN_SERVICE,
+			"-a",
+			UUID_A,
+			"-w",
+			"handle-x",
+		]);
+	});
+
 	it("list dumps the keychain (attributes only) and returns this service's account uuids", async () => {
 		// `dump-keychain` WITHOUT `-d`: metadata only, no secret decrypt, no
 		// prompt. The parse keeps only items under our dedicated service.

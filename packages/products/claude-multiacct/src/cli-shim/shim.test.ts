@@ -1,3 +1,4 @@
+/* oxlint-disable unicorn/prefer-event-target -- the fake child/stdio streams model Node's child_process, which IS EventEmitter-based; matches daemon-boot.test.ts */
 /**
  * Intent: `runShim` orchestrates the swap-or-passthrough decision. Six
  * scenarios exercise every branch, and one adversarial mutation proves the
@@ -16,6 +17,18 @@ import type { Account, AccountUuid } from "../domain/account.ts";
 import type { AccountRegistry } from "../domain/registry.ts";
 import type { ChoiceStore, TokenStore } from "../ports.ts";
 import { runShim, type ShimDeps } from "./shim.ts";
+
+// A throwaway writable stream that records everything written to it.
+function sink(): { stream: NodeJS.WritableStream; chunks: Buffer[] } {
+	const chunks: Buffer[] = [];
+	const stream = {
+		write: (c: Buffer): boolean => {
+			chunks.push(c);
+			return true;
+		},
+	} as unknown as NodeJS.WritableStream;
+	return { stream, chunks };
+}
 
 const SESSION_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const UUID_A = "11111111-1111-4111-8111-111111111111" as AccountUuid;
@@ -441,6 +454,16 @@ class FakeChild extends EventEmitter {
 	exitCode: number | null = null;
 	signalCode: NodeJS.Signals | null = null;
 	kill = vi.fn<(signal?: NodeJS.Signals | number) => boolean>(() => true);
+	// Minimal writable stdin the stdio-proxy writes to. `.on("error")` is
+	// exercised by attachChildStdio; write/end are spied for assertions.
+	stdin = Object.assign(new EventEmitter(), {
+		writable: true,
+		write: vi.fn<(chunk: unknown) => boolean>(() => true),
+		end: vi.fn<() => void>(() => {}),
+	});
+	// Readable stdout/stderr the proxy relays into the launcher's streams.
+	stdout = new EventEmitter();
+	stderr = new EventEmitter();
 	// Simulate the child exiting (a code, or a signal death).
 	finish(code: number | null, signal: NodeJS.Signals | null = null): void {
 		this.exitCode = code;
@@ -740,6 +763,258 @@ describe("runShim — hot-swap async path", () => {
 		child2.finish(0);
 		const result = await p;
 		expect(result.exitCode).toBe(0);
+	});
+});
+
+// The fresh interactive session the launcher spawns id-less: it carries the
+// --replay-user-messages marker but no --session-id/--resume, so the shim must
+// mint an id, register a pid file under it, and adopt it via --session-id.
+const MINTED = "abababab-abab-4bab-8bab-abababababab";
+const FRESH_INTERACTIVE_ARGV = [
+	"node",
+	"/path/claude",
+	"--output-format",
+	"stream-json",
+	"--input-format",
+	"stream-json",
+	"--model",
+	"claude-opus-4-8",
+	"--replay-user-messages",
+];
+const PROBE_ARGV = [
+	"node",
+	"/path/claude",
+	"--output-format",
+	"stream-json",
+	"--input-format",
+	"stream-json",
+	"--strict-mcp-config",
+	"--permission-mode",
+	"default",
+];
+const CHOICE_FOR_MINTED: ChoiceStore = {
+	read: () =>
+		Promise.resolve({
+			[MINTED]: {
+				sessionUuid: MINTED,
+				accountUuid: UUID_B,
+				chosenAt: "2026-07-19T00:00:00.000Z",
+			},
+		}),
+	write: async () => {},
+};
+
+describe("runShim — fresh interactive session mints its own id (THE fresh-session fix)", () => {
+	it("registers a pid file under the minted uuid and adopts it via --session-id, even with NO choice yet", async () => {
+		// This is the break the whole item fixes: a brand-new app session arrives
+		// id-less, so pre-fix it never registered and was unreachable by the picker.
+		const child = new FakeChild();
+		const spawn = spawnFromQueue([child]);
+		const writePidFile = vi.fn<(u: string) => Promise<void>>(() => Promise.resolve());
+		const { deps } = hotSwapDeps({
+			argv: FRESH_INTERACTIVE_ARGV,
+			spawn,
+			writePidFile,
+			newSessionUuid: () => MINTED,
+			// No choice for the session → env is pass-through, but the session is
+			// STILL registered + adopted so a later pick can reach it.
+			choiceStore: { read: () => Promise.resolve({}), write: async () => {} },
+		});
+		const p = runShim(deps);
+		await tick();
+		expect(writePidFile).toHaveBeenCalledWith(MINTED);
+		const [file, args] = spawn.mock.calls[0] as [string, string[], unknown];
+		expect(file).toBe("/opt/claude/MacOS/claude.real");
+		expect(args).toStrictEqual([...FRESH_INTERACTIVE_ARGV.slice(2), "--session-id", MINTED]);
+		child.finish(0);
+		const result = await p;
+		expect(result).toStrictEqual({ exitCode: 0, swapped: false });
+	});
+
+	it("on SIGHUP respawns with --resume=<minted> (transcript continuity) and the swapped token", async () => {
+		const child1 = new FakeChild();
+		const child2 = new FakeChild();
+		const spawn = spawnFromQueue([child1, child2]);
+		const { onSighup, fire } = sighupCapture();
+		const { deps } = hotSwapDeps({
+			argv: FRESH_INTERACTIVE_ARGV,
+			spawn,
+			onSighup,
+			newSessionUuid: () => MINTED,
+			choiceStore: CHOICE_FOR_MINTED,
+			tokenStore: TOKEN_B,
+		});
+		const p = runShim(deps);
+		await tick();
+		// First spawn CREATES the session under our id.
+		expect((spawn.mock.calls[0] as [string, string[], unknown])[1]).toStrictEqual([
+			...FRESH_INTERACTIVE_ARGV.slice(2),
+			"--session-id",
+			MINTED,
+		]);
+		fire();
+		child1.finish(null, "SIGTERM");
+		await tick();
+		// Respawn RESUMES the same id — same transcript, no fork — with the swap.
+		const [, respawnArgs, respawnOpts] = spawn.mock.calls[1] as [
+			string,
+			string[],
+			{ env: Record<string, string> },
+		];
+		expect(respawnArgs).toStrictEqual([...FRESH_INTERACTIVE_ARGV.slice(2), "--resume", MINTED]);
+		expect(respawnOpts.env.CLAUDE_CODE_OAUTH_TOKEN).toBe("swapped-token");
+		child2.finish(0);
+		const result = await p;
+		expect(result.exitCode).toBe(0);
+	});
+
+	it("does NOT mint for a probe/preamble spawn (would pollute active-session resolution)", async () => {
+		const spawn = spawnFromQueue([]);
+		const writePidFile = vi.fn<(u: string) => Promise<void>>(() => Promise.resolve());
+		const { deps, calls } = hotSwapDeps({
+			argv: PROBE_ARGV,
+			spawn,
+			writePidFile,
+			newSessionUuid: () => MINTED,
+		});
+		const result = await runShim(deps);
+		// No uuid → not hot-swappable → classic single-shot, no pid registration,
+		// argv forwarded untouched (no injected --session-id).
+		expect(writePidFile).not.toHaveBeenCalled();
+		expect(spawn).not.toHaveBeenCalled();
+		expect(calls).toHaveLength(1);
+		expect(calls[0]?.args).toStrictEqual(PROBE_ARGV.slice(2));
+		expect(result.swapped).toBe(false);
+	});
+
+	it("does not mint when newSessionUuid is absent (pre-fix behaviour preserved)", async () => {
+		const spawn = spawnFromQueue([]);
+		const writePidFile = vi.fn<(u: string) => Promise<void>>(() => Promise.resolve());
+		const { deps, calls } = hotSwapDeps({
+			argv: FRESH_INTERACTIVE_ARGV,
+			spawn,
+			writePidFile,
+			// newSessionUuid deliberately omitted.
+		});
+		await runShim(deps);
+		expect(writePidFile).not.toHaveBeenCalled();
+		expect(spawn).not.toHaveBeenCalled();
+		expect(calls[0]?.args).toStrictEqual(FRESH_INTERACTIVE_ARGV.slice(2));
+	});
+});
+
+describe("runShim — stdio proxy delivers turns AND output to the respawned child (persistent-process gap)", () => {
+	const manyTicks = async (n = 6): Promise<void> => {
+		for (let i = 0; i < n; i += 1) {
+			// eslint-disable-next-line no-await-in-loop -- draining the microtask queue deterministically
+			await tick();
+		}
+	};
+	it("gives each child its OWN pipes, forwards turn-1 to child1, re-targets turn-2 to child2, and relays child stdout", async () => {
+		const child1 = new FakeChild();
+		const child2 = new FakeChild();
+		const spawn = spawnFromQueue([child1, child2]);
+		const { onSighup, fire } = sighupCapture();
+		const source = new EventEmitter();
+		const out = sink();
+		const { deps } = hotSwapDeps({
+			argv: FRESH_INTERACTIVE_ARGV,
+			spawn,
+			onSighup,
+			newSessionUuid: () => MINTED,
+			choiceStore: CHOICE_FOR_MINTED,
+			tokenStore: TOKEN_B,
+			stdin: source as unknown as NodeJS.ReadableStream,
+			stdout: out.stream,
+			stderr: sink().stream,
+		});
+		const p = runShim(deps);
+		await tick();
+		// Each child gets its OWN pipe for all three std streams — that fresh
+		// stdout pipe is what stops the first child's O_NONBLOCK from silencing
+		// the respawned one.
+		const firstCall = spawn.mock.calls[0] as [string, string[], { stdio: unknown }];
+		expect(firstCall[2].stdio).toStrictEqual(["pipe", "pipe", "pipe"]);
+		// Turn 1 forwarded to live child1; child1 stdout relayed to the launcher.
+		source.emit("data", Buffer.from("turn1\n"));
+		expect(child1.stdin.write).toHaveBeenCalledWith(Buffer.from("turn1\n"));
+		child1.stdout.emit("data", Buffer.from("out1"));
+		expect(out.chunks).toContainEqual(Buffer.from("out1"));
+
+		// Swap: child1 dies. Data arriving in the respawn gap is buffered.
+		fire();
+		child1.finish(null, "SIGTERM");
+		await tick();
+		source.emit("data", Buffer.from("gap\n")); // no live child → buffered
+		await manyTicks();
+		expect(spawn).toHaveBeenCalledTimes(2);
+		expect(child2.stdin.write).toHaveBeenCalledWith(Buffer.from("gap\n"));
+		// Live turn-2 goes to child2, and child2's stdout is relayed (the fix).
+		source.emit("data", Buffer.from("turn2\n"));
+		expect(child2.stdin.write).toHaveBeenCalledWith(Buffer.from("turn2\n"));
+		expect(child1.stdin.write).not.toHaveBeenCalledWith(Buffer.from("turn2\n"));
+		child2.stdout.emit("data", Buffer.from("out2"));
+		expect(out.chunks).toContainEqual(Buffer.from("out2"));
+
+		child2.finish(0);
+		await p;
+	});
+
+	it("ends the child's stdin when the launcher stdin ends", async () => {
+		const child = new FakeChild();
+		const spawn = spawnFromQueue([child]);
+		const source = new EventEmitter();
+		const { deps } = hotSwapDeps({
+			argv: FRESH_INTERACTIVE_ARGV,
+			spawn,
+			newSessionUuid: () => MINTED,
+			stdin: source as unknown as NodeJS.ReadableStream,
+			stdout: sink().stream,
+			stderr: sink().stream,
+		});
+		const p = runShim(deps);
+		await tick();
+		source.emit("end");
+		expect(child.stdin.end).toHaveBeenCalled();
+		child.finish(0);
+		await p;
+	});
+
+	it("relays child stderr into the launcher stderr", async () => {
+		const child = new FakeChild();
+		const spawn = spawnFromQueue([child]);
+		const source = new EventEmitter();
+		const err = sink();
+		const { deps } = hotSwapDeps({
+			argv: FRESH_INTERACTIVE_ARGV,
+			spawn,
+			newSessionUuid: () => MINTED,
+			stdin: source as unknown as NodeJS.ReadableStream,
+			stdout: sink().stream,
+			stderr: err.stream,
+		});
+		const p = runShim(deps);
+		await tick();
+		child.stderr.emit("data", Buffer.from("boom"));
+		expect(err.chunks).toContainEqual(Buffer.from("boom"));
+		child.finish(0);
+		await p;
+	});
+
+	it("keeps stdio:inherit when no stdin is injected (legacy behaviour untouched)", async () => {
+		const child = new FakeChild();
+		const spawn = spawnFromQueue([child]);
+		const { deps } = hotSwapDeps({
+			argv: FRESH_INTERACTIVE_ARGV,
+			spawn,
+			newSessionUuid: () => MINTED,
+		});
+		const p = runShim(deps);
+		await tick();
+		const firstCall = spawn.mock.calls[0] as [string, string[], { stdio: unknown }];
+		expect(firstCall[2].stdio).toBe("inherit");
+		child.finish(0);
+		await p;
 	});
 });
 

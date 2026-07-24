@@ -20,6 +20,7 @@
 import { describe, expect, it } from "vitest";
 import type { AccountProfile } from "../discovery/identity.ts";
 import type { Account, ClaudeAccountUuid } from "../domain/account.ts";
+import type { TokenRecord } from "../ports.ts";
 import type { AccountRegistry } from "../domain/registry.ts";
 import type { AtomicRegistryWriter } from "../registry/registry-writer.ts";
 import { deriveLabel, type RegisterPorts, registerOrUpdateAccount } from "./register-account.ts";
@@ -186,7 +187,7 @@ describe("registerOrUpdateAccount — re-add is an upsert (dedup by accountUuid)
 	it("token_store put rejecting a non-Error value still classifies as token_store_failed", async () => {
 		const tokenStore = new InMemoryMutableTokenStore();
 		// eslint-disable-next-line prefer-promise-reject-errors
-		tokenStore.put = () => Promise.reject("bare string" as unknown as Error);
+		tokenStore.putRecord = () => Promise.reject("bare string" as unknown as Error);
 		const registry: AccountRegistry = { accounts: [existingAccount()] };
 		const ports = makePorts({ registry, tokenStore });
 		const result = await registerOrUpdateAccount({ profile: profile(UUID_A), token: "t", ports });
@@ -220,7 +221,7 @@ describe("registerOrUpdateAccount — re-add is an upsert (dedup by accountUuid)
 
 	it("token_store put failure on update → token_store_failed", async () => {
 		const tokenStore = new InMemoryMutableTokenStore();
-		tokenStore.put = () => Promise.reject(new Error("keychain locked"));
+		tokenStore.putRecord = () => Promise.reject(new Error("keychain locked"));
 		const registry: AccountRegistry = { accounts: [existingAccount()] };
 		const ports = makePorts({ registry, tokenStore });
 		const result = await registerOrUpdateAccount({ profile: profile(UUID_A), token: "t", ports });
@@ -261,15 +262,15 @@ describe("registerOrUpdateAccount — re-add is an upsert (dedup by accountUuid)
 	it("surfaces a secondary rollback failure in the detail", async () => {
 		const tokenStore = new InMemoryMutableTokenStore();
 		await tokenStore.put(UUID_A as Account["uuid"], "old-token");
-		tokenStore.put = ((uuid: Account["uuid"], v: string) => {
-			// First put (the token swap) succeeds; restore put throws a NON-Error
-			// so the catch's `String(error)` fallback branch is exercised too.
-			if (v === "old-token") {
+		tokenStore.putRecord = ((uuid: Account["uuid"], rec: TokenRecord) => {
+			// First putRecord (the token swap) succeeds; the restore putRecord throws
+			// a NON-Error so the catch's `String(error)` fallback branch is exercised.
+			if (rec.accessToken === "old-token") {
 				// eslint-disable-next-line prefer-promise-reject-errors
 				return Promise.reject("restore boom" as unknown as Error);
 			}
-			return InMemoryMutableTokenStore.prototype.put.call(tokenStore, uuid, v);
-		}) as InMemoryMutableTokenStore["put"];
+			return InMemoryMutableTokenStore.prototype.putRecord.call(tokenStore, uuid, rec);
+		}) as InMemoryMutableTokenStore["putRecord"];
 		const registry: AccountRegistry = { accounts: [existingAccount()] };
 		const ports = makePorts({
 			registry,
@@ -285,7 +286,9 @@ describe("registerOrUpdateAccount — re-add is an upsert (dedup by accountUuid)
 describe("registerOrUpdateAccount — new-path failures + label conflict", () => {
 	it("maps a provision token_store failure to token_store_failed", async () => {
 		const tokenStore = new InMemoryMutableTokenStore();
-		tokenStore.put = () => Promise.reject(new Error("keychain locked"));
+		// The new-account path provisions via `putRecord` (full-record persist),
+		// so the injected keychain failure must target that method.
+		tokenStore.putRecord = () => Promise.reject(new Error("keychain locked"));
 		const ports = makePorts({ registry: undefined, tokenStore });
 		const result = await registerOrUpdateAccount({ profile: profile(UUID_A), token: "t", ports });
 		assertNotOk(result);
@@ -353,5 +356,80 @@ describe("registerOrUpdateAccount — new-path failures + label conflict", () =>
 		const result = await registerOrUpdateAccount({ profile: profile(UUID_A), token: "t", ports });
 		assertNotOk(result);
 		expect(result.kind).toBe("duplicate_label");
+	});
+});
+
+describe("registerOrUpdateAccount — persists the full token bag", () => {
+	function existingAccount(): Account {
+		return {
+			uuid: UUID_A as Account["uuid"],
+			label: "old-label",
+			subscriptionType: "unknown",
+			rateLimitTier: "unknown",
+			encryptedTokenRef: UUID_A,
+			accountUuid: UUID_A as ClaudeAccountUuid,
+			source: "native",
+		};
+	}
+
+	it("stores refreshToken + expiresAt on a NEW account (getRecord shows the bag)", async () => {
+		const ports = makePorts({ registry: undefined });
+		const result = await registerOrUpdateAccount({
+			profile: profile(UUID_A),
+			token: "tok-a",
+			refreshToken: "rt-a",
+			expiresAt: "2099-01-01T00:00:00.000Z",
+			ports,
+		});
+		assertOk(result);
+		expect(await ports.tokenStore.getRecord(result.account.uuid)).toStrictEqual({
+			accessToken: "tok-a",
+			refreshToken: "rt-a",
+			expiresAt: "2099-01-01T00:00:00.000Z",
+		});
+	});
+
+	it("stores refreshToken + expiresAt on UPDATE (getRecord shows the refreshed bag)", async () => {
+		const tokenStore = new InMemoryMutableTokenStore();
+		await tokenStore.put(UUID_A as Account["uuid"], "old-token");
+		const registry: AccountRegistry = { accounts: [existingAccount()] };
+		const ports = makePorts({ registry, tokenStore });
+		const result = await registerOrUpdateAccount({
+			profile: profile(UUID_A),
+			token: "new-token",
+			refreshToken: "rt-new",
+			expiresAt: "2099-01-01T00:00:00.000Z",
+			ports,
+		});
+		assertOk(result);
+		expect(await ports.tokenStore.getRecord(UUID_A as Account["uuid"])).toStrictEqual({
+			accessToken: "new-token",
+			refreshToken: "rt-new",
+			expiresAt: "2099-01-01T00:00:00.000Z",
+		});
+	});
+
+	it("rollback restores the prior FULL record, not just the access token", async () => {
+		const tokenStore = new InMemoryMutableTokenStore();
+		const prior: TokenRecord = {
+			accessToken: "old-token",
+			refreshToken: "old-rt",
+			expiresAt: "2099-01-01T00:00:00.000Z",
+		};
+		await tokenStore.putRecord(UUID_A as Account["uuid"], prior);
+		const registry: AccountRegistry = { accounts: [existingAccount()] };
+		const ports = makePorts({
+			registry,
+			tokenStore,
+			registryWriter: { write: () => Promise.reject(new Error("disk full")) },
+		});
+		const result = await registerOrUpdateAccount({
+			profile: profile(UUID_A),
+			token: "new",
+			refreshToken: "new-rt",
+			ports,
+		});
+		assertNotOk(result);
+		expect(await tokenStore.getRecord(UUID_A as Account["uuid"])).toStrictEqual(prior);
 	});
 });

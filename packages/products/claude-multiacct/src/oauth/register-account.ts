@@ -23,6 +23,13 @@
  *     `source`. The token swap is rolled back if the registry write fails, so a
  *     failed update never leaves a keychain token the registry disagrees with.
  *
+ * # The full credential bag is persisted, not just the access token
+ *
+ * A pooled account's access token expires in about an hour; renewing it needs
+ * the `refreshToken` + `expiresAt` the exchange returned. Both the update path
+ * and the new-account path therefore write the whole {@link TokenRecord}
+ * (`putRecord`), not the bare access token, so the store can refresh on read.
+ *
  * The token is NEVER logged; it flows straight into the token store.
  *
  * @module
@@ -36,6 +43,7 @@ import {
 	ClaudeAccountUuidSchema,
 } from "../domain/account.ts";
 import type { AccountProfile } from "../discovery/identity.ts";
+import type { TokenRecord } from "../ports.ts";
 import { provisionAccount, type ProvisionPorts } from "./provisioning.ts";
 import type { VerifyResult } from "./models.ts";
 
@@ -59,6 +67,23 @@ export type RegisterResult =
  */
 function errMsg(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Build the {@link TokenRecord} to persist, omitting the optional fields the
+ * provider did not return so the stored bag stays clean.
+ *
+ * @param {string} token - The access token.
+ * @param {string} [refreshToken] - The refresh token, if any.
+ * @param {string} [expiresAt] - The ISO expiry, if any.
+ * @returns {TokenRecord} The credential bag.
+ */
+function recordOf(token: string, refreshToken?: string, expiresAt?: string): TokenRecord {
+	return {
+		accessToken: token,
+		...(refreshToken === undefined ? {} : { refreshToken }),
+		...(expiresAt === undefined ? {} : { expiresAt }),
+	};
 }
 
 /**
@@ -99,6 +124,10 @@ export type RegisterOptions = {
 	profile: AccountProfile;
 	/** The OAuth access token to store. Never logged. */
 	token: string;
+	/** The OAuth refresh token, when the exchange returned one. Never logged. */
+	refreshToken?: string;
+	/** ISO 8601 access-token expiry, when the exchange returned one. */
+	expiresAt?: string;
 	/** Injected ports. */
 	ports: RegisterPorts;
 	/** Optional label override; defaults to {@link deriveLabel}. */
@@ -115,6 +144,7 @@ export type RegisterOptions = {
  */
 export async function registerOrUpdateAccount(opts: RegisterOptions): Promise<RegisterResult> {
 	const { profile, token, ports } = opts;
+	const record = recordOf(token, opts.refreshToken, opts.expiresAt);
 	const claudeAccountUuid = v.parse(ClaudeAccountUuidSchema, profile.accountUuid);
 	const localUuid = v.parse(AccountUuidSchema, profile.accountUuid);
 	const identity = identityOf(profile);
@@ -126,11 +156,11 @@ export async function registerOrUpdateAccount(opts: RegisterOptions): Promise<Re
 	);
 
 	if (existing !== undefined && match !== undefined) {
-		// UPDATE path — swap the token in place, refresh identity/subscription,
+		// UPDATE path — swap the token bag in place, refresh identity/subscription,
 		// keep the local uuid, label, and source.
-		const snapshot = await ports.tokenStore.get(match.uuid);
+		const snapshot = await ports.tokenStore.getRecord(match.uuid);
 		try {
-			await ports.tokenStore.put(match.uuid, token);
+			await ports.tokenStore.putRecord(match.uuid, record);
 		} catch (error) {
 			return { ok: false, kind: "token_store_failed", detail: errMsg(error) };
 		}
@@ -154,7 +184,7 @@ export async function registerOrUpdateAccount(opts: RegisterOptions): Promise<Re
 			const restoreError = await (
 				snapshot === undefined
 					? ports.tokenStore.delete(match.uuid)
-					: ports.tokenStore.put(match.uuid, snapshot)
+					: ports.tokenStore.putRecord(match.uuid, snapshot)
 			)
 				.then(() => undefined as Error | undefined)
 				.catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))));
@@ -168,7 +198,9 @@ export async function registerOrUpdateAccount(opts: RegisterOptions): Promise<Re
 
 	// NEW path — provision via the shared atomic pipeline. The verify port is a
 	// no-op that echoes the already-resolved profile identity, so no CLI probe
-	// runs: the profile call already proved the token.
+	// runs: the profile call already proved the token. Provisioning stores the
+	// access token atomically; we then upgrade that entry to the full record so
+	// the refresh-on-read path has the refresh token + expiry.
 	const verify = (): Promise<VerifyResult> =>
 		Promise.resolve({
 			ok: true,
@@ -186,6 +218,7 @@ export async function registerOrUpdateAccount(opts: RegisterOptions): Promise<Re
 		...(hasIdentity ? { identity } : {}),
 	});
 	if (provisioned.ok) {
+		await ports.tokenStore.putRecord(provisioned.account.uuid, record);
 		return { ok: true, account: provisioned.account, updated: false };
 	}
 	if (provisioned.kind === "duplicate_label") {
@@ -202,6 +235,7 @@ export async function registerOrUpdateAccount(opts: RegisterOptions): Promise<Re
 			...(hasIdentity ? { identity } : {}),
 		});
 		if (retry.ok) {
+			await ports.tokenStore.putRecord(retry.account.uuid, record);
 			return { ok: true, account: retry.account, updated: false };
 		}
 		return { ok: false, kind: "duplicate_label", detail: retry.detail };

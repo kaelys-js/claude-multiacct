@@ -96,6 +96,21 @@ describe("provisionAccount — flag gate (GATED-PR contract)", () => {
 		});
 		assertOk(result);
 	});
+	it("persists a TokenRecord (putRecord), never a bare access-token string", async () => {
+		// The add path must land a full record so the encrypted store treats it
+		// like every other pooled entry (uniform with the OAuth-login path). The
+		// paste flow has no refresh token, so the record is access-only.
+		const ports = makePorts();
+		const result = await provisionAccount({
+			label: "Personal",
+			token: "paste-token",
+			ports,
+			overrideFlag: true,
+		});
+		assertOk(result);
+		const stored = await ports.tokenStore.getRecord(result.account.uuid);
+		expect(stored).toEqual({ accessToken: "paste-token" });
+	});
 });
 
 describe("provisionAccount — verify_failed", () => {
@@ -255,7 +270,7 @@ describe("provisionAccount — ATOMICITY (the load-bearing test)", () => {
 	it("token-store put fails → {kind:'token_store_failed'}, no writer call", async () => {
 		let writerCalls = 0;
 		const failingStore = new InMemoryMutableTokenStore();
-		vi.spyOn(failingStore, "put").mockRejectedValueOnce(new Error("keychain fell over"));
+		vi.spyOn(failingStore, "putRecord").mockRejectedValueOnce(new Error("keychain fell over"));
 		const ports = makePorts({
 			tokenStore: failingStore,
 			registryWriter: {
