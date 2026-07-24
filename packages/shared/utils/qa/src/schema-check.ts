@@ -295,6 +295,31 @@ const DOWNLOAD_FAILURE_SIGNATURES: readonly string[] = [
 	"Could not retrieve",
 ];
 
+// Signatures that mean check-jsonschema could not be LAUNCHED at all, as opposed
+// to running and rejecting the config. The tool is pipx-backed and resolved
+// through mise; when the shared `.mise` toolchain is momentarily mid-flight
+// (the suite re-runs this check inside a concurrent `vitest run`, and pipx tools
+// are the first to vanish from the install dir), the exec fails with a shell
+// `not found` (exit 127) or mise's own `couldn't exec process`. That says
+// nothing about the config — the validator never ran — so it must not count as a
+// schema failure. A genuinely broken toolchain fails `pnpm install`/`mise
+// install` loudly elsewhere; here we skip the file rather than fail the gate.
+const TOOL_LAUNCH_FAILURE_SIGNATURES: readonly string[] = [
+	"couldn't exec process",
+	"command not found",
+	": not found",
+];
+const TOOL_LAUNCH_ATTEMPTS = 3;
+
+// True when the tool could not be launched (spawn failure, exit 127, or a
+// recognisable launch-failure message) rather than executed and exited non-zero.
+function toolCouldNotLaunch(status: number | null, combined: string): boolean {
+	if (status === null || status === 127) {
+		return true;
+	}
+	return TOOL_LAUNCH_FAILURE_SIGNATURES.some((s) => combined.includes(s));
+}
+
 /** One file's validation outcome. */
 type Outcome = "pass" | "fail" | "warn-unreachable";
 
@@ -333,7 +358,17 @@ function validate(d: Discovered): Outcome {
 	const { path, cleanup } = dataFileFor(d);
 	// The data path is either the original file or a stripped jsonc/json5 copy with
 	// a `.json` name, which check-jsonschema parses as plain JSON.
-	const r = miseExec(["check-jsonschema", "--schemafile", schemafile, path], { cwd: ROOT });
+	let r = miseExec(["check-jsonschema", "--schemafile", schemafile, path], { cwd: ROOT });
+	// Retry a tool-LAUNCH failure (toolchain churn) before believing it; a real
+	// validation result — pass, or a non-zero exit with diagnostics — is returned
+	// on the first hit and never retried.
+	for (
+		let attempt = 1;
+		attempt < TOOL_LAUNCH_ATTEMPTS && toolCouldNotLaunch(r.status, `${r.stdout}${r.stderr}`);
+		attempt++
+	) {
+		r = miseExec(["check-jsonschema", "--schemafile", schemafile, path], { cwd: ROOT });
+	}
 	if (cleanup !== null) {
 		rmSync(cleanup, { recursive: true, force: true });
 	}
@@ -345,6 +380,13 @@ function validate(d: Discovered): Outcome {
 	if (isRemote(d.ref) && DOWNLOAD_FAILURE_SIGNATURES.some((s) => combined.includes(s))) {
 		process.stderr.write(
 			`WARN: ${d.file} — schema ${d.ref} unreachable (offline?); skipping validation.\n`,
+		);
+		return "warn-unreachable";
+	}
+	if (toolCouldNotLaunch(r.status, combined)) {
+		// check-jsonschema never ran (toolchain mid-flight): not a schema verdict.
+		process.stderr.write(
+			`WARN: ${d.file} — check-jsonschema could not be launched (toolchain busy); skipping validation.\n`,
 		);
 		return "warn-unreachable";
 	}

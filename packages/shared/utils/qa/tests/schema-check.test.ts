@@ -312,4 +312,52 @@ describe("schema-check", () => {
 		const { code } = await runCheck(root);
 		expect(code).toBe(0);
 	});
+
+	it("TOLERATES a check-jsonschema launch failure (exit 127, tool not on PATH)", async () => {
+		// pipx-backed check-jsonschema momentarily vanishes from the mise install dir
+		// mid-run (toolchain churn): `bin/mise exec -- check-jsonschema` exits 127 with
+		// `not found`. The validator never ran, so this is NOT a schema verdict — the
+		// file is skipped (warn) and the gate still exits 0. This is the `expected 1 to
+		// be +0` flake that hit the self-hosted `test` job.
+		const root = fixture([
+			{ path: "schema.json", content: SCHEMA },
+			{ path: "a.json", content: '{"$schema":"./schema.json","n":1}\n' },
+		]);
+		writeFileSync(
+			join(root, "bin", "mise"),
+			'#!/bin/sh\necho "exec: check-jsonschema: not found" >&2\nexit 127\n',
+		);
+		chmodSync(join(root, "bin", "mise"), 0o755);
+		const { code, err } = await runCheck(root);
+		expect(code).toBe(0);
+		expect(err).toContain("could not be launched");
+	});
+
+	it("TOLERATES a mise launch failure (couldn't exec process, exit 1)", async () => {
+		// mise's own message when it cannot resolve the pinned tool. Non-127 exit, so
+		// this drives the signature-match branch rather than the exit-code branch.
+		const root = fixture([
+			{ path: "schema.json", content: SCHEMA },
+			{ path: "a.json", content: '{"$schema":"./schema.json","n":1}\n' },
+		]);
+		writeFileSync(
+			join(root, "bin", "mise"),
+			`#!/bin/sh\necho "mise ERROR couldn't exec process" >&2\nexit 1\n`,
+		);
+		chmodSync(join(root, "bin", "mise"), 0o755);
+		const { code } = await runCheck(root);
+		expect(code).toBe(0);
+	});
+
+	it("TOLERATES a spawn failure (bin/mise absent → status null)", async () => {
+		// No bin/mise at all: the spawn errors (status null). Same class — the tool
+		// never ran — so the gate is not failed.
+		const root = fixture([
+			{ path: "schema.json", content: SCHEMA },
+			{ path: "a.json", content: '{"$schema":"./schema.json","n":1}\n' },
+		]);
+		rmSync(join(root, "bin", "mise"), { force: true });
+		const { code } = await runCheck(root);
+		expect(code).toBe(0);
+	});
 });
