@@ -137,6 +137,77 @@ describe("runShim — the swap path (choice present, valid account, token availa
 	});
 });
 
+describe("runShim — runtime kill-switch (config.enabled honoured on the hot path)", () => {
+	// The shim is spawned by Claude Desktop's launcher WITHOUT the enable env var,
+	// so config.enabled is its only "is cma on?" signal. An EXPLICIT false must
+	// stop the swap and pass through to the primary account — "disabled" has to
+	// actually disable, not just block a future install. Everything else (absent
+	// config, no flag, read error) fails OPEN so a rotted/missing sidecar can never
+	// strand a working multi-account setup. These fixtures resolve to a real swap
+	// (valid pinned choice + token), so a passthrough result isolates the switch.
+	const swapChoice: ChoiceStore = {
+		read: () =>
+			Promise.resolve({
+				[SESSION_A]: {
+					sessionUuid: SESSION_A,
+					accountUuid: UUID_B,
+					chosenAt: "2026-07-19T00:00:00.000Z",
+				},
+			}),
+		write: async () => {},
+	};
+	const swapToken: TokenStore = {
+		get: () => Promise.resolve("swapped-token"),
+		put: async () => {},
+	};
+
+	it("config.enabled=false → passes through to primary (no swap) despite a valid pinned choice", async () => {
+		// Adversarial: drop the kill-switch check and this flips red — the pinned
+		// choice would swap to the Work token instead of passing through.
+		const { deps, calls, warn } = makeDeps({
+			choiceStore: swapChoice,
+			tokenStore: swapToken,
+			readEnabledFlag: () => Promise.resolve(false),
+		});
+		const result = await runShim(deps);
+		expect(result).toStrictEqual({ exitCode: 0, swapped: false });
+		// claude.real got the ORIGINAL primary env, not the swapped token.
+		expect(calls[0]?.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe("primary-token");
+		expect(warn).toHaveBeenCalledWith(expect.stringMatching(/config\.enabled is false/u));
+	});
+
+	it("config.enabled=true → swaps as normal (the switch only fires on explicit false)", async () => {
+		const { deps, calls } = makeDeps({
+			choiceStore: swapChoice,
+			tokenStore: swapToken,
+			readEnabledFlag: () => Promise.resolve(true),
+		});
+		const result = await runShim(deps);
+		expect(result.swapped).toBe(true);
+		expect(calls[0]?.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe("swapped-token");
+	});
+
+	it("config absent (readEnabledFlag → undefined) → still swaps (fail-open, non-regressing)", async () => {
+		const { deps } = makeDeps({
+			choiceStore: swapChoice,
+			tokenStore: swapToken,
+			readEnabledFlag: () => Promise.resolve(undefined),
+		});
+		const result = await runShim(deps);
+		expect(result.swapped).toBe(true);
+	});
+
+	it("readEnabledFlag rejects → fail-open, swap still proceeds (a rotted config never strands a working setup)", async () => {
+		const { deps } = makeDeps({
+			choiceStore: swapChoice,
+			tokenStore: swapToken,
+			readEnabledFlag: () => Promise.reject(new Error("boom")),
+		});
+		const result = await runShim(deps);
+		expect(result.swapped).toBe(true);
+	});
+});
+
 describe("runShim — per-account CLAUDE_CONFIG_DIR (so the model reports the swapped account)", () => {
 	const swapChoice: ChoiceStore = {
 		read: () =>

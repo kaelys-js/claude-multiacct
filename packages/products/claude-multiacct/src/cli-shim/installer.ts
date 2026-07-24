@@ -40,11 +40,22 @@
  *
  * # Feature flag (GATED PR — landing this must not change default behavior)
  *
- * `install` and `uninstall` are BOTH gated on
- * `process.env.CLAUDE_MULTIACCT_ENABLE_SHIM === "1"` OR an explicit
- * `{overrideFlag: true}` option (tests set the latter). When the flag is
- * off, they return `{skipped: true, reason}` and touch nothing. `status`
- * is not gated because reading a directory has no user-visible effect.
+ * `install` is gated on `process.env.CLAUDE_MULTIACCT_ENABLE_SHIM === "1"`
+ * OR an explicit `{overrideFlag: true}` / `{flag: true}` option (tests set
+ * the former two). When the gate is off, `install` returns `{skipped: true,
+ * reason}` and touches nothing. `status` is not gated because reading a
+ * directory has no user-visible effect.
+ *
+ * `uninstall` is DELIBERATELY NOT gated. You must always be able to remove
+ * what is installed: a system whose `config.enabled` is false (or whose env
+ * flag is unset) still has a physically-planted, `uchg`-locked shim on disk,
+ * and refusing to uninstall it would strand the machine in "disabled but
+ * still swapping, and unremovable via the flag". The enable flag gates
+ * turning the shim ON, never the ability to take it back off. `uninstall` is
+ * a no-op only when there is genuinely nothing installed (`claude.real`
+ * absent). Its callers (`cma uninstall`, install rollback) always want the
+ * removal to proceed, and the watcher never calls it (its reconcile emits no
+ * uninstall actions), so decoupling here changes no other behaviour.
  *
  * # Snapshotting
  *
@@ -110,8 +121,8 @@ export type MutateOptions = {
 	overrideFlag?: boolean;
 	/**
 	 * Authoritative enable flag from the CLI's `isEnabled({env, config})`
-	 * decision. When set, this OVERRIDES the env-var/overrideFlag path:
-	 *   - `flag: true` → proceed with the mutation.
+	 * decision, consulted by `install` only (`uninstall` is never gated):
+	 *   - `flag: true` → proceed with the install.
 	 *   - `flag: false` → skip with reason (behaves exactly like flag-off env).
 	 *   - `flag: undefined` (default) → legacy env-var + overrideFlag path.
 	 * This lets `cma install` propagate `config.enabled` without requiring
@@ -120,7 +131,7 @@ export type MutateOptions = {
 	flag?: boolean;
 };
 
-/** Skipped-because-flag-off result — every mutating op can return this. */
+/** Skipped-because-gate-off result — `install` returns this when the flag is off. */
 export type SkippedResult = { skipped: true; reason: string };
 
 /** Successful install result. */
@@ -128,10 +139,18 @@ export type InstallResult =
 	| { skipped: false; installed: true; alreadyInstalled: boolean; backup: string | undefined }
 	| SkippedResult;
 
-/** Successful uninstall result. */
-export type UninstallResult =
-	| { skipped: false; uninstalled: true; wasInstalled: boolean; backup: string | undefined }
-	| SkippedResult;
+/**
+ * Uninstall result. There is no skipped variant: `uninstall` is not gated, so
+ * it always runs — `wasInstalled: false` is the "nothing to remove" outcome.
+ * `skipped: false` is retained so a caller can discriminate this from the other
+ * subsystems' skippable uninstall results with the same `"skipped" in r` check.
+ */
+export type UninstallResult = {
+	skipped: false;
+	uninstalled: true;
+	wasInstalled: boolean;
+	backup: string | undefined;
+};
 
 /** Read-only status — always runs, flag or not. */
 export type StatusResult = {
@@ -145,21 +164,20 @@ function flagOn(env: Record<string, string | undefined>): boolean {
 }
 
 /**
- * Decide whether a mutating op is gated. Returns `undefined` when it may
- * proceed, or a `SkippedResult` shape when it must skip.
+ * Decide whether `install` is gated. Returns `undefined` when it may proceed,
+ * or a `SkippedResult` shape when it must skip. Only `install` consults this —
+ * `uninstall` is never gated (removal must always be possible).
  *
  * Priority (see `MutateOptions.flag` docstring):
  *   1. `opts.flag !== undefined` → the CLI's authoritative decision wins.
  *   2. otherwise → legacy `overrideFlag || env` gate.
  *
- * @param {"install" | "uninstall"} verb - Verb used in the reason string.
  * @param {MutateOptions} opts - Caller's options.
  * @param {Record<string,string|undefined>} env - Env dict (already resolved).
  * @param {string} cliDir - Target dir, for the reason string.
  * @returns {SkippedResult | undefined} Skip decision, or undefined to proceed.
  */
 function resolveGate(
-	verb: "install" | "uninstall",
 	opts: MutateOptions,
 	env: Record<string, string | undefined>,
 	cliDir: string,
@@ -170,7 +188,7 @@ function resolveGate(
 	if (opts.flag === false) {
 		return {
 			skipped: true,
-			reason: `${verb}: {flag:false} from CLI; refusing to modify ${cliDir}`,
+			reason: `install: {flag:false} from CLI; refusing to modify ${cliDir}`,
 		};
 	}
 	if (opts.overrideFlag === true || flagOn(env)) {
@@ -178,7 +196,7 @@ function resolveGate(
 	}
 	return {
 		skipped: true,
-		reason: `${verb}: ${FLAG_ENV_VAR} is not "${FLAG_ENABLED_VALUE}"; refusing to modify ${cliDir}`,
+		reason: `install: ${FLAG_ENV_VAR} is not "${FLAG_ENABLED_VALUE}"; refusing to modify ${cliDir}`,
 	};
 }
 
@@ -359,7 +377,7 @@ export async function install(
 ): Promise<InstallResult> {
 	const { env, log, exec, backupRoot } = resolveDeps(deps);
 
-	const gate = resolveGate("install", opts, env, cliDir);
+	const gate = resolveGate(opts, env, cliDir);
 	if (gate !== undefined) {
 		log.warn(gate.reason);
 		return gate;
@@ -429,23 +447,23 @@ export async function install(
  * Uninstall the shim from `cliDir`. Restores `claude.real` → `claude` and
  * snapshots first.
  *
+ * NOT gated on the enable flag: removal must always be possible, or a system
+ * with `config.enabled: false` (or the env flag unset) would keep a planted,
+ * `uchg`-locked shim it could never take back off. See the module docstring.
+ * `opts` is accepted for call-site symmetry with `install` but its `flag` /
+ * `overrideFlag` no longer influence whether the removal runs.
+ *
  * @param {string} cliDir - Absolute path to `Contents/MacOS/`.
- * @param {MutateOptions} opts - Standard flag override for tests.
+ * @param {MutateOptions} _opts - Accepted for symmetry with `install`; ignored.
  * @param {InstallerDeps} deps - Injected surface (tests).
- * @returns {Promise<UninstallResult>} Skipped result when the flag is off, else the uninstall outcome.
+ * @returns {Promise<UninstallResult>} The uninstall outcome (never skipped).
  */
 export async function uninstall(
 	cliDir: string,
-	opts: MutateOptions = {},
+	_opts: MutateOptions = {},
 	deps: InstallerDeps = {},
 ): Promise<UninstallResult> {
-	const { env, log, exec, backupRoot } = resolveDeps(deps);
-
-	const gate = resolveGate("uninstall", opts, env, cliDir);
-	if (gate !== undefined) {
-		log.warn(gate.reason);
-		return gate;
-	}
+	const { log, exec, backupRoot } = resolveDeps(deps);
 
 	const claudePath = join(cliDir, "claude");
 	const realPath = join(cliDir, "claude.real");
