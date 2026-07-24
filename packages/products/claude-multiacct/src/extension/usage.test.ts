@@ -123,6 +123,29 @@ describe("mountUsage — user-menu augmenter", () => {
 		handle.destroy();
 	});
 
+	it('renders the native account as "Primary" in the usage section', async () => {
+		// The usage rows share the picker's display contract: the native account
+		// reads "Primary", not its registry label. Keeps the two account surfaces
+		// naming the same account the same way.
+		const env = mkEnv();
+		const native: PickerAccount[] = [
+			{ ...ACCOUNTS[0]!, label: "icloud", source: "native" },
+			{ ...ACCOUNTS[1]!, source: "explicit" },
+		];
+		const get = vi.fn<FakeGet>(() =>
+			Promise.resolve({ ok: true, status: 200, data: { ok: true } } as BridgeResult<unknown>),
+		);
+		const handle = mountUsage({ ...mkOpts(env, get), accounts: native });
+		openClaudeMenu(env.doc, env.menuHost);
+		await tick();
+		const rows = env.doc.querySelectorAll<HTMLElement>("[data-cma-account-uuid]");
+		// Row label is the second <span> (after the checkmark slot).
+		expect(rows[0]?.querySelectorAll("span")[1]?.textContent).toBe("Primary");
+		expect(rows[0]?.querySelectorAll("span")[1]?.textContent).not.toContain("icloud");
+		expect(rows[1]?.querySelectorAll("span")[1]?.textContent).toBe("gmail");
+		handle.destroy();
+	});
+
 	it("destroy() removes the injected section and disconnects the observer", async () => {
 		const env = mkEnv();
 		const get = vi.fn<FakeGet>(() =>

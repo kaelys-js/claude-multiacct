@@ -47,7 +47,7 @@ import { dirname, join } from "node:path";
 import type { Account, AccountUuid } from "../domain/account.ts";
 import { type AccountRegistry, byUuid } from "../domain/registry.ts";
 import { applyTokenSwap, isInteractiveSession, parseSessionUuid } from "./env.ts";
-import type { ChoiceStore, TokenStore } from "../ports.ts";
+import type { ChoiceStore, HostChoiceStore, TokenStore } from "../ports.ts";
 // session-pid helpers (writeSessionPid/removeSessionPid) and the config-dir
 // prep are bound at the entry-point (the `scripts/build-shim.mjs` glue) and
 // injected via `ShimDeps`; nothing here touches the real filesystem directly.
@@ -64,6 +64,26 @@ export type ShimDeps = {
 	/** Directory containing this shim binary. `claude.real` sits next to it. */
 	binDir: string;
 	choiceStore: ChoiceStore;
+	/**
+	 * Per-conversation choice store keyed on the STABLE host session id (see
+	 * `hostSessionId`). Optional so every existing test + the classic path stay
+	 * untouched when it is absent. When present alongside `hostSessionId`, it is
+	 * the restart-survival path: the shim resolves an account through it when the
+	 * fresh-minted CLI uuid has no `choiceStore` entry (the post-restart case),
+	 * and persists into it whenever it resolves a CLI-uuid choice, so a later
+	 * restart re-applies the same account. Runtime binds `FsHostChoiceStore`.
+	 */
+	hostChoiceStore?: HostChoiceStore;
+	/**
+	 * The app's stable conversation id (`CLAUDE_CODE_HOST_SESSION_ID`,
+	 * `local_<uuid>`), read from the env. Unlike the CLI session uuid — minted
+	 * fresh on every spawn, so lost across a Claude.app restart — this id is the
+	 * app's own durable handle for a conversation (it persists in Claude.app's
+	 * on-disk store), so it is what a resumed conversation is keyed on to
+	 * re-apply its chosen account. Absent → the restart-survival path is inert
+	 * and the shim behaves exactly as before (CLI-uuid choice only).
+	 */
+	hostSessionId?: string;
 	readRegistry: () => Promise<AccountRegistry | undefined>;
 	tokenStore: TokenStore;
 	/** `child_process.spawnSync`-shaped. Real impl inherits stdio. */
@@ -557,7 +577,16 @@ async function computeSwappedEnv(
 
 	const state = await deps.choiceStore.read();
 	const choice = state[sessionUuid];
-	if (choice === undefined) {
+	// The CLI-uuid choice is authoritative. When it is absent (the post-restart
+	// case: the launcher spawned a fresh id-less session and the shim minted a
+	// NEW uuid this store has never seen), fall back to the choice keyed on the
+	// STABLE host session id, so a resumed conversation re-applies its account.
+	let accountUuid: AccountUuid | undefined = choice?.accountUuid;
+	const resolvedFromCliChoice = accountUuid !== undefined;
+	if (accountUuid === undefined) {
+		accountUuid = await readHostChoiceAccount(deps);
+	}
+	if (accountUuid === undefined) {
 		return undefined;
 	}
 
@@ -566,10 +595,19 @@ async function computeSwappedEnv(
 		return undefined;
 	}
 
-	const account: Account | undefined = byUuid(registry, choice.accountUuid);
+	const account: Account | undefined = byUuid(registry, accountUuid);
 	if (account === undefined) {
-		deps.warn(`cma-shim: choice references unknown account ${choice.accountUuid}; passing through`);
+		deps.warn(`cma-shim: choice references unknown account ${accountUuid}; passing through`);
 		return undefined;
+	}
+
+	// Persist the stable mapping whenever we resolved from an authoritative
+	// CLI-uuid choice (a fresh in-session pick), so a later Claude.app restart
+	// re-applies the same account through the host session id even though the CLI
+	// uuid will change. Skipped when we just resolved FROM the host store (it is
+	// already persisted). Best-effort: a failure here must never sink the swap.
+	if (resolvedFromCliChoice) {
+		await persistHostChoice(deps, account.uuid as AccountUuid);
 	}
 
 	const token = await deps.tokenStore.get(account.uuid as AccountUuid);
@@ -599,6 +637,52 @@ async function computeSwappedEnv(
 		rateLimitTier: account.rateLimitTier,
 		configDir,
 	});
+}
+
+/**
+ * Read the account bound to this invocation's stable host session id, or
+ * `undefined` when there is no host store, no host id, or no recorded choice.
+ * This is the restart-survival lookup: it only matters once the CLI-uuid choice
+ * has come up empty. The store's own `read` soft-fails to `undefined` on a
+ * corrupt/absent sidecar, so this never throws.
+ *
+ * @param {ShimDeps} deps - Injected orchestration surface.
+ * @returns {Promise<string | undefined>} The bound account uuid, or `undefined`.
+ */
+async function readHostChoiceAccount(deps: ShimDeps): Promise<AccountUuid | undefined> {
+	if (deps.hostChoiceStore === undefined || deps.hostSessionId === undefined) {
+		return undefined;
+	}
+	const hostChoice = await deps.hostChoiceStore.read(deps.hostSessionId);
+	return hostChoice?.accountUuid;
+}
+
+/**
+ * Persist the stable host-session → account mapping, so a future restart of the
+ * same conversation re-applies `accountUuid` even after the CLI uuid changes.
+ * A no-op when the host store or host id is absent. Best-effort: any failure is
+ * warned and swallowed — persistence is a durability bonus, never a reason to
+ * refuse the swap the caller already resolved.
+ *
+ * @param {ShimDeps} deps - Injected orchestration surface.
+ * @param {AccountUuid} accountUuid - The account resolved for this invocation.
+ * @returns {Promise<void>}
+ */
+async function persistHostChoice(deps: ShimDeps, accountUuid: AccountUuid): Promise<void> {
+	if (deps.hostChoiceStore === undefined || deps.hostSessionId === undefined) {
+		return;
+	}
+	try {
+		await deps.hostChoiceStore.write({
+			hostSessionId: deps.hostSessionId,
+			accountUuid,
+			chosenAt: new Date().toISOString(),
+		});
+	} catch (error) {
+		deps.warn(
+			`cma-shim: persisting host-session choice failed (${describe(error)}); restart-persistence skipped for this pick`,
+		);
+	}
 }
 
 /**

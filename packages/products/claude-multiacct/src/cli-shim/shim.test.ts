@@ -15,7 +15,8 @@ import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, type Mock, vi } from "vitest";
 import type { Account, AccountUuid } from "../domain/account.ts";
 import type { AccountRegistry } from "../domain/registry.ts";
-import type { ChoiceStore, TokenStore } from "../ports.ts";
+import type { ChoiceStore, HostChoiceStore, TokenStore } from "../ports.ts";
+import { InMemoryHostChoiceStore } from "./host-choice-store.ts";
 import { runShim, type ShimDeps } from "./shim.ts";
 
 // A throwaway writable stream that records everything written to it.
@@ -1037,5 +1038,127 @@ describe("moduleDir", () => {
 	it("returns the directory of a file:// URL", async () => {
 		const { moduleDir } = await import("./shim.ts");
 		expect(moduleDir("file:///a/b/c.ts")).toBe("/a/b");
+	});
+});
+
+const HOST_ID = "local_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+
+// A CLI-uuid choice pinning SESSION_A to UUID_B, the fresh-pick fixture the
+// persistence path keys off.
+const cliChoiceForB: ChoiceStore = {
+	read: () =>
+		Promise.resolve({
+			[SESSION_A]: {
+				sessionUuid: SESSION_A,
+				accountUuid: UUID_B,
+				chosenAt: "2026-07-24T00:00:00.000Z",
+			},
+		}),
+	write: async () => {},
+};
+
+describe("runShim — host-session persistence (choice survives a Claude.app restart)", () => {
+	it("restart case: no CLI-uuid choice, but a host-session choice → swaps to that account", async () => {
+		// The post-restart spawn mints a NEW CLI uuid the choice store has never
+		// seen (here: an empty store), yet the conversation carries the SAME stable
+		// host session id. Resolving through the host store is what re-applies the
+		// pre-restart pick instead of silently dropping to primary.
+		const hostChoiceStore = new InMemoryHostChoiceStore();
+		await hostChoiceStore.write({
+			hostSessionId: HOST_ID,
+			accountUuid: UUID_B,
+			chosenAt: "2026-07-24T00:00:00.000Z",
+		});
+		const writeSpy = vi.spyOn(hostChoiceStore, "write");
+		const { deps } = makeDeps({
+			choiceStore: { read: () => Promise.resolve({}), write: async () => {} },
+			hostChoiceStore,
+			hostSessionId: HOST_ID,
+			tokenStore: { get: () => Promise.resolve("swapped-token"), put: async () => {} },
+			spawnSync: (_file, _args, opts) => {
+				const env = opts.env as Record<string, string>;
+				expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe("swapped-token");
+				expect(env.CLAUDE_CODE_SUBSCRIPTION_TYPE).toBe("Max");
+				return { status: 0 };
+			},
+		});
+		const result = await runShim(deps);
+		expect(result).toStrictEqual({ exitCode: 0, swapped: true });
+		// Resolving FROM the host store must not re-write it (it is already there).
+		expect(writeSpy).not.toHaveBeenCalled();
+	});
+
+	it("fresh in-session pick: a CLI-uuid choice is PERSISTED to the host store for next restart", async () => {
+		// This is the write side of the restart survival: when the shim resolves an
+		// authoritative CLI-uuid choice, it records the stable host→account mapping
+		// so the NEXT app restart (which mints a new CLI uuid) can find it.
+		const writes: Array<{ hostSessionId: string; accountUuid: string }> = [];
+		const hostChoiceStore: HostChoiceStore = {
+			read: () => Promise.resolve(undefined),
+			write: (choice) => {
+				writes.push({ hostSessionId: choice.hostSessionId, accountUuid: choice.accountUuid });
+				return Promise.resolve();
+			},
+		};
+		const { deps } = makeDeps({
+			choiceStore: cliChoiceForB,
+			hostChoiceStore,
+			hostSessionId: HOST_ID,
+			tokenStore: { get: () => Promise.resolve("swapped-token"), put: async () => {} },
+		});
+		const result = await runShim(deps);
+		expect(result.swapped).toBe(true);
+		expect(writes).toStrictEqual([{ hostSessionId: HOST_ID, accountUuid: UUID_B }]);
+	});
+
+	it("host-store write failure is best-effort: the swap still happens, with a warn", async () => {
+		// Persistence is a durability bonus; a write failure must never sink the
+		// swap the shim already resolved (Rule 12: warn loud, degrade nothing).
+		const hostChoiceStore: HostChoiceStore = {
+			read: () => Promise.resolve(undefined),
+			write: () => Promise.reject(new Error("disk full")),
+		};
+		const { deps, warn } = makeDeps({
+			choiceStore: cliChoiceForB,
+			hostChoiceStore,
+			hostSessionId: HOST_ID,
+			tokenStore: { get: () => Promise.resolve("swapped-token"), put: async () => {} },
+		});
+		const result = await runShim(deps);
+		expect(result.swapped).toBe(true);
+		expect(warn).toHaveBeenCalledWith(
+			expect.stringContaining("persisting host-session choice failed"),
+		);
+	});
+
+	it("host store present but no host session id → inert (no read, no write); CLI choice still swaps", async () => {
+		// A spawn the app did not tag with CLAUDE_CODE_HOST_SESSION_ID leaves the
+		// restart path dormant: no persistence, and the classic CLI-uuid choice
+		// still drives the swap exactly as before.
+		const read = vi.fn<HostChoiceStore["read"]>(() => Promise.resolve(undefined));
+		const write = vi.fn<HostChoiceStore["write"]>(() => Promise.resolve());
+		const { deps } = makeDeps({
+			choiceStore: cliChoiceForB,
+			hostChoiceStore: { read, write },
+			hostSessionId: undefined,
+			tokenStore: { get: () => Promise.resolve("swapped-token"), put: async () => {} },
+		});
+		const result = await runShim(deps);
+		expect(result.swapped).toBe(true);
+		expect(read).not.toHaveBeenCalled();
+		expect(write).not.toHaveBeenCalled();
+	});
+
+	it("host store present, no host id, and no CLI choice → pass-through (host lookup is skipped)", async () => {
+		const read = vi.fn<HostChoiceStore["read"]>(() => Promise.resolve(undefined));
+		const { deps, calls } = makeDeps({
+			choiceStore: { read: () => Promise.resolve({}), write: async () => {} },
+			hostChoiceStore: { read, write: async () => {} },
+			hostSessionId: undefined,
+		});
+		const result = await runShim(deps);
+		expect(result.swapped).toBe(false);
+		expect(read).not.toHaveBeenCalled();
+		expect(calls[0]?.env?.CLAUDE_CODE_OAUTH_TOKEN).toBe("primary-token");
 	});
 });

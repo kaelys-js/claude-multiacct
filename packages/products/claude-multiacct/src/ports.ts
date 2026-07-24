@@ -15,6 +15,7 @@
  */
 
 import type { Account, AccountUuid } from "./domain/account.ts";
+import type { HostSessionChoice } from "./domain/host-session-choice.ts";
 import type { ChoiceStoreState, SessionAccountChoice } from "./domain/session-choice.ts";
 import type { UsageSnapshot } from "./domain/usage.ts";
 
@@ -43,6 +44,21 @@ export type TokenStore = {
 export type ChoiceStore = {
 	read(): Promise<ChoiceStoreState>;
 	write(choice: SessionAccountChoice): Promise<void>;
+};
+
+/**
+ * `HostChoiceStore` — persistence for per-CONVERSATION sticky account choices,
+ * keyed on the app's stable `CLAUDE_CODE_HOST_SESSION_ID` rather than the CLI
+ * session uuid. This is the store that survives a Claude.app restart: the CLI
+ * uuid is minted fresh on every spawn, but the host session id is the app's own
+ * durable handle for a conversation, so a resumed conversation resolves the same
+ * account through here even though its `ChoiceStore` entry (CLI-uuid-keyed) is
+ * gone. `read` returns `undefined` for an unknown conversation — the shim's
+ * "fall back to primary" signal, same contract as `ChoiceStore`.
+ */
+export type HostChoiceStore = {
+	read(hostSessionId: string): Promise<HostSessionChoice | undefined>;
+	write(choice: HostSessionChoice): Promise<void>;
 };
 
 /**
