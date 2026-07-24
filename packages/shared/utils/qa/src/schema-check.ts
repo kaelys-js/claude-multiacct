@@ -18,10 +18,14 @@
  *  - toml: a `#:schema <ref>` line.
  *
  * A `<ref>` that is a relative path resolves to a repo file; an `http(s)://`
- * ref is passed through. A remote schema that can't be downloaded (offline, 5xx)
- * is a WARNING — never a failure — mirroring `sync:schemas`' network resilience;
- * a genuine schema-validation failure IS a failure. The process exits non-zero
- * iff any file failed validation.
+ * ref is passed through. A schema that can't be downloaded (offline, 5xx) is a
+ * WARNING — never a failure — mirroring `sync:schemas`' network resilience. That
+ * covers a directly-remote `$schema` AND a LOCAL vendored schema that transitively
+ * `$ref`s a remote one (e.g. `.schemas/markdownlint-cli2.json`, which pulls a
+ * `raw.githubusercontent.com` `$ref` when the validator is built): both surface as
+ * a download failure, and neither should fail the gate on a network blip. A genuine
+ * schema-validation failure — or a schema file that is simply missing — IS a
+ * failure. The process exits non-zero iff any file failed validation.
  *
  * Run through the repo-scoped mise wrapper (`bin/mise exec`) so versions come
  * from mise.toml, matching the rest of @foundation/qa.
@@ -331,9 +335,9 @@ function dataFileFor(d: Discovered): { path: string; cleanup: string | null } {
 	return { path, cleanup: dir };
 }
 
-// Validate one discovered file against its resolved schema. A remote-schema
-// download failure is classified `warn-unreachable` (network resilience); any
-// other non-zero exit is a genuine `fail`.
+// Validate one discovered file against its resolved schema. A schema-download
+// failure is classified `warn-unreachable` (network resilience); any other
+// non-zero exit is a genuine `fail`.
 function validate(d: Discovered): Outcome {
 	const schemafile = resolveRef(d.ref, d.file);
 	const { path, cleanup } = dataFileFor(d);
@@ -348,9 +352,17 @@ function validate(d: Discovered): Outcome {
 		process.stdout.write(r.stdout);
 		return "pass";
 	}
-	if (isRemote(d.ref) && DOWNLOAD_FAILURE_SIGNATURES.some((s) => combined.includes(s))) {
+	// A download-failure signature means a schema in the reference graph was
+	// unreachable — the top-level `$schema` itself (remote ref) OR a remote `$ref`
+	// pulled by an otherwise-local vendored schema while the validator is built.
+	// Both degrade to a warning, never a gate failure, mirroring sync:schemas.
+	// Keyed on the signatures alone (not `isRemote(d.ref)`): check-jsonschema emits
+	// these only for network/download errors, while a missing LOCAL schema raises
+	// `FileNotFoundError` and a real schema violation raises validation output —
+	// so a genuine failure never masquerades as unreachable.
+	if (DOWNLOAD_FAILURE_SIGNATURES.some((s) => combined.includes(s))) {
 		process.stderr.write(
-			`WARN: ${d.file} — schema ${d.ref} unreachable (offline?); skipping validation.\n`,
+			`WARN: ${d.file} — schema ${d.ref} (or a schema it references) unreachable (offline?); skipping validation.\n`,
 		);
 		return "warn-unreachable";
 	}
