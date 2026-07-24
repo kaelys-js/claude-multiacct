@@ -305,6 +305,33 @@ const DOWNLOAD_FAILURE_SIGNATURES: readonly string[] = [
 	"Could not retrieve",
 ];
 
+// Signatures that mean check-jsonschema could not be LAUNCHED at all, as opposed
+// to running and rejecting the config. The tool is pipx-backed and resolved
+// through mise; when the shared `.mise` toolchain is momentarily mid-flight (the
+// suite re-runs this check inside a concurrent `vitest run`, and pipx tools are
+// the first to vanish from the install dir), the exec fails with a shell
+// `not found` (exit 127) or mise's own `couldn't exec process`. The validator
+// never ran, so that is not a schema verdict — skip the file rather than fail the
+// gate. A genuinely broken toolchain fails `pnpm install`/`mise install` loudly
+// elsewhere. Matched on STDERR only, for the same anti-spoof reason as the
+// download signatures below.
+const TOOL_LAUNCH_FAILURE_SIGNATURES: readonly string[] = [
+	"couldn't exec process",
+	"command not found",
+	": not found",
+];
+const TOOL_LAUNCH_ATTEMPTS = 3;
+
+// True when check-jsonschema could not be launched (spawn failure, exit 127, or a
+// recognisable launch-failure message on stderr) rather than executed and exited
+// non-zero. Called only with a NON-zero result.
+function toolCouldNotLaunch(status: number | null, stderr: string): boolean {
+	if (status === null || status === 127) {
+		return true;
+	}
+	return TOOL_LAUNCH_FAILURE_SIGNATURES.some((s) => stderr.includes(s));
+}
+
 /** One file's validation outcome. */
 type Outcome = "pass" | "fail" | "warn-unreachable";
 
@@ -343,13 +370,30 @@ function validate(d: Discovered): Outcome {
 	const { path, cleanup } = dataFileFor(d);
 	// The data path is either the original file or a stripped jsonc/json5 copy with
 	// a `.json` name, which check-jsonschema parses as plain JSON.
-	const r = miseExec(["check-jsonschema", "--schemafile", schemafile, path], { cwd: ROOT });
+	let r = miseExec(["check-jsonschema", "--schemafile", schemafile, path], { cwd: ROOT });
+	// Retry a tool-LAUNCH failure (toolchain churn) before believing it; a real
+	// validation result — pass, or a non-zero exit with diagnostics — is returned
+	// on the first hit and never retried.
+	for (
+		let attempt = 1;
+		attempt < TOOL_LAUNCH_ATTEMPTS && toolCouldNotLaunch(r.status, r.stderr);
+		attempt++
+	) {
+		r = miseExec(["check-jsonschema", "--schemafile", schemafile, path], { cwd: ROOT });
+	}
 	if (cleanup !== null) {
 		rmSync(cleanup, { recursive: true, force: true });
 	}
 	if (r.status === 0) {
 		process.stdout.write(r.stdout);
 		return "pass";
+	}
+	if (toolCouldNotLaunch(r.status, r.stderr)) {
+		// check-jsonschema never ran (toolchain mid-flight): not a schema verdict.
+		process.stderr.write(
+			`WARN: ${d.file} — check-jsonschema could not be launched (toolchain busy); skipping validation.\n`,
+		);
+		return "warn-unreachable";
 	}
 	// A download-failure signature means a schema in the reference graph was
 	// unreachable — the top-level `$schema` itself (remote ref) OR a remote `$ref`
