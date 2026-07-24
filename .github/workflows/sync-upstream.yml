@@ -252,7 +252,7 @@ jobs:
       # markdownlint-cli2, oxfmt, oxlint) before node's binary lands on
       # PATH, and each fails with `exit code 127`.
       - name: Warm mise toolchain
-        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3.6.3
+        uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
         with:
           install: true
 
