@@ -88,7 +88,7 @@ export function corsPreflight(origin: string): PreflightResponse {
 		headers: {
 			"access-control-allow-origin": origin,
 			"access-control-allow-headers": `content-type,${BRIDGE_SECRET_HEADER}`,
-			"access-control-allow-methods": "GET,POST,OPTIONS",
+			"access-control-allow-methods": "GET,POST,DELETE,OPTIONS",
 			"access-control-max-age": "600",
 			// Chrome Private Network Access — since Chrome 104, a public HTTPS
 			// page fetching a private-IP subresource (127.0.0.1, 10.x, 192.168.x)
