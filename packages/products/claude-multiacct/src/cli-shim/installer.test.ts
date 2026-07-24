@@ -309,15 +309,20 @@ describe("install / uninstall — immutability (uchg lock, the install-race fix)
 });
 
 describe("uninstall", () => {
-	it("with flag unset → skipped no-op", async () => {
+	it("removes the shim even with the enable flag OFF (env unset) — uninstall is never gated", async () => {
+		// The recoverability fix. A machine can be disabled (env unset /
+		// config.enabled:false) yet still carry a planted, uchg-locked shim. Uninstall
+		// MUST take it back off regardless of the flag, or the shim is unremovable via
+		// the flag and the system stays "disabled but still swapping". Adversarial:
+		// re-gate uninstall on the flag and this goes red (it would return
+		// {skipped:true} and leave the shim in place).
 		const ctx = await makeCtx(true);
 		await install(ctx.cliDir, { shimSourcePath: ctx.shimSource }, ctx.deps);
 		const disabled = { ...ctx.deps, env: {} };
 		const result = await uninstall(ctx.cliDir, {}, disabled);
-		expect(result).toStrictEqual({
-			skipped: true,
-			reason: expect.stringMatching(/CLAUDE_MULTIACCT_ENABLE_SHIM/u),
-		});
+		expect(result).toMatchObject({ skipped: false, uninstalled: true, wasInstalled: true });
+		const claudeContent = await readFile(join(ctx.cliDir, "claude"), "utf8");
+		expect(claudeContent).toContain("real-claude");
 	});
 
 	it("restores claude.real → claude and snapshots first (reversibility contract)", async () => {
@@ -484,24 +489,31 @@ describe("install / uninstall — CLI-authoritative {flag} param (PR6b contract)
 		expect(result).toMatchObject({ skipped: true });
 		expect(await readdir(ctx.cliDir)).toStrictEqual(before);
 	});
-	it("uninstall with {flag: true} runs even with env UNSET; {flag:false} skips with env SET", async () => {
+	it("uninstall ignores {flag} entirely — both {flag:true} and {flag:false} remove the shim", async () => {
+		// `install` honours {flag}; `uninstall` does not. Proving BOTH flag values
+		// remove pins that the enable flag gates INSTALL, never the ability to
+		// uninstall. Adversarial: re-gate uninstall on {flag} and the flag:false
+		// case flips red (it would skip and leave the shim planted).
 		const ctx = await makeCtx(true);
 		await install(ctx.cliDir, { shimSourcePath: ctx.shimSource, overrideFlag: true }, ctx.deps);
 		const envOff = { ...ctx.deps, env: {} };
-		const ok = await uninstall(ctx.cliDir, { flag: true }, envOff);
-		expect(ok).toMatchObject({ skipped: false, uninstalled: true });
-		// re-install then try flag:false to prove precedence
+		const okTrue = await uninstall(ctx.cliDir, { flag: true }, envOff);
+		expect(okTrue).toMatchObject({ skipped: false, uninstalled: true, wasInstalled: true });
+		// re-install, then uninstall with {flag:false} AND the env set — still removes.
 		await install(ctx.cliDir, { shimSourcePath: ctx.shimSource, overrideFlag: true }, ctx.deps);
-		const skipped = await uninstall(ctx.cliDir, { flag: false }, ctx.deps);
-		expect(skipped).toMatchObject({ skipped: true });
+		const okFalse = await uninstall(ctx.cliDir, { flag: false }, ctx.deps);
+		expect(okFalse).toMatchObject({ skipped: false, uninstalled: true, wasInstalled: true });
+		const restored = await readFile(join(ctx.cliDir, "claude"), "utf8");
+		expect(restored).toContain("real-claude");
 	});
 });
 
 describe("install / uninstall — default arg paths (flag-off is safe to exercise)", () => {
-	// Rule 12: without deps, the flag defaults to process.env — which in CI is
-	// unset, so the mutating ops short-circuit into {skipped:true}. Calling with
-	// zero deps exercises the `deps.env ?? process.env` and `deps.logger ??
-	// silentLogger` fallbacks WITHOUT writing anything.
+	// Rule 12: without deps, `install`'s flag defaults to process.env — which in CI
+	// is unset, so install short-circuits into {skipped:true}. `uninstall` is never
+	// gated, so its no-deps path does not short-circuit; on a clean dir there is
+	// simply nothing to remove. Both exercise the `deps.env ?? process.env` and
+	// `deps.logger ?? silentLogger` fallbacks WITHOUT writing anything.
 	it("install with no deps → falls back to process.env + silent logger, still skipped", async () => {
 		const ctx = await makeCtx(false);
 		const before = await readdir(ctx.cliDir);
@@ -510,11 +522,11 @@ describe("install / uninstall — default arg paths (flag-off is safe to exercis
 		expect(await readdir(ctx.cliDir)).toStrictEqual(before);
 	});
 
-	it("uninstall with no deps → same fallback path, still skipped", async () => {
+	it("uninstall with no deps on a clean dir → not gated, wasInstalled:false, nothing written", async () => {
 		const ctx = await makeCtx(false);
 		const before = await readdir(ctx.cliDir);
 		const result = await uninstall(ctx.cliDir);
-		expect(result).toMatchObject({ skipped: true });
+		expect(result).toMatchObject({ skipped: false, wasInstalled: false });
 		expect(await readdir(ctx.cliDir)).toStrictEqual(before);
 	});
 });

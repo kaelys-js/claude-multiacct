@@ -34,6 +34,7 @@ import { readRegistry } from "./src/cli-shim/registry-store.ts";
 import { FsChoiceStore, defaultChoiceStoreDir } from "./src/cli-shim/choice-store.ts";
 import { FsHostChoiceStore, defaultHostChoiceStoreDir } from "./src/cli-shim/host-choice-store.ts";
 import { FileTokenStore } from "./src/oauth/file-token-store.ts";
+import { read as readCmaConfig, defaultConfigPath } from "./src/cli/config-store.ts";
 
 if (process.env.CMA_SHIM_SELFTEST === "1") {
 	process.stdout.write(\`cma-shim selftest OK \${PACKAGE_VERSION}\\n\`);
@@ -71,6 +72,14 @@ const result = await runShim({
 	// the restart-survival path inert (classic CLI-uuid behaviour).
 	hostSessionId: process.env.CLAUDE_CODE_HOST_SESSION_ID,
 	readRegistry: () => readRegistry(),
+	// Runtime kill-switch: the shim runs without the enable env var, so it reads
+	// config.enabled directly. config-store.read soft-fails to undefined on a
+	// missing/corrupt sidecar, so this is fail-open — only an explicit false stops
+	// the swap. Cheap: one small JSON read per spawn, dwarfed by the claude.real spawn.
+	readEnabledFlag: async () => {
+		const cfg = await readCmaConfig(defaultConfigPath());
+		return cfg?.enabled;
+	},
 	tokenStore,
 	spawnSync,
 	spawn,

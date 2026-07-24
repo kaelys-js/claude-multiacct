@@ -108,6 +108,21 @@ export type ShimDeps = {
 	/** Warn sink; runtime binds stderr, tests inject a spy. */
 	warn: (message: string) => void;
 	/**
+	 * Read the CLI's persisted `config.enabled` switch, or `undefined` when the
+	 * config is absent / unreadable. The shim is spawned by Claude Desktop's
+	 * launcher WITHOUT the `CLAUDE_MULTIACCT_ENABLE_SHIM` env var, so this is its
+	 * only view of "is cma enabled". Consulted as a runtime kill-switch: an
+	 * explicit `false` makes the shim pass through to the primary account instead
+	 * of swapping, so flipping `config.enabled` off actually stops the swap rather
+	 * than merely blocking a future install. Fail-open by contract — the caller
+	 * resolves a missing/rotted config to `undefined` (never throws), and ONLY an
+	 * explicit `false` disables; `undefined`/`true` proceed. Optional: when the dep
+	 * is absent the shim never consults config and behaves exactly as before (swap
+	 * driven purely by the choice sidecar), which keeps every existing test intact.
+	 * Runtime binds `config-store.read().then((c) => c?.enabled)`.
+	 */
+	readEnabledFlag?: () => Promise<boolean | undefined>;
+	/**
 	 * Register a SIGHUP handler; return an off() that unregisters. Injected
 	 * so tests exercise the swap path without touching the real signal
 	 * table. Runtime binds `process.on("SIGHUP", h)` / `process.off(...)`.
@@ -573,6 +588,28 @@ async function computeSwappedEnv(
 ): Promise<Record<string, string> | undefined> {
 	if (sessionUuid === undefined) {
 		return undefined;
+	}
+
+	// Runtime kill-switch. When `config.enabled` reads EXPLICITLY false, pass
+	// through to the primary account: a disabled system must actually stop
+	// swapping, not keep swapping until the shim binary is physically removed.
+	// Fail-open — a missing config, a config without the flag, or any read error
+	// resolves to `undefined` and the swap proceeds exactly as before, so a rotted
+	// sidecar can never silently strand a working multi-account setup. Only an
+	// explicit `false` disables.
+	if (deps.readEnabledFlag !== undefined) {
+		let enabled: boolean | undefined;
+		try {
+			enabled = await deps.readEnabledFlag();
+		} catch {
+			// Fail-open: an unreadable config leaves `enabled` undefined → swap proceeds.
+		}
+		if (enabled === false) {
+			deps.warn(
+				"cma-shim: config.enabled is false; passing through to primary (run `cma uninstall` to remove the shim)",
+			);
+			return undefined;
+		}
 	}
 
 	const state = await deps.choiceStore.read();
