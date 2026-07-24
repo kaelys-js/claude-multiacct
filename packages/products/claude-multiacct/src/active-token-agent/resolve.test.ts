@@ -30,7 +30,7 @@ import {
 import type { Account, AccountUuid } from "../domain/account.ts";
 import type { AccountRegistry } from "../domain/registry.ts";
 import type { MutableTokenStore } from "../oauth/token-store-mut.ts";
-import type { TokenStore } from "../ports.ts";
+import type { TokenRecord, TokenStore } from "../ports.ts";
 import { poolActiveToken, resolveActiveAccount } from "./resolve.ts";
 
 const PASSWORD = "test-safe-storage-key";
@@ -166,17 +166,23 @@ describe("resolveActiveAccount", () => {
 	});
 });
 
-/** A `put`-only MutableTokenStore fake that records what it was asked to store. */
-function mkMutableStore(): {
-	store: Pick<MutableTokenStore, "put">;
-	puts: Array<{ uuid: string; token: string }>;
+/**
+ * A record-surface MutableTokenStore fake. Seed it with existing records to
+ * prove the mirror preserves a refresh token; every `putRecord` is captured.
+ */
+function mkMutableStore(seed: Record<string, TokenRecord> = {}): {
+	store: Pick<MutableTokenStore, "getRecord" | "putRecord">;
+	puts: Array<{ uuid: string; record: TokenRecord }>;
 } {
-	const puts: Array<{ uuid: string; token: string }> = [];
+	const backing = new Map<string, TokenRecord>(Object.entries(seed));
+	const puts: Array<{ uuid: string; record: TokenRecord }> = [];
 	return {
 		puts,
 		store: {
-			put: (uuid: AccountUuid, token: string) => {
-				puts.push({ uuid, token });
+			getRecord: (uuid: AccountUuid) => Promise.resolve(backing.get(uuid)),
+			putRecord: (uuid: AccountUuid, record: TokenRecord) => {
+				puts.push({ uuid, record });
+				backing.set(uuid, record);
 				return Promise.resolve();
 			},
 		},
@@ -196,7 +202,38 @@ describe("poolActiveToken", () => {
 			writeStore: store,
 		});
 		expect(result).toStrictEqual({ pooledUuid: UUID_A });
-		expect(puts).toStrictEqual([{ uuid: UUID_A, token: "token-A" }]);
+		expect(puts).toStrictEqual([{ uuid: UUID_A, record: { accessToken: "token-A" } }]);
+	});
+
+	it("preserves an existing refresh token + expiry when refreshing the mirrored access token", async () => {
+		// The account was OAuth-added, so the file store already holds a full
+		// record. The mirror must swap only the access token and keep the refresh
+		// token + expiry, or the encrypted store loses the ability to auto-refresh
+		// and the account dies when the mirrored access token expires.
+		const { store, puts } = mkMutableStore({
+			[UUID_A]: {
+				accessToken: "stale-A",
+				refreshToken: "refresh-A",
+				expiresAt: "2099-01-01T00:00:00.000Z",
+			},
+		});
+		const result = await poolActiveToken({
+			registry,
+			activeTokenPorts: makePorts([[ACTIVE_TOKEN_KEY, tokenBlob("token-A")]]),
+			readStore: mkTokenStore({ [UUID_A]: "token-A", [UUID_B]: "token-B" }),
+			writeStore: store,
+		});
+		expect(result).toStrictEqual({ pooledUuid: UUID_A });
+		expect(puts).toStrictEqual([
+			{
+				uuid: UUID_A,
+				record: {
+					accessToken: "token-A",
+					refreshToken: "refresh-A",
+					expiresAt: "2099-01-01T00:00:00.000Z",
+				},
+			},
+		]);
 	});
 
 	it("no live sha (Safe Storage key absent) → mirrors nothing", async () => {
@@ -252,6 +289,6 @@ describe("poolActiveToken", () => {
 			writeStore: store,
 		});
 		expect(result).toStrictEqual({ pooledUuid: UUID_A });
-		expect(puts).toStrictEqual([{ uuid: UUID_A, token: "token-A" }]);
+		expect(puts).toStrictEqual([{ uuid: UUID_A, record: { accessToken: "token-A" } }]);
 	});
 });

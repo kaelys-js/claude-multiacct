@@ -241,11 +241,16 @@ async function rankMtime(
  * came from, so "newest" is the best available guess; the direct
  * `POST /choice/:sessionUuid` path stays for callers that already know the id.
  *
+ * Stale pid files (a dead or unreadable pid) are pruned in passing so a crashed
+ * shim's leftover cannot win resolution or accumulate in the dir — the resolver
+ * only ever returns a session whose pid it just proved alive.
+ *
  * @param {(pid: number) => boolean} [alive] - Injectable liveness probe.
  * @param {(path: string) => Promise<number | undefined>} [statMtime] - Injectable stat.
  * @param {string} [sessionPidDir] - Parent dir of the pid files.
  * @param {string} [sessionEnvDir] - Parent dir of the per-session env dirs.
  * @param {(dir: string) => Promise<string[]>} [readdirFn] - Injectable dir list.
+ * @param {(uuid: string, dir: string) => Promise<void>} [pruneFn] - Injectable stale-file remover.
  * @returns {Promise<string | undefined>} Newest live session uuid, or `undefined`.
  */
 export async function resolveActiveSessionUuid(
@@ -254,6 +259,7 @@ export async function resolveActiveSessionUuid(
 	sessionPidDir: string = defaultSessionDir(),
 	sessionEnvDir: string = defaultSessionEnvDir(),
 	readdirFn: (dir: string) => Promise<string[]> = defaultReaddir,
+	pruneFn: (uuid: string, dir: string) => Promise<void> = removeSessionPid,
 ): Promise<string | undefined> {
 	const entries = await readdirFn(sessionPidDir);
 	const uuids = entries
@@ -262,11 +268,13 @@ export async function resolveActiveSessionUuid(
 
 	// Resolve every candidate in parallel: keep the ones whose pid is alive,
 	// tagged with a recency rank. Sequential awaits would serialise a dir full
-	// of pid files for no reason — each probe is independent.
+	// of pid files for no reason — each probe is independent. Dead/unreadable
+	// entries are pruned as we pass them so they can neither win nor pile up.
 	const probed = await Promise.all(
 		uuids.map(async (uuid) => {
 			const pid = await readSessionPid(uuid, sessionPidDir);
 			if (pid === undefined || !alive(pid)) {
+				await pruneFn(uuid, sessionPidDir);
 				return;
 			}
 			const rank = await rankMtime(uuid, statMtime, sessionPidDir, sessionEnvDir);

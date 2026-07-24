@@ -17,7 +17,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { applyTokenSwap, parseSessionUuid } from "./env.ts";
+import { applyTokenSwap, isInteractiveSession, parseSessionUuid } from "./env.ts";
 
 const VALID = "11111111-1111-4111-8111-111111111111";
 const OTHER = "22222222-2222-4222-8222-222222222222";
@@ -72,6 +72,52 @@ describe("parseSessionUuid", () => {
 		expect(parseSessionUuid(["node", "claude", `--resume=${VALID}`, `--session-id=${OTHER}`])).toBe(
 			VALID,
 		);
+	});
+});
+
+describe("isInteractiveSession", () => {
+	// The real interactive session (the persistent stream-json conversation the
+	// launcher drives) always carries --replay-user-messages; the app's
+	// short-lived probe spawns never do. Only the former should register for a
+	// hot-swap when it arrives id-less, or the probes pollute active resolution.
+	const INTERACTIVE = [
+		"node",
+		"claude",
+		"--output-format",
+		"stream-json",
+		"--input-format",
+		"stream-json",
+		"--model",
+		"claude-opus-4-8",
+		"--replay-user-messages",
+		"--settings",
+		'{"fastMode":false}',
+	];
+	const PROBE = [
+		"node",
+		"claude",
+		"--output-format",
+		"stream-json",
+		"--verbose",
+		"--input-format",
+		"stream-json",
+		"--permission-prompt-tool",
+		"stdio",
+		"--strict-mcp-config",
+		"--permission-mode",
+		"default",
+	];
+
+	it("is true for the persistent interactive session (--replay-user-messages present)", () => {
+		expect(isInteractiveSession(INTERACTIVE)).toBe(true);
+	});
+
+	it("is false for the app's short-lived probe/preamble spawn", () => {
+		expect(isInteractiveSession(PROBE)).toBe(false);
+	});
+
+	it("is false for a bare pass-through invocation", () => {
+		expect(isInteractiveSession(["node", "claude", "--print", "hi"])).toBe(false);
 	});
 });
 

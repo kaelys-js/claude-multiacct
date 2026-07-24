@@ -21,6 +21,7 @@ import { chmodSync } from "node:fs";
 /** The exact entry `dist/shim.js` is built from. */
 export const shimEntryContents = `
 import { spawn, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { appendFileSync, mkdirSync, openSync, closeSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -68,6 +69,16 @@ const result = await runShim({
 	},
 	writePidFile: (uuid) => writeSessionPid(uuid, process.pid),
 	removePidFile: (uuid) => removeSessionPid(uuid),
+	// Fresh interactive sessions arrive id-less in argv; mint one so the shim
+	// can register a pid file and adopt it via --session-id (see resolveSessionIdentity).
+	newSessionUuid: () => randomUUID(),
+	// Relay the launcher's std streams through per-child pipes so a
+	// SIGHUP-respawned claude.real still receives subsequent stream-json turns
+	// (stdin) AND its output reaches the app (stdout/stderr) — an inherited stdio
+	// pipe carries the first child's O_NONBLOCK into the respawn and silences it.
+	stdin: process.stdin,
+	stdout: process.stdout,
+	stderr: process.stderr,
 	warn: (m) => { process.stderr.write("[cma-shim] " + m + "\\n"); },
 	logSpawn: (sessionUuid, tokenHash) => {
 		try {

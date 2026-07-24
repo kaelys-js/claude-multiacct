@@ -217,6 +217,8 @@ describe("makeRemoveAccount", () => {
 		const lockedStore: CliPorts["tokenStore"] = {
 			get: () => Promise.resolve("token-B"),
 			put: () => Promise.resolve(),
+			getRecord: () => Promise.resolve({ accessToken: "token-B" }),
+			putRecord: () => Promise.resolve(),
 			delete: () => Promise.reject(new Error("keychain is locked")),
 		};
 		const { ports, write } = makePorts({ registry, tokenStore: lockedStore });

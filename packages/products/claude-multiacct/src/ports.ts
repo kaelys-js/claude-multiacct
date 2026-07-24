@@ -53,3 +53,17 @@ export type ChoiceStore = {
 export type UsageProbe = {
 	probe(account: Account): Promise<UsageSnapshot>;
 };
+
+/**
+ * `TokenRecord` — the full credential bag persisted per account. Pooled OAuth
+ * accounts need more than the access token: the `refreshToken` and `expiresAt`
+ * are what let the store refresh a stale access token in place instead of
+ * failing with a 401. Long-lived opaque tokens (minted in the console) carry
+ * neither, so both are optional.
+ */
+export type TokenRecord = {
+	accessToken: string;
+	refreshToken?: string;
+	/** ISO 8601 expiry timestamp, when the provider returned one. */
+	expiresAt?: string;
+};

@@ -14,6 +14,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { AccountUuid } from "../domain/account.ts";
 import type { MutableTokenStore } from "../oauth/token-store-mut.ts";
+import type { TokenRecord } from "../ports.ts";
 import {
 	type ExecFileAsync,
 	KEYCHAIN_SERVICE,
@@ -39,6 +40,33 @@ export class SecurityCliMutableTokenStore implements MutableTokenStore {
 
 	put(accountUuid: AccountUuid, encryptedTokenRef: string): Promise<void> {
 		return this.base.put(accountUuid, encryptedTokenRef);
+	}
+
+	/**
+	 * Record surface over the keychain adapter. This store's keychain item holds
+	 * a bare access-token string, so the record it surfaces carries only
+	 * `accessToken` — the refresh token + expiry live in the `FileTokenStore`,
+	 * the record-capable store the daemon and shim actually read. Provided to
+	 * satisfy `MutableTokenStore`; the prune path (this adapter's only prod
+	 * caller) uses `list`/`delete`, not the record methods.
+	 *
+	 * @param {AccountUuid} accountUuid - Account to read.
+	 * @returns {Promise<TokenRecord>} The access token wrapped as a record.
+	 */
+	async getRecord(accountUuid: AccountUuid): Promise<TokenRecord | undefined> {
+		return { accessToken: await this.base.get(accountUuid) };
+	}
+
+	/**
+	 * Persist the record's access token into the keychain. Refresh token +
+	 * expiry are not carried by this bare-string adapter (see `getRecord`).
+	 *
+	 * @param {AccountUuid} accountUuid - Account to write.
+	 * @param {TokenRecord} record - Record whose `accessToken` is stored.
+	 * @returns {Promise<void>} Resolves once the keychain write completes.
+	 */
+	putRecord(accountUuid: AccountUuid, record: TokenRecord): Promise<void> {
+		return this.base.put(accountUuid, record.accessToken);
 	}
 
 	/**

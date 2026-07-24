@@ -230,4 +230,28 @@ describe("resolveActiveSessionUuid", () => {
 		await writeSessionPid(UUID_A, 111, dir);
 		expect(await resolveActiveSessionUuid(() => true, noMtime, dir, "/synthetic")).toBe(UUID_A);
 	});
+
+	it("prunes stale pid files it passes over, so a crashed shim's leftover cannot accumulate", async () => {
+		// A (dead) + B (live). Resolution returns B AND deletes A's stale file — a
+		// leftover pid must neither win nor linger to be re-probed forever. Real fs
+		// so the prune is the actual unlink, not a spy.
+		const dir = await mkDir();
+		await writeSessionPid(UUID_A, DEAD_PID, dir);
+		await writeSessionPid(UUID_B, process.pid, dir);
+		const resolved = await resolveActiveSessionUuid(undefined, noMtime, dir, "/synthetic");
+		expect(resolved).toBe(UUID_B);
+		// A's file is gone; B's (the live winner) survives.
+		expect(await readSessionPid(UUID_A, dir)).toBeUndefined();
+		expect(await readSessionPid(UUID_B, dir)).toBe(process.pid);
+	});
+
+	it("routes stale pruning through the injected pruneFn (default is removeSessionPid)", async () => {
+		const dir = await mkDir();
+		await writeSessionPid(UUID_A, DEAD_PID, dir);
+		const prune = vi.fn<(uuid: string, d: string) => Promise<void>>(() => Promise.resolve());
+		expect(
+			await resolveActiveSessionUuid(undefined, noMtime, dir, "/synthetic", undefined, prune),
+		).toBeUndefined();
+		expect(prune).toHaveBeenCalledWith(UUID_A, dir);
+	});
 });

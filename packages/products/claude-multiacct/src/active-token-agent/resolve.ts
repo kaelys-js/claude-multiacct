@@ -91,9 +91,11 @@ export type PoolActiveTokenDeps = {
 	/**
 	 * Store the shim reads (the encrypted `FileTokenStore`) — the DESTINATION of
 	 * the mirror. The shim only looks here, so a token must land here to be
-	 * swappable.
+	 * swappable. The mirror reads the existing record first (`getRecord`) so a
+	 * refresh token already stored for this account survives the access-token
+	 * refresh, then writes the merged record (`putRecord`).
 	 */
-	writeStore: Pick<MutableTokenStore, "put">;
+	writeStore: Pick<MutableTokenStore, "getRecord" | "putRecord">;
 };
 
 /**
@@ -139,6 +141,14 @@ export async function poolActiveToken(
 	if (typeof token !== "string") {
 		return { pooledUuid: null };
 	}
-	await deps.writeStore.put(activeUuid, token);
+	// Persist the full record, not a bare access token. If a refresh token +
+	// expiry are already stored for this account (an OAuth-added pool entry that
+	// happens to be the live one), preserve them so the encrypted store can keep
+	// auto-refreshing — a bare `put(access)` would drop them and pin the account
+	// to a token that expires with no way to renew.
+	const existing = await deps.writeStore.getRecord(activeUuid);
+	const record =
+		existing === undefined ? { accessToken: token } : { ...existing, accessToken: token };
+	await deps.writeStore.putRecord(activeUuid, record);
 	return { pooledUuid: resolved.activeUuid };
 }

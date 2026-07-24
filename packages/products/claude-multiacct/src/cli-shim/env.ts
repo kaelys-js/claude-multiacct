@@ -80,6 +80,31 @@ export function parseSessionUuid(argv: readonly string[]): string | undefined {
 }
 
 /**
+ * Marker flag the desktop launcher passes ONLY on the persistent
+ * conversation-driving Code session — the long-lived `stream-json` process
+ * that owns the tab's transcript. Probe/preamble spawns (the short-lived
+ * `--strict-mcp-config … --permission-mode default` invocations the app fires
+ * for capability checks) never carry it.
+ */
+const INTERACTIVE_MARKER = "--replay-user-messages";
+
+/**
+ * True iff `argv` is the app's real interactive Code session (as opposed to a
+ * short-lived probe/preamble spawn). Used by the shim to decide whether a
+ * fresh session — one the launcher spawned with NO `--session-id`/`--resume`
+ * in argv (the app keys such sessions only on the `CLAUDE_CODE_HOST_SESSION_ID`
+ * env var, a different namespace than the CLI uuid) — should mint its own
+ * session id so it becomes targetable for a hot-swap. Probe spawns must NOT
+ * register, or they pollute active-session resolution.
+ *
+ * @param {readonly string[]} argv - The full argv (including argv[0]/argv[1]).
+ * @returns {boolean} Whether this is the persistent interactive session.
+ */
+export function isInteractiveSession(argv: readonly string[]): boolean {
+	return argv.includes(INTERACTIVE_MARKER);
+}
+
+/**
  * Account fields the shim needs to swap into the env. Kept structural (rather
  * than importing `Account` from `../domain/account.ts`) so a caller can pass
  * a lean object during tests without minting a full registered account.

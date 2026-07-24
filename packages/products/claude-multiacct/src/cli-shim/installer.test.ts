@@ -88,6 +88,17 @@ async function makeCtx(flagOn: boolean): Promise<Ctx> {
 	};
 }
 
+// Exec-call shape recorded by the fake `execFile`.
+type ExecCall = { file: string; args: readonly string[] };
+// Module-scope predicates keep the logical checks out of the test bodies
+// (oxlint vitest/no-conditional-tests forbids conditionals inside `it`).
+const isCodesign = (c: ExecCall): boolean => c.file === "codesign";
+const isUnlockAny = (c: ExecCall): boolean => c.file === "chflags" && c.args[0] === "nouchg";
+const isLock =
+	(path: string) =>
+	(c: ExecCall): boolean =>
+		c.file === "chflags" && c.args[0] === "uchg" && c.args[1] === path;
+
 describe("silentInstallerLogger — the no-op default the runtime binds", () => {
 	it("info + warn are callable no-ops (default-arg contract)", () => {
 		expect(() => silentInstallerLogger.info("x")).not.toThrow();
@@ -228,6 +239,72 @@ describe("install — mechanics", () => {
 		await expect(
 			install(emptyDir, { shimSourcePath: ctx.shimSource, overrideFlag: true }, ctx.deps),
 		).rejects.toThrow(/no CLI binary found/u);
+	});
+});
+
+describe("install / uninstall — immutability (uchg lock, the install-race fix)", () => {
+	// Intent: Claude Desktop re-materializes the bundle on launch and would
+	// overwrite the planted shim; `chflags uchg` on BOTH binaries is what makes
+	// the plant survive. Adversarial: drop the lock calls and the "locks both"
+	// test goes red; drop the pre-mutate unlock and a real force reinstall would
+	// fail on the immutable bit (modelled here by asserting the nouchg calls
+	// precede the swap).
+	it("fresh install locks BOTH claude and claude.real with `chflags uchg`", async () => {
+		const ctx = await makeCtx(true);
+		await install(ctx.cliDir, { shimSourcePath: ctx.shimSource }, ctx.deps);
+		expect(ctx.execCalls).toContainEqual({
+			file: "chflags",
+			args: ["uchg", join(ctx.cliDir, "claude")],
+		});
+		expect(ctx.execCalls).toContainEqual({
+			file: "chflags",
+			args: ["uchg", join(ctx.cliDir, "claude.real")],
+		});
+	});
+
+	it("real is locked AFTER codesign so the sign write is not itself blocked", async () => {
+		const ctx = await makeCtx(true);
+		await install(ctx.cliDir, { shimSourcePath: ctx.shimSource }, ctx.deps);
+		const codesignAt = ctx.execCalls.findIndex(isCodesign);
+		const lockClaudeAt = ctx.execCalls.findIndex(isLock(join(ctx.cliDir, "claude")));
+		expect(codesignAt).toBeGreaterThanOrEqual(0);
+		expect(lockClaudeAt).toBeGreaterThan(codesignAt);
+	});
+
+	it("force reinstall clears `uchg` on both before re-swapping (nouchg precedes codesign)", async () => {
+		const ctx = await makeCtx(true);
+		await install(ctx.cliDir, { shimSourcePath: ctx.shimSource }, ctx.deps);
+		const boundary = ctx.execCalls.length;
+		await install(ctx.cliDir, { shimSourcePath: ctx.shimSource, force: true }, ctx.deps);
+		const forceCalls = ctx.execCalls.slice(boundary);
+		expect(forceCalls).toContainEqual({
+			file: "chflags",
+			args: ["nouchg", join(ctx.cliDir, "claude")],
+		});
+		expect(forceCalls).toContainEqual({
+			file: "chflags",
+			args: ["nouchg", join(ctx.cliDir, "claude.real")],
+		});
+		const unlockAt = forceCalls.findIndex(isUnlockAny);
+		const reCodesignAt = forceCalls.findIndex(isCodesign);
+		expect(unlockAt).toBeGreaterThanOrEqual(0);
+		expect(unlockAt).toBeLessThan(reCodesignAt);
+	});
+
+	it("uninstall clears `uchg` on both before restoring the real binary", async () => {
+		const ctx = await makeCtx(true);
+		await install(ctx.cliDir, { shimSourcePath: ctx.shimSource }, ctx.deps);
+		const boundary = ctx.execCalls.length;
+		await uninstall(ctx.cliDir, {}, ctx.deps);
+		const unCalls = ctx.execCalls.slice(boundary);
+		expect(unCalls).toContainEqual({
+			file: "chflags",
+			args: ["nouchg", join(ctx.cliDir, "claude")],
+		});
+		expect(unCalls).toContainEqual({
+			file: "chflags",
+			args: ["nouchg", join(ctx.cliDir, "claude.real")],
+		});
 	});
 });
 
