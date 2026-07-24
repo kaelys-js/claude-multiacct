@@ -4,8 +4,10 @@
  *
  * The repo vendors config schemas so editors validate config files offline and
  * `check-jsonschema` has a stable metaschema. Tool-specific schemas are pinned
- * to the tool's version from `mise.toml`, so a version bump re-fetches the
- * matching schema; the rest are SchemaStore snapshots (re-fetched fresh).
+ * to the tool's installed version — from `mise.toml` for the mise-managed tools
+ * (oxlint/oxfmt/markdownlint) and from `package.json` for the pnpm-managed ones
+ * (turbo) — so a version bump re-fetches the matching schema and nothing else
+ * moves it; the rest are SchemaStore snapshots (re-fetched fresh).
  *
  * `--check` fetches into memory and exits non-zero if any vendored file differs
  * from upstream (CI drift), without writing.
@@ -25,6 +27,7 @@ import { oxfmtText } from "./oxfmt.ts";
 
 const ROOT = repoRoot();
 const MISE_TOML = join(ROOT, "mise.toml");
+const PACKAGE_JSON = join(ROOT, "package.json");
 const SCHEMAS_DIR = join(ROOT, ".schemas");
 
 // SchemaStore canonical URL for an unversioned vendored schema.
@@ -33,35 +36,68 @@ function schemaStore(name: string): string {
 }
 
 /**
- * Map of vendored schema basename → a function of the `mise.toml` text that
- * returns its upstream download URL. Versioned entries read the pinned tool
- * version; SchemaStore entries ignore the argument and re-fetch canonically.
+ * The version sources a schema URL interpolates: `mise.toml` text for the
+ * mise-pinned tools and `package.json` text for the pnpm-pinned devDependencies
+ * (turbo). Both are read once in {@link main} and handed to each source function,
+ * so a bad pin throws INSIDE that one schema's `fetchSchema` (a per-schema
+ * warning) rather than aborting the whole sync.
+ */
+type VersionSources = { readonly mise: string; readonly pkg: string };
+
+// Read a devDependency (or dependency) pin from `package.json` text. Turbo is a
+// pnpm devDependency Renovate bumps, not a mise tool, so its schema version comes
+// from here rather than `mise.toml`. Throws when the dependency is absent, so
+// fetchSchema degrades a misconfigured pin to a per-schema warning — the same
+// isolation readToolVersion gives the mise-pinned schemas.
+function readPackageVersion(pkgJson: string, name: string): string {
+	const pkg = JSON.parse(pkgJson) as {
+		dependencies?: Record<string, string>;
+		devDependencies?: Record<string, string>;
+	};
+	const version = pkg.devDependencies?.[name] ?? pkg.dependencies?.[name];
+	if (version === undefined) {
+		throw new Error(`package.json: no dependency "${name}"`);
+	}
+	return version;
+}
+
+/**
+ * Map of vendored schema basename → a function of the {@link VersionSources} that
+ * returns its upstream download URL. Versioned entries read a pinned tool version
+ * (from `mise.toml` or `package.json`); SchemaStore entries ignore the argument
+ * and re-fetch canonically.
  */
 // NOTE: `.schemas/gitleaks.json`, `.schemas/reuse.json`, and `.schemas/syncpack.json`
 // are hand-vendored (no public upstream — syncpack v15 publishes no config schema)
 // and intentionally excluded from SCHEMA_SOURCES so `sync:check` stays green.
-const SCHEMA_SOURCES: Readonly<Record<string, (toml: string) => string>> = {
-	oxlint: (t) =>
-		`https://raw.githubusercontent.com/oxc-project/oxc/oxlint_v${readToolVersion(t, "npm:oxlint")}/npm/oxlint/configuration_schema.json`,
+const SCHEMA_SOURCES: Readonly<Record<string, (v: VersionSources) => string>> = {
+	oxlint: ({ mise }) =>
+		`https://raw.githubusercontent.com/oxc-project/oxc/oxlint_v${readToolVersion(mise, "npm:oxlint")}/npm/oxlint/configuration_schema.json`,
 	// oxfmt lives in the oxc monorepo, which tags releases by the oxlint version.
-	oxfmt: (t) =>
-		`https://raw.githubusercontent.com/oxc-project/oxc/oxlint_v${readToolVersion(t, "npm:oxlint")}/npm/oxfmt/configuration_schema.json`,
-	"markdownlint-cli2": (t) =>
-		`https://raw.githubusercontent.com/DavidAnson/markdownlint-cli2/v${readToolVersion(t, "npm:markdownlint-cli2")}/schema/markdownlint-cli2-config-schema.json`,
+	oxfmt: ({ mise }) =>
+		`https://raw.githubusercontent.com/oxc-project/oxc/oxlint_v${readToolVersion(mise, "npm:oxlint")}/npm/oxfmt/configuration_schema.json`,
+	"markdownlint-cli2": ({ mise }) =>
+		`https://raw.githubusercontent.com/DavidAnson/markdownlint-cli2/v${readToolVersion(mise, "npm:markdownlint-cli2")}/schema/markdownlint-cli2-config-schema.json`,
 	// The BARE markdownlint config schema (rules only), for the extended base in
 	// @foundation/config — distinct from the cli2 wrapper schema above. Same
 	// markdownlint-cli2 release ships both.
-	markdownlint: (t) =>
-		`https://raw.githubusercontent.com/DavidAnson/markdownlint-cli2/v${readToolVersion(t, "npm:markdownlint-cli2")}/schema/markdownlint-config-schema.json`,
+	markdownlint: ({ mise }) =>
+		`https://raw.githubusercontent.com/DavidAnson/markdownlint-cli2/v${readToolVersion(mise, "npm:markdownlint-cli2")}/schema/markdownlint-config-schema.json`,
 	// mise ships its own always-current schema (unversioned; mise self-bootstraps).
 	mise: () => "https://mise.jdx.dev/schema/mise.json",
 	// lefthook + commitlint ship public upstream schemas; vendored UNVERSIONED (like
 	// mise/taplo) so an offline editor still validates lefthook.yml / commitlint.config.json.
 	lefthook: () => "https://raw.githubusercontent.com/evilmartians/lefthook/master/schema.json",
 	commitlint: () => "https://json.schemastore.org/commitlintrc.json",
-	// turbo ships its own public schema (unversioned, like mise); vendored so
-	// turbo.json validates offline against `./.schemas/turbo.json`.
-	turbo: () => "https://turbo.build/schema.json",
+	// turbo PINNED to the installed version. `turbo.build/schema.json` is an
+	// unversioned "latest" URL, so every upstream schema publish drifted the
+	// vendored copy and reddened CI fleet-wide (the recurring break this pin ends,
+	// see docs/adr/0001). The turbo version is a pnpm devDependency Renovate bumps
+	// in package.json; the per-version schema ships in the `turbo-types` package,
+	// fetched from the matching git tag. Now the vendored copy only moves on a
+	// deliberate turbo bump, never on an upstream latest-URL change.
+	turbo: ({ pkg }) =>
+		`https://raw.githubusercontent.com/vercel/turborepo/v${readPackageVersion(pkg, "turbo")}/packages/turbo-types/schemas/schema.json`,
 	// ── SchemaStore snapshots (unversioned; re-fetched fresh) ──────────
 	taplo: () => schemaStore("taplo"),
 	yamllint: () => schemaStore("yamllint"),
@@ -142,12 +178,12 @@ export function reconcile(
 // abort the whole sync (the resilience the pre-push + CI drift gate needs).
 async function fetchSchema(
 	name: string,
-	source: (toml: string) => string,
-	toml: string,
+	source: (v: VersionSources) => string,
+	versions: VersionSources,
 ): Promise<SchemaOutcome> {
 	const path = join(SCHEMAS_DIR, `${name}.json`);
 	try {
-		return { ok: true, name, path, fresh: oxfmtJson(await fetchText(source(toml)), path) };
+		return { ok: true, name, path, fresh: oxfmtJson(await fetchText(source(versions)), path) };
 	} catch (error) {
 		return { ok: false, name, path, error: error instanceof Error ? error.message : String(error) };
 	}
@@ -175,7 +211,10 @@ function oxfmtJson(raw: string, filepath: string): string {
 // Fetch every vendored schema and reconcile it against the on-disk copy: in
 // `--check` mode report drift and exit non-zero; otherwise write the fresh copy.
 async function main(): Promise<void> {
-	const toml = readFileSync(MISE_TOML, "utf8");
+	const versions: VersionSources = {
+		mise: readFileSync(MISE_TOML, "utf8"),
+		pkg: readFileSync(PACKAGE_JSON, "utf8"),
+	};
 	const check = process.argv.includes("--check");
 	// Sorted [name, source] pairs — the source function is passed straight into
 	// fetchSchema (no `SCHEMA_SOURCES[name]` re-lookup, which would be a dead
@@ -187,7 +226,7 @@ async function main(): Promise<void> {
 	// reachable schema is normalised through oxfmt so the vendored form is stable
 	// and matches what `qa:format` expects (no format/sync write-loop).
 	const outcomes = await Promise.all(
-		sources.map(([name, source]) => fetchSchema(name, source, toml)),
+		sources.map(([name, source]) => fetchSchema(name, source, versions)),
 	);
 	// A not-yet-vendored schema (first generation) reads as "" so reconcile counts
 	// it as drift and writes it, rather than throwing ENOENT.
