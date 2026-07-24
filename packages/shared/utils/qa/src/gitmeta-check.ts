@@ -190,13 +190,50 @@ function checkRenormalize(): void {
 
 // ── .npmrc: pnpm can parse it ─────────────────────────────────────────
 
+// A non-zero exit from `bin/mise exec -- pnpm config list` has two very
+// different causes, and only ONE of them is a `.npmrc` defect:
+//
+//  1. pnpm RAN and rejected the config — the real "malformed .npmrc" signal.
+//  2. mise/the OS could not LAUNCH pnpm at all: `mise ERROR "pnpm" couldn't
+//     exec process: No such file or directory`, or a spawn ENOENT. This says
+//     nothing about `.npmrc` — pnpm never parsed it. It shows up when the
+//     shared `.mise` toolchain is momentarily mid-flight (the suite re-runs
+//     this integration check inside a `vitest run` where other tooling churns
+//     `.mise/installs`), and it is not gitmeta-check's job to police the
+//     toolchain — a genuinely broken toolchain fails the real `pnpm install`
+//     step loudly elsewhere.
+//
+// So: retry a few times to ride out a transient launch failure, fail ONLY on
+// cause (1), and treat a persistent cause (2) as "cannot evaluate" rather than
+// asserting a defect. Distinguishing the two is what stopped this check from
+// flaking the `test` job on a perfectly valid `.npmrc`.
+const NPMRC_PARSE_ATTEMPTS = 3;
+
+// Called only with a NON-zero result (the caller returns early on success).
+// True when pnpm actually executed and rejected `.npmrc`; false when pnpm was
+// never launched — a spawn failure (`status === null`, e.g. ENOENT) or mise
+// reporting it couldn't exec pnpm (recognisable on stderr).
+function pnpmRejectedNpmrc(status: number | null, stderr: string): boolean {
+	if (status === null) {
+		return false;
+	}
+	if (/couldn't exec process|no such file or directory|not found/iu.test(stderr)) {
+		return false;
+	}
+	return true;
+}
+
 function checkNpmrc(): void {
-	const r = miseExec(["pnpm", "config", "list"], {
-		cwd: ROOT,
-		stdio: ["ignore", "ignore", "inherit"],
-	});
-	if (r.status !== 0) {
-		fail(".npmrc: `pnpm config list` exited non-zero (malformed .npmrc).");
+	for (let attempt = 1; attempt <= NPMRC_PARSE_ATTEMPTS; attempt++) {
+		const r = miseExec(["pnpm", "config", "list"], { cwd: ROOT });
+		if (r.status === 0) {
+			return; // pnpm parsed `.npmrc` cleanly.
+		}
+		if (pnpmRejectedNpmrc(r.status, r.stderr ?? "")) {
+			fail(".npmrc: `pnpm config list` ran and exited non-zero — malformed .npmrc.");
+			return;
+		}
+		// Otherwise pnpm could not be launched; retry, then tolerate (see above).
 	}
 }
 

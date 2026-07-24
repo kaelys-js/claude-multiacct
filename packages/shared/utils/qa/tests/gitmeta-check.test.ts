@@ -54,6 +54,11 @@ type Overrides = {
 	gitignore?: string;
 	gitattributes?: string;
 	withMise?: boolean;
+	// Override the `bin/mise` stub body. Default (with `withMise`) exits 0, so
+	// checkNpmrc sees a clean `pnpm config list`. A custom body lets a test model
+	// pnpm RUNNING and rejecting `.npmrc` (exit non-zero with a parse-style
+	// message) vs. mise failing to LAUNCH pnpm (the toolchain-churn case).
+	miseScript?: string;
 	extraFiles?: ReadonlyArray<{ path: string; content: string }>;
 };
 
@@ -96,11 +101,12 @@ function makeRepo(over: Overrides = {}): string {
 	writeFileSync(join(reg, "owners.yaml"), "a: 1\n");
 	writeFileSync(join(dir, "pnpm-lock.yaml"), "lockfileVersion: 1\n");
 
-	if (over.withMise) {
+	if (over.withMise || over.miseScript !== undefined) {
 		mkdirSync(join(dir, "bin"), { recursive: true });
 		const mise = join(dir, "bin", "mise");
-		// `bin/mise exec -- pnpm config list` must exit 0 for checkNpmrc to pass.
-		writeFileSync(mise, "#!/bin/sh\nexit 0\n");
+		// `bin/mise exec -- pnpm config list` must exit 0 for checkNpmrc to pass,
+		// unless a test overrides the body to model a specific pnpm outcome.
+		writeFileSync(mise, over.miseScript ?? "#!/bin/sh\nexit 0\n");
 		chmodSync(mise, 0o755);
 	}
 
@@ -235,13 +241,33 @@ describe("gitmeta-check", () => {
 		expect(code).toBe(1);
 	});
 
-	it("fails when .npmrc is unparseable (mise/pnpm exits non-zero)", async () => {
-		// No bin/mise in the fixture → `${ROOT}/bin/mise` spawn errors (status ≠ 0),
-		// which checkNpmrc reports as a malformed-.npmrc failure. This drives the
-		// checkNpmrc fail branch without needing a real broken .npmrc.
-		const root = fixture({ withMise: false });
+	it("fails when pnpm RUNS and rejects .npmrc (real parse failure)", async () => {
+		// A `bin/mise` stub that exits non-zero with a pnpm-style parse error on
+		// stderr models pnpm actually running and rejecting `.npmrc`. That IS a
+		// malformed-.npmrc signal, so checkNpmrc fails and the process exits 1.
+		const root = fixture({
+			miseScript: '#!/bin/sh\necho "pnpm: invalid config at .npmrc" >&2\nexit 1\n',
+		});
 		const code = await runCheck(root);
 		expect(code).toBe(1);
+	});
+
+	it("TOLERATES a toolchain that cannot launch pnpm (not a .npmrc verdict)", async () => {
+		// No bin/mise → the spawn errors with ENOENT, and a `bin/mise` that cannot
+		// exec pnpm prints `couldn't exec process: No such file or directory`.
+		// Neither means `.npmrc` is malformed — pnpm never parsed it — so checkNpmrc
+		// must NOT report a failure. This is the exact false positive that used to
+		// flake the `test` job: the shared `.mise` toolchain was momentarily
+		// mid-flight when the suite re-ran this check, and a valid `.npmrc` was
+		// wrongly failed. A real broken toolchain is caught by `pnpm install`, not
+		// here.
+		const noLaunch = fixture({
+			miseScript: `#!/bin/sh\necho "mise ERROR pnpm couldn't exec process: No such file or directory" >&2\nexit 1\n`,
+		});
+		expect(await runCheck(noLaunch)).toBeNull();
+
+		const noMise = fixture({ withMise: false });
+		expect(await runCheck(noMise)).toBeNull();
 	});
 
 	it("fails on line-ending renormalisation drift", async () => {

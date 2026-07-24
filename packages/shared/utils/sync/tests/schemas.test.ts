@@ -50,6 +50,25 @@ function miseToml(): string {
 	return '[tools]\n"npm:oxlint" = "1.72.0"\n"npm:markdownlint-cli2" = "0.23.0"\n';
 }
 
+// The turbo devDependency pin the turbo schema URL interpolates. Turbo is a pnpm
+// devDependency (not a mise tool), so its version comes from package.json.
+const TURBO_VERSION = "2.10.5";
+
+// A package.json carrying the turbo devDependency pin.
+function packageJson(): string {
+	return JSON.stringify({ devDependencies: { turbo: TURBO_VERSION } });
+}
+
+// The two version-source files every fetch reads: mise.toml (oxlint/markdownlint
+// pins) and package.json (the turbo pin). Fresh Map per call so tests can extend
+// it without cross-contamination.
+function baseFiles(): Map<string, string> {
+	return new Map<string, string>([
+		["mise.toml", miseToml()],
+		["package.json", packageJson()],
+	]);
+}
+
 // oxfmt test double: pretty-print the piped compact JSON (tabs + trailing NL),
 // which is exactly what the real `oxfmtJson` normalisation yields for equality.
 function oxfmtPass(_cmd?: unknown, _args?: unknown, o?: { input?: string }): unknown {
@@ -141,7 +160,7 @@ describe("sync/schemas — main() pipeline", () => {
 	it("write mode fetches every schema, oxfmt-normalises it, and writes all 13", async () => {
 		// WHY: a first-generation (or post-bump) run must vendor a fresh, formatted
 		// copy of every schema so editors validate config offline.
-		const files = new Map<string, string>([["mise.toml", miseToml()]]);
+		const files = baseFiles();
 		vi.stubGlobal("fetch", fetchOk('{"$schema":"x"}'));
 		const res = await runScript(SCHEMAS, {
 			files,
@@ -161,7 +180,7 @@ describe("sync/schemas — main() pipeline", () => {
 		// WHY: the drift gate must be green when the repo is in sync, or it gets
 		// disabled. reachableCount==names.length yields the 'verified' message.
 		const body = '{"$schema":"x","title":"t"}';
-		const files = new Map<string, string>([["mise.toml", miseToml()]]);
+		const files = baseFiles();
 		for (const name of SCHEMA_NAMES) {
 			files.set(`.schemas/${name}.json`, normalised(body));
 		}
@@ -180,7 +199,7 @@ describe("sync/schemas — main() pipeline", () => {
 		// WHY: a stale vendored schema must be caught — that IS the gate. Disk is left
 		// empty (reads as "") so every fetched schema is drift.
 		const body = '{"changed":true}';
-		const files = new Map<string, string>([["mise.toml", miseToml()]]);
+		const files = baseFiles();
 		vi.stubGlobal("fetch", fetchOk(body));
 		const res = await runScript(SCHEMAS, {
 			files,
@@ -197,7 +216,7 @@ describe("sync/schemas — main() pipeline", () => {
 	it("a non-2xx upstream becomes an unreachable WARNING, not drift (HTTP error path)", async () => {
 		// WHY: a 5xx / 404 from SchemaStore must degrade to a warning so a flaky
 		// upstream can't fail the gate. fetchText throws on !res.ok → error outcome.
-		const files = new Map<string, string>([["mise.toml", miseToml()]]);
+		const files = baseFiles();
 		const badFetch = fakeFetch({ ok: false, status: 503, text: () => Promise.resolve("") });
 		vi.stubGlobal("fetch", badFetch);
 		const res = await runScript(SCHEMAS, {
@@ -217,7 +236,7 @@ describe("sync/schemas — main() pipeline", () => {
 	it("a thrown fetch (network down) becomes an unreachable warning, never drift", async () => {
 		// WHY: DNS failure / offline throws from fetch itself. fetchSchema must catch
 		// it into an error outcome so the whole sync doesn't reject.
-		const files = new Map<string, string>([["mise.toml", miseToml()]]);
+		const files = baseFiles();
 		const throwingFetch = (() =>
 			Promise.reject(new Error("getaddrinfo ENOTFOUND"))) as unknown as typeof fetch;
 		vi.stubGlobal("fetch", throwingFetch);
@@ -238,7 +257,7 @@ describe("sync/schemas — main() pipeline", () => {
 		// WHY: oxfmtJson throws when the formatter exits non-zero; fetchSchema catches
 		// it as an error outcome (resilient), so a broken formatter can't crash sync —
 		// it surfaces as a per-schema warning instead.
-		const files = new Map<string, string>([["mise.toml", miseToml()]]);
+		const files = baseFiles();
 		vi.stubGlobal("fetch", fetchOk('{"ok":1}'));
 		const res = await runScript(SCHEMAS, {
 			files,
@@ -260,6 +279,7 @@ describe("sync/schemas — main() pipeline", () => {
 		// versioned pins, so oxlint/oxfmt/markdownlint-cli2 all surface the throw.
 		const files = new Map<string, string>([
 			["mise.toml", '[env]\nfoo = "bar"\n[tools]\nnode = "22.0.0"\n'],
+			["package.json", packageJson()],
 		]);
 		vi.stubGlobal("fetch", fetchOk('{"ok":1}'));
 		const res = await runScript(SCHEMAS, {
@@ -291,7 +311,7 @@ describe("sync/schemas — main() pipeline", () => {
 			return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve('{"ok":1}') });
 		}) as unknown as typeof fetch;
 		vi.stubGlobal("fetch", capturingFetch);
-		const files = new Map<string, string>([["mise.toml", miseToml()]]);
+		const files = baseFiles();
 		const res = await runScript(SCHEMAS, { files, argv: [], entry: SCHEMAS, spawnSync: oxfmtPass });
 		expect(res.exitCode).toBeUndefined();
 		expect(seen).toHaveLength(SCHEMA_NAMES.length);
@@ -301,7 +321,7 @@ describe("sync/schemas — main() pipeline", () => {
 	it("a malformed (non-JSON) upstream body degrades to an unreachable warning (parse guard)", async () => {
 		// WHY: oxfmtJson parses first so a junk download fails loudly rather than
 		// vendoring garbage; that parse throw is caught into an error outcome.
-		const files = new Map<string, string>([["mise.toml", miseToml()]]);
+		const files = baseFiles();
 		const junkFetch = fakeFetch({
 			ok: true,
 			status: 200,
@@ -317,5 +337,51 @@ describe("sync/schemas — main() pipeline", () => {
 		expect(res.exitCode).toBeUndefined();
 		expect(res.stderr).toContain("upstream unreachable");
 		expect(res.writes).toEqual([]);
+	});
+
+	it("fetches the turbo schema from the version-pinned turborepo tag URL (the package.json turbo pin), never the unversioned turbo.build URL", async () => {
+		// WHY (the whole point of this module change): `turbo.build/schema.json` is an
+		// UNVERSIONED "latest" URL, so every upstream turbo schema publish drifted the
+		// vendored copy and reddened CI fleet-wide. Pinning the fetch to the installed
+		// turbo version (a package.json devDependency Renovate bumps) means the vendored
+		// schema only moves on a deliberate turbo bump. This test is the guard that keeps
+		// the turbo source version-keyed — if someone reverts it to the latest URL, the
+		// exact-URL assertion fails.
+		const urls: string[] = [];
+		const capturingFetch = ((url: string) => {
+			urls.push(String(url));
+			return Promise.resolve({ ok: true, status: 200, text: () => Promise.resolve('{"ok":1}') });
+		}) as unknown as typeof fetch;
+		vi.stubGlobal("fetch", capturingFetch);
+		const res = await runScript(SCHEMAS, {
+			files: baseFiles(),
+			argv: [],
+			entry: SCHEMAS,
+			spawnSync: oxfmtPass,
+		});
+		expect(res.exitCode).toBeUndefined();
+		expect(urls).toContain(
+			`https://raw.githubusercontent.com/vercel/turborepo/v${TURBO_VERSION}/packages/turbo-types/schemas/schema.json`,
+		);
+		expect(urls).not.toContain("https://turbo.build/schema.json");
+	});
+
+	it("degrades turbo to a warning when package.json carries no turbo pin (readPackageVersion throw)", async () => {
+		// WHY: the turbo schema URL interpolates the turbo version from package.json's
+		// devDependencies. A package.json missing that pin must warn per-schema — the
+		// same isolation a missing mise pin gets for oxlint — not crash the whole sync.
+		const files = new Map<string, string>([
+			["mise.toml", miseToml()],
+			["package.json", JSON.stringify({ devDependencies: {} })],
+		]);
+		vi.stubGlobal("fetch", fetchOk('{"ok":1}'));
+		const res = await runScript(SCHEMAS, {
+			files,
+			argv: ["--check"],
+			entry: SCHEMAS,
+			spawnSync: oxfmtPass,
+		});
+		expect(res.stderr).toContain('package.json: no dependency "turbo"');
+		expect(res.stderr).toContain("upstream unreachable");
 	});
 });
