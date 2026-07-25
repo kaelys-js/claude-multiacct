@@ -55,19 +55,27 @@
 #      `gh api` so the ref points at the upstream tip; no new commit is
 #      created, and upstream commit signatures are preserved verbatim.
 #   4. On non-fast-forward: cut branch
-#      `sync/upstream-YYYY-MM-DD-<sha>-<run_id>` (the run id keeps every
-#      attempt unique so the push is always a plain create — the repo's
-#      `non_fast_forward` ruleset matches `sync/**` and refuses any
-#      force-update, so a reused name + force-push is a hard 422), merge
-#      with a fixed rule (upstream wins under `packages/shared` and
-#      `.schemas`; product code and product-specific workflows win locally),
-#      then plain-`git push` the branch. There is NO API re-signing step:
-#      `main` only requires signatures on the commit that lands on it, and
-#      the squash-merge commit GitHub creates on `main` is web-flow-signed
-#      and Verified. The PR opens, squash auto-merge with branch delete is
-#      enabled. If the resolution comes out byte-identical to the fork tip
-#      (nothing to sync), the merge step exits 0 as a clean no-op and no PR
-#      is opened.
+#      `sync/upstream-YYYY-MM-DD-<sha>-<run_id>`. The run id keeps every
+#      attempt unique, so the ref is always CREATED and never force-updated —
+#      a `non_fast_forward` ruleset matching `sync/**` refuses a force-update
+#      with HTTP 422. Merge with a fixed rule (upstream wins under
+#      `packages/shared` and `.schemas`; product code and product-specific
+#      workflows win locally), then collapse the resolved tree into ONE commit
+#      whose only parent is the fork's `main` (drop MERGE_HEAD before
+#      committing). A merge commit would list the upstream tip as a second
+#      parent, dragging every upstream commit into the PR; DCO evaluates all of
+#      them and the pre-DCO history carries no `Signed-off-by`, so a
+#      merge-topology sync PR can never pass it (this closed claude-multiacct
+#      PR #79 and ttt-studio PR #77). If the resolution comes out identical to
+#      the fork tip (nothing to sync), the merge step exits 0 as a clean no-op
+#      and opens no PR. Otherwise the branch and its single commit are created
+#      through GraphQL `createCommitOnBranch`: GitHub signs that commit
+#      (`verified: true`) with no signing key on any runner, and the
+#      `Signed-off-by` trailer is derived from the token's own account so
+#      author == sign-off. Both historic blockers — `required_signatures` and
+#      DCO — are satisfied by construction, and the step fails loud if either
+#      assertion does not hold. The PR opens, squash auto-merge with branch
+#      delete is enabled.
 #   5. If a merged path outside the two allowlists conflicts, the commit
 #      lands with conflict markers (prefixed `[CONFLICT] ` in git log). A
 #      post-push `git grep` scan on HEAD detects those markers and gates
@@ -421,42 +429,176 @@ jobs:
             exit 0
           fi
 
-          # Commit whatever was resolved. If the rule-based checkouts left
-          # unmerged paths outside both allowlists, `commit --no-edit` fails;
-          # fall through to a commit that captures the working tree with
-          # conflict markers so the PR opens for a human to resolve.
-          git -c "user.name=Cole Beuker" -c "user.email=cole.beuker@ttt.studio" \
-            commit --no-edit || {
-              git -c "user.name=Cole Beuker" -c "user.email=cole.beuker@ttt.studio" \
-                commit -am "[CONFLICT] sync: upstream merge with unresolved conflicts (needs review)"
-            }
-          # No `exit ${MERGE_STATUS}` — the docstring's contract is that a
-          # conflict PR still opens ("the commit lands with conflict markers,
-          # the PR stays open"). Failing this step here would short-circuit
-          # Push + PR-open below and leave the operator with nothing to
-          # review. Merge cleanliness is reported by the opened PR's own CI.
+          # Collapse the resolved tree into ONE commit with a SINGLE parent (the
+          # fork's `main`). A merge commit lists the upstream tip as a second
+          # parent, so the PR contains every upstream commit reachable from it —
+          # dozens predate DCO and carry no `Signed-off-by`. DCO evaluates EVERY
+          # commit in the PR, so a merge-topology sync PR can never pass it.
+          # Dropping MERGE_HEAD turns the already-resolved merge tree into a
+          # normal single-parent commit. Squash auto-merge lands a single commit
+          # on `main` anyway, so recording the merge parent bought nothing.
+          rm -f \
+            "$(git rev-parse --git-dir)/MERGE_HEAD" \
+            "$(git rev-parse --git-dir)/MERGE_MODE" \
+            "$(git rev-parse --git-dir)/MERGE_MSG"
 
-      - name: Push sync branch
+          UPSTREAM_FULL_SHA=$(git rev-parse upstream/main)
+          UPSTREAM_SHORT=$(git rev-parse --short upstream/main)
+          # Commit the resolved index. NO `--signoff`: this local commit is never
+          # pushed — the signed commit is built from its message and tree by the
+          # GraphQL step below, whose author is the token's account, so the
+          # trailer is derived there. A local `--signoff` would stamp the
+          # runner's git identity and mismatch that author, which is exactly the
+          # DCO failure the old API-resigning step produced.
+          #
+          # `git commit` still refuses when unmerged index entries remain, so an
+          # unresolved conflict outside both allowlists trips the fallback, which
+          # stages the working tree (conflict markers and all) so the PR still
+          # opens for a human. The marker guard keeps that one out of auto-merge.
+          #
+          # Message is conventional-commits shaped (`chore(sync): …`): `sync` is
+          # a valid commitlint scope but not a valid type, and the old merge
+          # commit only escaped the commit-msg gate because commitlint ignores
+          # merge commits by default. A single-parent commit is evaluated like
+          # any other.
+          if ! git -c "user.name=Cole Beuker" -c "user.email=cole.beuker@ttt.studio" \
+              commit \
+              -m "chore(sync): upstream $(date -u +%Y-%m-%d) (${UPSTREAM_SHORT})" \
+              -m "Squashed sync of kaelys-js/foundation-registry@${UPSTREAM_FULL_SHA} into this fork. Conflict rule: upstream wins under packages/shared and .schemas; product code and product-specific workflows win locally."; then
+            git add -A
+            git -c "user.name=Cole Beuker" -c "user.email=cole.beuker@ttt.studio" \
+              commit \
+              -m "chore(sync): [CONFLICT] upstream $(date -u +%Y-%m-%d) with unresolved conflicts (needs review)"
+          fi
+          # No `exit` on conflict — the docstring's contract is that a conflict
+          # PR still opens ("the commit lands with conflict markers, the PR stays
+          # open"). Failing here would short-circuit the commit + PR-open steps
+          # below and leave the operator with nothing to review. Merge
+          # cleanliness is reported by the opened PR's own CI and the marker
+          # guard.
+
+      # Create the sync branch and its ONE commit through GraphQL
+      # `createCommitOnBranch`, replacing the old `git push` (+ `gh api POST
+      # /git/commits` re-signing) pair. Two recurring blockers die here at once:
+      #
+      #   * SIGNATURE. A commit pushed by the git CLI is signed only if the
+      #     runner happens to hold a key — true on the self-hosted mini, false
+      #     on hosted ubuntu — so the sync PR's signedness depended on which
+      #     runner preflight picked. `createCommitOnBranch` is signed by GitHub
+      #     on the caller's behalf every time, with no key on any runner.
+      #   * DCO. The old `POST /git/commits` re-signing step defaulted the
+      #     author to the Actions bot while the message still carried a human
+      #     `Signed-off-by`, so DCO saw an author/sign-off mismatch and failed.
+      #     Here the trailer is DERIVED from the token's own account
+      #     (`gh api user`), so author == sign-off by construction.
+      #
+      # The commit has a single parent (`origin/main`) — deliberately not the
+      # merge topology; see the merge step for why DCO makes that mandatory. The
+      # local commit built there is never pushed: it exists only to give the
+      # conflict-marker guard a tree to `git grep` and to name the file set here.
+      #
+      # Creating the ref at `origin/main` and committing onto it also means no
+      # force-update ever happens, so the `non_fast_forward` ruleset that matches
+      # `sync/**` has nothing to refuse (it used to 422 the old force-PATCH).
+      - name: Create signed sync commit on a fresh branch
         if: steps.ff.outputs.result == 'conflict' && steps.merge.outputs.noop != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          BRANCH: ${{ steps.branch.outputs.branch }}
         run: |
-          # Plain `git push` — the branch name carries the run id (see "Create
-          # sync branch"), so every attempt is a brand-new ref and the push is
-          # always a create, never a force. This repo's `non_fast_forward`
-          # ruleset also matches `sync/**`, so a `--force-with-lease` rewrite of
-          # an existing sync branch is refused with HTTP 422; a create sidesteps
-          # the rule entirely. The commit pushed here IS the PR head verbatim —
-          # there is no API re-signing step. The old design re-created this
-          # merge commit via `gh api POST /git/commits` and force-updated the
-          # ref to earn a `web-flow` Verified badge on the sync branch, but that
-          # force-update is exactly what the ruleset now blocks, and it bought
-          # nothing: `main` only requires signatures on the commit that LANDS on
-          # it, and the squash-merge commit GitHub creates on `main` is already
-          # web-flow-signed and Verified.
+          set -euo pipefail
+          BASE_SHA="$(git rev-parse origin/main)"
           if [[ "${DRY_RUN}" == "true" ]]; then
-            echo "[DRY_RUN] would push origin ${{ steps.branch.outputs.branch }}"
+            echo "[DRY_RUN] would create refs/heads/${BRANCH} at ${BASE_SHA} and createCommitOnBranch"
             exit 0
           fi
-          git push origin "${{ steps.branch.outputs.branch }}"
+          gh api -X POST "repos/${GH_REPO}/git/refs" \
+            -f ref="refs/heads/${BRANCH}" -f sha="${BASE_SHA}" >/dev/null
+
+          # fileChanges as JSON Lines on disk, not in shell variables: a synced
+          # `pnpm-lock.yaml` base64s to megabytes and `jq --arg` would blow past
+          # ARG_MAX. Base64 keeps binary files intact.
+          CHANGES="${RUNNER_TEMP}/sync-changes.jsonl"
+          B64="${RUNNER_TEMP}/sync-content.b64"
+          : > "$CHANGES"
+          while IFS="$(printf '\t')" read -r status path newpath; do
+            [ -n "${status:-}" ] || continue
+            case "$status" in
+              D)
+                jq -nc --arg p "$path" '{op: "del", path: $p}' >> "$CHANGES"
+                ;;
+              R*)
+                jq -nc --arg p "$path" '{op: "del", path: $p}' >> "$CHANGES"
+                base64 < "$newpath" | tr -d '\n' > "$B64"
+                jq -nc --arg p "$newpath" --rawfile c "$B64" \
+                  '{op: "add", path: $p, contents: $c}' >> "$CHANGES"
+                ;;
+              *)
+                base64 < "$path" | tr -d '\n' > "$B64"
+                jq -nc --arg p "$path" --rawfile c "$B64" \
+                  '{op: "add", path: $p, contents: $c}' >> "$CHANGES"
+                ;;
+            esac
+          done < <(git diff --name-status "${BASE_SHA}" HEAD)
+
+          # Derive the sign-off from the token's own account so it can never
+          # drift from the author GitHub stamps on the created commit. The
+          # `<id>+<login>@users.noreply.github.com` form is the account's commit
+          # email while "Keep my email addresses private" is on, which is the
+          # posture on this account.
+          AUTHOR_LOGIN="$(gh api user --jq '.login')"
+          AUTHOR_ID="$(gh api user --jq '.id')"
+          AUTHOR_NAME="$(gh api user --jq '.name // .login')"
+          SIGNOFF="Signed-off-by: ${AUTHOR_NAME} <${AUTHOR_ID}+${AUTHOR_LOGIN}@users.noreply.github.com>"
+
+          HEADLINE="$(git log -1 --format=%s HEAD)"
+          MESSAGE_BODY="$(printf '%s\n\n%s\n' "$(git log -1 --format=%b HEAD)" "$SIGNOFF")"
+
+          jq -n \
+            --arg repo "$GH_REPO" \
+            --arg branch "$BRANCH" \
+            --arg oid "$BASE_SHA" \
+            --arg headline "$HEADLINE" \
+            --arg body "$MESSAGE_BODY" \
+            --slurpfile changes "$CHANGES" \
+            '{
+              query: "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }",
+              variables: {
+                input: {
+                  branch: { repositoryNameWithOwner: $repo, branchName: $branch },
+                  expectedHeadOid: $oid,
+                  message: { headline: $headline, body: $body },
+                  fileChanges: {
+                    additions: [$changes[] | select(.op == "add") | {path, contents}],
+                    deletions: [$changes[] | select(.op == "del") | {path}]
+                  }
+                }
+              }
+            }' > "${RUNNER_TEMP}/sync-mutation.json"
+
+          NEW_SHA="$(gh api graphql \
+            --input "${RUNNER_TEMP}/sync-mutation.json" \
+            --jq '.data.createCommitOnBranch.commit.oid')"
+          echo "sync-upstream: created ${NEW_SHA} on ${BRANCH}"
+
+          # Fail loud instead of opening a PR that can never merge. These are the
+          # exact two conditions that blocked the last sync PRs on this fleet, so
+          # they are asserted at the source rather than discovered on the merge
+          # box hours later.
+          VERIFIED="$(gh api "repos/${GH_REPO}/commits/${NEW_SHA}" \
+            --jq '.commit.verification.verified')"
+          if [ "$VERIFIED" != "true" ]; then
+            echo "::error::sync commit ${NEW_SHA} came back verified=${VERIFIED}; required_signatures would block this PR."
+            exit 1
+          fi
+          COMMIT_AUTHOR="$(gh api "repos/${GH_REPO}/commits/${NEW_SHA}" --jq '.commit.author.email')"
+          if ! gh api "repos/${GH_REPO}/commits/${NEW_SHA}" --jq '.commit.message' \
+              | grep -qF "Signed-off-by: ${AUTHOR_NAME} <${COMMIT_AUTHOR}>"; then
+            echo "::error::sync commit ${NEW_SHA} carries no Signed-off-by matching its author ${COMMIT_AUTHOR}; DCO would block this PR."
+            exit 1
+          fi
+          echo "sync-upstream: ${NEW_SHA} is signed and signed-off by ${COMMIT_AUTHOR}."
 
       # Hard gate against auto-merge when the sync branch carries conflict
       # markers. Runs post-commit, post-push, BEFORE any `gh pr merge`
@@ -508,7 +650,7 @@ jobs:
           # explicitly so gh stops guessing.
           GH_REPO: ${{ github.repository }}
         run: |
-          TITLE="sync: upstream $(date -u +%Y-%m-%d)"
+          TITLE="chore(sync): upstream $(date -u +%Y-%m-%d)"
           if [ "${{ steps.guard.outputs.conflict_markers }}" = "true" ]; then
             TITLE="[NEEDS HUMAN REVIEW - DO NOT AUTO-MERGE] ${TITLE}"
           fi
