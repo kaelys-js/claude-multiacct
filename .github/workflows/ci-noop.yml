@@ -13,7 +13,16 @@
 # meaningfully applies to a docs-only change and both are heavy.
 #
 # Keep the path list here in sync with ci.yml.
-name: CI
+#
+# The workflow NAME is deliberately NOT "CI": ci.yml is also named "CI", and a
+# single push that matched both would surface two same-named "CI" runs in the
+# Actions list — indistinguishable at a glance, and the source of a real
+# incident where a red ci.yml run sat next to a green ci-noop "CI" twin on the
+# same commit and the green one was mistaken for the whole story. The required
+# CHECK contexts are the job names (`format`, `lint`, `sync`, `test`), which are
+# unaffected by this workflow-level name, so branch-protection matching is
+# unchanged.
+name: CI (docs-only)
 
 on:
   push:

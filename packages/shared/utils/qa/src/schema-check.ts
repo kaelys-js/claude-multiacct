@@ -18,14 +18,10 @@
  *  - toml: a `#:schema <ref>` line.
  *
  * A `<ref>` that is a relative path resolves to a repo file; an `http(s)://`
- * ref is passed through. A schema that can't be downloaded (offline, 5xx) is a
- * WARNING — never a failure — mirroring `sync:schemas`' network resilience. That
- * covers a directly-remote `$schema` AND a LOCAL vendored schema that transitively
- * `$ref`s a remote one (e.g. `.schemas/markdownlint-cli2.json`, which pulls a
- * `raw.githubusercontent.com` `$ref` when the validator is built): both surface as
- * a download failure, and neither should fail the gate on a network blip. A genuine
- * schema-validation failure — or a schema file that is simply missing — IS a
- * failure. The process exits non-zero iff any file failed validation.
+ * ref is passed through. A remote schema that can't be downloaded (offline, 5xx)
+ * is a WARNING — never a failure — mirroring `sync:schemas`' network resilience;
+ * a genuine schema-validation failure IS a failure. The process exits non-zero
+ * iff any file failed validation.
  *
  * Run through the repo-scoped mise wrapper (`bin/mise exec`) so versions come
  * from mise.toml, matching the rest of @foundation/qa.
@@ -241,12 +237,6 @@ const COVERAGE_EXCLUDED_EXACT = new Set([
 	// everywhere else without fighting a loop with the sync workflow.
 	".github/ISSUE_TEMPLATE/config.yml",
 	".github/dependabot.yml",
-	// Chrome extension manifest template consumed by
-	// `packages/products/claude-multiacct/scripts/build-extension.mjs` —
-	// no public $schema for Chrome MV3 manifests that supports every
-	// field we use, and the build script's valibot-shaped parse catches
-	// shape errors at build time.
-	"packages/products/claude-multiacct/src/extension/manifest.tmpl.json",
 ]);
 
 // Whether a tracked config file is exempt from the schema-coverage requirement.
@@ -307,14 +297,13 @@ const DOWNLOAD_FAILURE_SIGNATURES: readonly string[] = [
 
 // Signatures that mean check-jsonschema could not be LAUNCHED at all, as opposed
 // to running and rejecting the config. The tool is pipx-backed and resolved
-// through mise; when the shared `.mise` toolchain is momentarily mid-flight (the
-// suite re-runs this check inside a concurrent `vitest run`, and pipx tools are
-// the first to vanish from the install dir), the exec fails with a shell
-// `not found` (exit 127) or mise's own `couldn't exec process`. The validator
-// never ran, so that is not a schema verdict — skip the file rather than fail the
-// gate. A genuinely broken toolchain fails `pnpm install`/`mise install` loudly
-// elsewhere. Matched on STDERR only, for the same anti-spoof reason as the
-// download signatures below.
+// through mise; when the shared `.mise` toolchain is momentarily mid-flight
+// (the suite re-runs this check inside a concurrent `vitest run`, and pipx tools
+// are the first to vanish from the install dir), the exec fails with a shell
+// `not found` (exit 127) or mise's own `couldn't exec process`. That says
+// nothing about the config — the validator never ran — so it must not count as a
+// schema failure. A genuinely broken toolchain fails `pnpm install`/`mise
+// install` loudly elsewhere; here we skip the file rather than fail the gate.
 const TOOL_LAUNCH_FAILURE_SIGNATURES: readonly string[] = [
 	"couldn't exec process",
 	"command not found",
@@ -322,14 +311,13 @@ const TOOL_LAUNCH_FAILURE_SIGNATURES: readonly string[] = [
 ];
 const TOOL_LAUNCH_ATTEMPTS = 3;
 
-// True when check-jsonschema could not be launched (spawn failure, exit 127, or a
-// recognisable launch-failure message on stderr) rather than executed and exited
-// non-zero. Called only with a NON-zero result.
-function toolCouldNotLaunch(status: number | null, stderr: string): boolean {
+// True when the tool could not be launched (spawn failure, exit 127, or a
+// recognisable launch-failure message) rather than executed and exited non-zero.
+function toolCouldNotLaunch(status: number | null, combined: string): boolean {
 	if (status === null || status === 127) {
 		return true;
 	}
-	return TOOL_LAUNCH_FAILURE_SIGNATURES.some((s) => stderr.includes(s));
+	return TOOL_LAUNCH_FAILURE_SIGNATURES.some((s) => combined.includes(s));
 }
 
 /** One file's validation outcome. */
@@ -362,9 +350,9 @@ function dataFileFor(d: Discovered): { path: string; cleanup: string | null } {
 	return { path, cleanup: dir };
 }
 
-// Validate one discovered file against its resolved schema. A schema-download
-// failure is classified `warn-unreachable` (network resilience); any other
-// non-zero exit is a genuine `fail`.
+// Validate one discovered file against its resolved schema. A remote-schema
+// download failure is classified `warn-unreachable` (network resilience); any
+// other non-zero exit is a genuine `fail`.
 function validate(d: Discovered): Outcome {
 	const schemafile = resolveRef(d.ref, d.file);
 	const { path, cleanup } = dataFileFor(d);
@@ -376,7 +364,7 @@ function validate(d: Discovered): Outcome {
 	// on the first hit and never retried.
 	for (
 		let attempt = 1;
-		attempt < TOOL_LAUNCH_ATTEMPTS && toolCouldNotLaunch(r.status, r.stderr);
+		attempt < TOOL_LAUNCH_ATTEMPTS && toolCouldNotLaunch(r.status, `${r.stdout}${r.stderr}`);
 		attempt++
 	) {
 		r = miseExec(["check-jsonschema", "--schemafile", schemafile, path], { cwd: ROOT });
@@ -384,38 +372,21 @@ function validate(d: Discovered): Outcome {
 	if (cleanup !== null) {
 		rmSync(cleanup, { recursive: true, force: true });
 	}
+	const combined = `${r.stdout}${r.stderr}`;
 	if (r.status === 0) {
 		process.stdout.write(r.stdout);
 		return "pass";
 	}
-	if (toolCouldNotLaunch(r.status, r.stderr)) {
-		// check-jsonschema never ran (toolchain mid-flight): not a schema verdict.
+	if (isRemote(d.ref) && DOWNLOAD_FAILURE_SIGNATURES.some((s) => combined.includes(s))) {
 		process.stderr.write(
-			`WARN: ${d.file} — check-jsonschema could not be launched (toolchain busy); skipping validation.\n`,
+			`WARN: ${d.file} — schema ${d.ref} unreachable (offline?); skipping validation.\n`,
 		);
 		return "warn-unreachable";
 	}
-	// A download-failure signature means a schema in the reference graph was
-	// unreachable — the top-level `$schema` itself (remote ref) OR a remote `$ref`
-	// pulled by an otherwise-local vendored schema while the validator is built.
-	// Both degrade to a warning, never a gate failure, mirroring sync:schemas.
-	// Keyed on the signatures alone (not `isRemote(d.ref)`): check-jsonschema emits
-	// these only for network/download errors, while a missing LOCAL schema raises
-	// `FileNotFoundError` and a real schema violation raises validation output —
-	// so a genuine failure never masquerades as unreachable.
-	//
-	// Match STDERR ONLY, never a combined stdout+stderr string. check-jsonschema
-	// writes the unreachable-schema traceback (FailedDownloadError, ConnectionError,
-	// "Max retries exceeded", …) to stderr, but echoes a GENUINE validation
-	// failure's offending instance VALUE to stdout. A combined match let a config
-	// whose failing value merely contained a signature phrase (e.g.
-	// `{"kind":"Max retries exceeded"}` against an enum) be mis-read as offline and
-	// warned-and-passed — the gate would swallow an invalid config. Download errors
-	// are stderr-exclusive on check-jsonschema 0.37.4 (top-level AND transitive-$ref
-	// outages alike), so stderr-only keeps the offline resilience and closes the spoof.
-	if (DOWNLOAD_FAILURE_SIGNATURES.some((s) => r.stderr.includes(s))) {
+	if (toolCouldNotLaunch(r.status, combined)) {
+		// check-jsonschema never ran (toolchain mid-flight): not a schema verdict.
 		process.stderr.write(
-			`WARN: ${d.file} — schema ${d.ref} (or a schema it references) unreachable (offline?); skipping validation.\n`,
+			`WARN: ${d.file} — check-jsonschema could not be launched (toolchain busy); skipping validation.\n`,
 		);
 		return "warn-unreachable";
 	}

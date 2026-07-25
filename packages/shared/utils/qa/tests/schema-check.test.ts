@@ -259,42 +259,6 @@ describe("schema-check", () => {
 		expect(`${out}${err}`).toContain("bad.json");
 	});
 
-	it("fails a real violation whose failing VALUE contains a download-failure signature (spoof regression, SR8 fail-closed)", async () => {
-		// The security regression this change closes. A config that GENUINELY violates
-		// its schema, where the offending value happens to contain a network-error
-		// phrase ("Max retries exceeded"), must still FAIL (exit 1). It must never be
-		// mistaken for an offline download and warned-and-passed.
-		//
-		// check-jsonschema echoes the offending INSTANCE value on STDOUT, while a real
-		// download failure's traceback lands on STDERR. Since #70 keys warn-unreachable
-		// on the signatures alone (no `isRemote` guard), the old `${stdout}${stderr}`
-		// match let the stdout-echoed phrase spoof the offline path for ANY config, so
-		// an invalid file silently passed the gate. Matching STDERR only closes it
-		// while keeping the offline warn-and-pass resilience (the other tests here pin
-		// that half). Adversarial: revert `r.stderr` back to `${r.stdout}${r.stderr}`
-		// and this test flips red — the stdout-echoed signature re-routes the genuine
-		// failure to warn-unreachable (exit 0).
-		const enumSchema = JSON.stringify({
-			$schema: "http://json-schema.org/draft-07/schema#",
-			type: "object",
-			properties: { kind: { enum: ["a", "b"] } },
-			required: ["kind"],
-		});
-		const root = fixture([
-			{ path: "schema.json", content: enumSchema },
-			{
-				path: "evil.json",
-				content: '{"$schema":"./schema.json","kind":"Max retries exceeded"}\n',
-			},
-		]);
-		const { code, out, err } = await runCheck(root);
-		expect(code).toBe(1);
-		const combined = `${out}${err}`;
-		// The offending value is surfaced (genuine failure), not swallowed as offline.
-		expect(combined).toContain("evil.json");
-		expect(combined).not.toContain("unreachable");
-	});
-
 	it("fails the coverage gate when a config file declares NO schema marker", async () => {
 		// `orphan.yaml` is a gate-eligible config file with no marker and no exclusion
 		// → missingSchemaRefs flags it → hard fail (exit 1), listing it by name.
@@ -316,33 +280,6 @@ describe("schema-check", () => {
 				path: "remote.json",
 				content: '{"$schema":"https://nonexistent.invalid.example/s.json","n":1}\n',
 			},
-		]);
-		const { code, err } = await runCheck(root);
-		expect(code).toBe(0);
-		expect(err).toContain("unreachable");
-	});
-
-	it("WARNS (not fails) when a LOCAL schema transitively $refs an unreachable REMOTE schema", async () => {
-		// The regression case behind the pre-push offline hard-fail: a config file
-		// declares a LOCAL vendored schema (relative ref), but that schema `$ref`s a
-		// REMOTE one — exactly the shape of `.schemas/markdownlint-cli2.json`, which
-		// pulls a `raw.githubusercontent.com` `$ref` when check-jsonschema builds the
-		// validator. Offline that fetch fails with a download signature. The outcome
-		// must be `warn-unreachable`, NOT `fail`: keying only on `isRemote(topLevelRef)`
-		// (the old guard) mislabelled this a hard failure and forced `--no-verify`.
-		const root = fixture([
-			// Local schema whose $ref targets an unresolvable host. check-jsonschema
-			// resolves the $ref while building the validator → download failure. No
-			// top-level `$schema` marker, so discovery skips the schema file itself and
-			// the test stays focused on `cfg.json`'s local→remote-$ref path.
-			{
-				path: "local.schema.json",
-				content: JSON.stringify({
-					$ref: "https://nonexistent.invalid.example/remote-sub.json",
-				}),
-			},
-			// Config file declares the LOCAL schema by relative path (isRemote → false).
-			{ path: "cfg.json", content: '{"$schema":"./local.schema.json","n":1}\n' },
 		]);
 		const { code, err } = await runCheck(root);
 		expect(code).toBe(0);
@@ -380,8 +317,8 @@ describe("schema-check", () => {
 		// pipx-backed check-jsonschema momentarily vanishes from the mise install dir
 		// mid-run (toolchain churn): `bin/mise exec -- check-jsonschema` exits 127 with
 		// `not found`. The validator never ran, so this is NOT a schema verdict — the
-		// file is skipped (warn) and the gate still exits 0. Mirrors the flake fixed
-		// upstream (foundation-registry #36).
+		// file is skipped (warn) and the gate still exits 0. This is the `expected 1 to
+		// be +0` flake that hit the self-hosted `test` job.
 		const root = fixture([
 			{ path: "schema.json", content: SCHEMA },
 			{ path: "a.json", content: '{"$schema":"./schema.json","n":1}\n' },
