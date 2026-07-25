@@ -121,20 +121,6 @@ env:
   # cron path leaves it empty and behaves as before. Explicit string compare
   # against 'true' downstream so schedule stays on the mutating branch.
   DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
-  # Keep mise's tool tree inside the workspace. jdx/mise-action runs
-  # `mise install` with mise's DEFAULT data dir, which on the shared
-  # self-hosted mini is ~/.local/share/mise — the machine owner's own
-  # toolchain. Every repo's workflows were installing their pinned linters
-  # there, and two running at once (claude-multiacct and ttt-studio share a
-  # 10:00 UTC sync cron) rebuilt the same pipx package over each other,
-  # which is how `reuse` lost its charset-normalizer extra and `attrs` came
-  # out half-written. Pinning these also makes the warm-up honest: it now
-  # warms the exact `.mise` that ./bin/mise reads.
-  MISE_DATA_DIR: ${{ github.workspace }}/.mise
-  MISE_CONFIG_DIR: ${{ github.workspace }}/.mise
-  MISE_CACHE_DIR: ${{ github.workspace }}/.mise/cache
-  MISE_STATE_DIR: ${{ github.workspace }}/.mise/state
-  MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
 
 jobs:
   preflight:
@@ -266,6 +252,35 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.GH_TOKEN }}
+
+      # Give mise a tool tree of its own, beside the checkout rather than inside
+      # it. Left unset, jdx/mise-action installs into mise's default data dir,
+      # which on the shared self-hosted mini is ~/.local/share/mise — the
+      # machine owner's own toolchain. Every repo's workflows were adding their
+      # pinned linters there, and two running at once (this fork and its sibling
+      # share a 10:00 UTC cron) rebuilt the same package over each other; that
+      # is how `reuse` lost its charset-normalizer extra.
+      #
+      # It has to sit OUTSIDE the checkout. mise's npm backend runs its package
+      # manager inside the tool directory, and four of those in parallel under
+      # one pnpm project contend on the project rather than on their own trees:
+      # `installs/npm-oxfmt/0.59.0` comes out with `.npmrc` and `package.json`
+      # and no `node_modules`, while mise still reports the tool installed.
+      #
+      # RUNNER_WORKSPACE is the checkout's parent: absolute, and stable per
+      # runner. It is set here rather than in a workflow-level `env:` block
+      # because that block can read neither the runner context nor environment
+      # variables, and a `${{ github.workspace }}/..` spelling is refused by the
+      # cache action ("Relative pathing '.' and '..' is not allowed").
+      - name: Point mise's tool tree outside the checkout
+        run: |
+          {
+            echo "MISE_DATA_DIR=${RUNNER_WORKSPACE}/.mise-tools"
+            echo "MISE_CONFIG_DIR=${RUNNER_WORKSPACE}/.mise-tools"
+            echo "MISE_CACHE_DIR=${RUNNER_WORKSPACE}/.mise-tools/cache"
+            echo "MISE_STATE_DIR=${RUNNER_WORKSPACE}/.mise-tools/state"
+            echo "MISE_TRUSTED_CONFIG_PATHS=${GITHUB_WORKSPACE}"
+          } >> "$GITHUB_ENV"
 
       # Warm the mise toolchain BEFORE the merge step's inline install.
       # jdx/mise-action activates mise on PATH so subsequent
