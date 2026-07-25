@@ -7,12 +7,19 @@
  * fails after the token write succeeded, the pipeline calls `delete` to
  * avoid a keychain credential with no registry account referencing it.
  *
+ * The keychain secret holds a JSON `TokenRecord`, encoded and decoded through
+ * the codec `FileTokenStore` uses (`oauth/token-record.ts`), so the two back
+ * ends behind `LayeredTokenStore` store the same bytes. A secret written by a
+ * build that predated the record format is a bare access-token string and still
+ * decodes, so no migration is needed on upgrade.
+ *
  * @module
  */
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { AccountUuid } from "../domain/account.ts";
+import { encodeTokenRecord, parseTokenRecord } from "../oauth/token-record.ts";
 import type { MutableTokenStore } from "../oauth/token-store-mut.ts";
 import type { TokenRecord } from "../ports.ts";
 import {
@@ -34,39 +41,54 @@ export class SecurityCliMutableTokenStore implements MutableTokenStore {
 		this.exec = exec;
 	}
 
-	get(accountUuid: AccountUuid): Promise<string> {
-		return this.base.get(accountUuid);
+	/**
+	 * Access-token view over the keychain item. The stored secret is a JSON
+	 * `TokenRecord`, so the raw secret is decoded before the access token is
+	 * handed back — returning the JSON text itself would send a blob where
+	 * callers expect a bearer token. A legacy bare-string secret decodes to
+	 * itself, so a pre-record install reads exactly as it did before.
+	 *
+	 * @param {AccountUuid} accountUuid - Account to read.
+	 * @returns {Promise<string>} The access token.
+	 */
+	async get(accountUuid: AccountUuid): Promise<string> {
+		return parseTokenRecord(await this.base.get(accountUuid)).accessToken;
 	}
 
 	put(accountUuid: AccountUuid, encryptedTokenRef: string): Promise<void> {
-		return this.base.put(accountUuid, encryptedTokenRef);
+		return this.putRecord(accountUuid, { accessToken: encryptedTokenRef });
 	}
 
 	/**
-	 * Record surface over the keychain adapter. This store's keychain item holds
-	 * a bare access-token string, so the record it surfaces carries only
-	 * `accessToken` — the refresh token + expiry live in the `FileTokenStore`,
-	 * the record-capable store the daemon and shim actually read. Provided to
-	 * satisfy `MutableTokenStore`; the prune path (this adapter's only prod
-	 * caller) uses `list`/`delete`, not the record methods.
+	 * Read the full credential bag from the keychain. The secret holds a JSON
+	 * `TokenRecord` written by {@link putRecord}; a secret written by an older
+	 * build is a bare access-token string and decodes to
+	 * `{accessToken: <that string>}`, so an install that predates the record
+	 * format keeps working without a migration step.
 	 *
 	 * @param {AccountUuid} accountUuid - Account to read.
-	 * @returns {Promise<TokenRecord>} The access token wrapped as a record.
+	 * @returns {Promise<TokenRecord>} The stored record.
 	 */
 	async getRecord(accountUuid: AccountUuid): Promise<TokenRecord | undefined> {
-		return { accessToken: await this.base.get(accountUuid) };
+		return parseTokenRecord(await this.base.get(accountUuid));
 	}
 
 	/**
-	 * Persist the record's access token into the keychain. Refresh token +
-	 * expiry are not carried by this bare-string adapter (see `getRecord`).
+	 * Persist the WHOLE record into the keychain as JSON, mirroring
+	 * `FileTokenStore` byte-for-byte through the shared codec. An earlier build
+	 * wrote only `record.accessToken` here and dropped `refreshToken` +
+	 * `expiresAt` silently: any account provisioned through the keychain store
+	 * lost the only material that can renew its access token, so it died the
+	 * moment the ~1h token expired and needed a manual re-register. Production
+	 * reads the file store, which kept the full record, so the loss was latent
+	 * — it was still a data-loss path in a store the CLI can select.
 	 *
 	 * @param {AccountUuid} accountUuid - Account to write.
-	 * @param {TokenRecord} record - Record whose `accessToken` is stored.
+	 * @param {TokenRecord} record - The full credential bag to store.
 	 * @returns {Promise<void>} Resolves once the keychain write completes.
 	 */
 	putRecord(accountUuid: AccountUuid, record: TokenRecord): Promise<void> {
-		return this.base.put(accountUuid, record.accessToken);
+		return this.base.put(accountUuid, encodeTokenRecord(record));
 	}
 
 	/**
