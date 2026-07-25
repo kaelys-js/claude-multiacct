@@ -332,8 +332,18 @@ jobs:
           mkdir -p "$HOME/.local/bin"
           ln -sf "$(ls "$PWD"/.mise/mise-* | head -n1)" "$HOME/.local/bin/mise"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-      - name: Install toolchain (mise — node, pnpm)
+      - name: Install toolchain (mise — node, pnpm, check-jsonschema)
         run: ./bin/mise install
+      # schema-check.test.ts drives the REAL check-jsonschema through a stub
+      # `bin/mise` in each fixture, deliberately, so a pass/fail/unreachable
+      # verdict in the suite is the tool's verdict and not a mock's. That makes
+      # the tool a test dependency of THIS job, not just of `lint`. Without it
+      # every validation outcome degrades to the tool-launch tolerance added in
+      # #36: the two "must FAIL" cases exit 0 and the remote-unreachable case
+      # reports the launch warning instead. Same forced reinstall as `lint` —
+      # the pipx venv's absolute paths need re-anchoring to this work root.
+      - name: Re-anchor pipx venvs to current work root
+        run: ./bin/mise install --force pipx:check-jsonschema
       - name: Install dependencies
         run: ./bin/mise exec -- pnpm install --frozen-lockfile
       - name: Tests + coverage gate (per-file thresholds)

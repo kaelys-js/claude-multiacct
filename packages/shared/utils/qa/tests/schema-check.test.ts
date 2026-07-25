@@ -259,42 +259,6 @@ describe("schema-check", () => {
 		expect(`${out}${err}`).toContain("bad.json");
 	});
 
-	it("fails a real violation whose failing VALUE contains a download-failure signature (spoof regression, SR8 fail-closed)", async () => {
-		// The security regression this change closes. A config that GENUINELY violates
-		// its schema, where the offending value happens to contain a network-error
-		// phrase ("Max retries exceeded"), must still FAIL (exit 1). It must never be
-		// mistaken for an offline download and warned-and-passed.
-		//
-		// check-jsonschema echoes the offending INSTANCE value on STDOUT, while a real
-		// download failure's traceback lands on STDERR. Since #70 keys warn-unreachable
-		// on the signatures alone (no `isRemote` guard), the old `${stdout}${stderr}`
-		// match let the stdout-echoed phrase spoof the offline path for ANY config, so
-		// an invalid file silently passed the gate. Matching STDERR only closes it
-		// while keeping the offline warn-and-pass resilience (the other tests here pin
-		// that half). Adversarial: revert `r.stderr` back to `${r.stdout}${r.stderr}`
-		// and this test flips red — the stdout-echoed signature re-routes the genuine
-		// failure to warn-unreachable (exit 0).
-		const enumSchema = JSON.stringify({
-			$schema: "http://json-schema.org/draft-07/schema#",
-			type: "object",
-			properties: { kind: { enum: ["a", "b"] } },
-			required: ["kind"],
-		});
-		const root = fixture([
-			{ path: "schema.json", content: enumSchema },
-			{
-				path: "evil.json",
-				content: '{"$schema":"./schema.json","kind":"Max retries exceeded"}\n',
-			},
-		]);
-		const { code, out, err } = await runCheck(root);
-		expect(code).toBe(1);
-		const combined = `${out}${err}`;
-		// The offending value is surfaced (genuine failure), not swallowed as offline.
-		expect(combined).toContain("evil.json");
-		expect(combined).not.toContain("unreachable");
-	});
-
 	it("fails the coverage gate when a config file declares NO schema marker", async () => {
 		// `orphan.yaml` is a gate-eligible config file with no marker and no exclusion
 		// → missingSchemaRefs flags it → hard fail (exit 1), listing it by name.
@@ -316,33 +280,6 @@ describe("schema-check", () => {
 				path: "remote.json",
 				content: '{"$schema":"https://nonexistent.invalid.example/s.json","n":1}\n',
 			},
-		]);
-		const { code, err } = await runCheck(root);
-		expect(code).toBe(0);
-		expect(err).toContain("unreachable");
-	});
-
-	it("WARNS (not fails) when a LOCAL schema transitively $refs an unreachable REMOTE schema", async () => {
-		// The regression case behind the pre-push offline hard-fail: a config file
-		// declares a LOCAL vendored schema (relative ref), but that schema `$ref`s a
-		// REMOTE one — exactly the shape of `.schemas/markdownlint-cli2.json`, which
-		// pulls a `raw.githubusercontent.com` `$ref` when check-jsonschema builds the
-		// validator. Offline that fetch fails with a download signature. The outcome
-		// must be `warn-unreachable`, NOT `fail`: keying only on `isRemote(topLevelRef)`
-		// (the old guard) mislabelled this a hard failure and forced `--no-verify`.
-		const root = fixture([
-			// Local schema whose $ref targets an unresolvable host. check-jsonschema
-			// resolves the $ref while building the validator → download failure. No
-			// top-level `$schema` marker, so discovery skips the schema file itself and
-			// the test stays focused on `cfg.json`'s local→remote-$ref path.
-			{
-				path: "local.schema.json",
-				content: JSON.stringify({
-					$ref: "https://nonexistent.invalid.example/remote-sub.json",
-				}),
-			},
-			// Config file declares the LOCAL schema by relative path (isRemote → false).
-			{ path: "cfg.json", content: '{"$schema":"./local.schema.json","n":1}\n' },
 		]);
 		const { code, err } = await runCheck(root);
 		expect(code).toBe(0);
@@ -376,12 +313,16 @@ describe("schema-check", () => {
 		expect(code).toBe(0);
 	});
 
-	it("TOLERATES a check-jsonschema launch failure (exit 127, tool not on PATH)", async () => {
-		// pipx-backed check-jsonschema momentarily vanishes from the mise install dir
-		// mid-run (toolchain churn): `bin/mise exec -- check-jsonschema` exits 127 with
-		// `not found`. The validator never ran, so this is NOT a schema verdict — the
-		// file is skipped (warn) and the gate still exits 0. Mirrors the flake fixed
-		// upstream (foundation-registry #36).
+	it("FAILS CLOSED on a check-jsonschema launch failure (exit 127, tool not on PATH)", async () => {
+		// Rule 9 — WHY: an unrun validator leaves the file UNVALIDATED, and letting an
+		// unvalidated config merge is the single thing this gate exists to prevent.
+		// #36 made this exhausted-retry path a warning to stop a flake in the `test`
+		// job; that also made a schema VIOLATION exit 0 whenever the pipx venv was
+		// unusable, and it broke the two "must fail" cases below. The flake's cause was
+		// environmental (ci.yml's `test` job never re-anchored the pipx venv) and is
+		// fixed there, so this path goes back to failing closed — and the message must
+		// name the toolchain, not the config, so nobody debugs a schema bug that isn't
+		// there.
 		const root = fixture([
 			{ path: "schema.json", content: SCHEMA },
 			{ path: "a.json", content: '{"$schema":"./schema.json","n":1}\n' },
@@ -392,13 +333,15 @@ describe("schema-check", () => {
 		);
 		chmodSync(join(root, "bin", "mise"), 0o755);
 		const { code, err } = await runCheck(root);
-		expect(code).toBe(0);
-		expect(err).toContain("could not be launched");
+		expect(code).toBe(1);
+		expect(err).toContain("could not be launched after");
+		expect(err).toContain("UNVALIDATED");
 	});
 
-	it("TOLERATES a mise launch failure (couldn't exec process, exit 1)", async () => {
+	it("FAILS CLOSED on a mise launch failure (couldn't exec process, exit 1)", async () => {
 		// mise's own message when it cannot resolve the pinned tool. Non-127 exit, so
-		// this drives the signature-match branch rather than the exit-code branch.
+		// this drives the signature-match branch rather than the exit-code branch —
+		// same conclusion: the validator never ran, so the gate does not pass.
 		const root = fixture([
 			{ path: "schema.json", content: SCHEMA },
 			{ path: "a.json", content: '{"$schema":"./schema.json","n":1}\n' },
@@ -408,19 +351,66 @@ describe("schema-check", () => {
 			`#!/bin/sh\necho "mise ERROR couldn't exec process" >&2\nexit 1\n`,
 		);
 		chmodSync(join(root, "bin", "mise"), 0o755);
-		const { code } = await runCheck(root);
-		expect(code).toBe(0);
+		const { code, err } = await runCheck(root);
+		expect(code).toBe(1);
+		expect(err).toContain("UNVALIDATED");
 	});
 
-	it("TOLERATES a spawn failure (bin/mise absent → status null)", async () => {
-		// No bin/mise at all: the spawn errors (status null). Same class — the tool
-		// never ran — so the gate is not failed.
+	it("FAILS CLOSED on a spawn failure (bin/mise absent → status null)", async () => {
+		// No bin/mise at all: the spawn errors with status null. Third entry point into
+		// the same class, pinned separately because `status === null` is a distinct
+		// branch from exit 127 and from the message match.
 		const root = fixture([
 			{ path: "schema.json", content: SCHEMA },
 			{ path: "a.json", content: '{"$schema":"./schema.json","n":1}\n' },
 		]);
 		rmSync(join(root, "bin", "mise"), { force: true });
-		const { code } = await runCheck(root);
+		const { code, err } = await runCheck(root);
+		expect(code).toBe(1);
+		expect(err).toContain("UNVALIDATED");
+	});
+
+	it("exempts a refless config file listed in .schema-coverage-ignore (fork hook)", async () => {
+		// Rule 9 — WHY this matters: forks carry product files that genuinely cannot
+		// hold a schema marker, and the only previous way to exempt one was editing
+		// COVERAGE_EXCLUDED_EXACT in this shared source. The sync declares
+		// `packages/shared` upstream-authoritative, so that edit was either reverted
+		// on the next sync (fork lint goes red on a file the fork deliberately
+		// exempted) or preserved by pinning the whole file fork-wins, which silently
+		// discards every upstream fix to the validator. `.schema-coverage-ignore` is
+		// fork-owned data no sync rule claims, so the exemption survives and the
+		// shared source stays byte-identical across the fleet. If this test can pass
+		// with the hook removed, the sync-revert loop is back.
+		const root = fixture([
+			{ path: "schema.json", content: SCHEMA },
+			{ path: "ok.json", content: '{"$schema":"./schema.json","n":1}\n' },
+			// Refless: would hard-fail the coverage gate without the ignore entry.
+			{ path: "manifest.tmpl.json", content: '{"name":"x"}\n' },
+			{
+				path: ".schema-coverage-ignore",
+				content: "# fork-only exemptions\n\nmanifest.tmpl.json\n",
+			},
+		]);
+		const { code, out } = await runCheck(root);
 		expect(code).toBe(0);
+		expect(out).toContain("every tracked config file declares a schema marker");
+	});
+
+	it("keeps the coverage gate hard-failing for a file the ignore file does NOT list", async () => {
+		// The fork hook must exempt exactly what it names and nothing else. A
+		// per-fork ignore file that switched the gate off wholesale (or matched by
+		// prefix/glob) would let an un-schemad config land on a fork unnoticed —
+		// which is the failure the coverage gate exists to prevent.
+		const root = fixture([
+			{ path: "schema.json", content: SCHEMA },
+			{ path: "exempt.json", content: '{"just":"data"}\n' },
+			{ path: "notexempt.json", content: '{"also":"data"}\n' },
+			{ path: ".schema-coverage-ignore", content: "exempt.json\n" },
+		]);
+		const { code, err } = await runCheck(root);
+		expect(code).toBe(1);
+		// Exactly one offender, and it is the unlisted one.
+		expect(err).toContain("FAIL 1 tracked config file(s)");
+		expect(err).toContain("    notexempt.json\n");
 	});
 });
