@@ -44,10 +44,12 @@
 #   1. Checkout `main` with fetch-depth 0 using the deploy key (read of
 #      upstream, write of fork).
 #   2. Add the SSH `upstream` remote and fetch the tracked branch.
-#   3. Try fast-forward. On success, PATCH the fork's `main` ref via
-#      `gh api` so it points at the upstream tip; no new commit is
-#      created, and upstream commit signatures are preserved verbatim.
-#   4. On non-fast-forward: cut branch `sync/upstream-YYYY-MM-DD-<sha>`,
+#   3. No fast-forward fast path. Moving the fork's `main` ref directly (the
+#      old `gh api -X PATCH` on the ref) is refused by the zero-bypass checks
+#      ruleset every repo in this fleet now carries, so that branch could only
+#      ever redden the run. Every sync takes the reviewed, gate-checked PR
+#      route below, whether or not the fork could have fast-forwarded.
+#   4. Cut branch `sync/upstream-YYYY-MM-DD-<sha>`,
 #      merge with a fixed rule (upstream wins under `packages/shared` and
 #      `.schemas`; product code and product-specific workflows win
 #      locally), push, then replace the local merge commit with a
@@ -97,6 +99,35 @@ jobs:
           fetch-depth: 0
           ssh-key: ${{ secrets.${UPSTREAM_DEPLOY_KEY_SECRET} }}
 
+      # Give mise a tool tree of its own, beside the checkout rather than inside
+      # it. Left unset, jdx/mise-action installs into mise's default data dir,
+      # which on the shared self-hosted mini is ~/.local/share/mise — the
+      # machine owner's own toolchain. Every repo's workflows were adding their
+      # pinned linters there, and two running at once (this fork and its sibling
+      # share a 10:00 UTC cron) rebuilt the same package over each other; that
+      # is how `reuse` lost its charset-normalizer extra.
+      #
+      # It has to sit OUTSIDE the checkout. mise's npm backend runs its package
+      # manager inside the tool directory, and four of those in parallel under
+      # one pnpm project contend on the project rather than on their own trees:
+      # `installs/npm-oxfmt/0.59.0` comes out with `.npmrc` and `package.json`
+      # and no `node_modules`, while mise still reports the tool installed.
+      #
+      # RUNNER_WORKSPACE is the checkout's parent: absolute, and stable per
+      # runner. It is set here rather than in a workflow-level `env:` block
+      # because that block can read neither the runner context nor environment
+      # variables, and a `${{ github.workspace }}/..` spelling is refused by the
+      # cache action ("Relative pathing '.' and '..' is not allowed").
+      - name: Point mise's tool tree outside the checkout
+        run: |
+          {
+            echo "MISE_DATA_DIR=${RUNNER_WORKSPACE}/.mise-tools"
+            echo "MISE_CONFIG_DIR=${RUNNER_WORKSPACE}/.mise-tools"
+            echo "MISE_CACHE_DIR=${RUNNER_WORKSPACE}/.mise-tools/cache"
+            echo "MISE_STATE_DIR=${RUNNER_WORKSPACE}/.mise-tools/state"
+            echo "MISE_TRUSTED_CONFIG_PATHS=${GITHUB_WORKSPACE}"
+          } >> "$GITHUB_ENV"
+
       # Warm the mise toolchain BEFORE the merge step's inline install.
       # jdx/mise-action activates mise on PATH so subsequent
       # `./bin/mise install` calls (after the merge picks up any upstream
@@ -109,6 +140,47 @@ jobs:
         uses: jdx/mise-action@v3
         with:
           install: true
+      # mise marks a tool installed the moment its version directory exists, so
+      # an install that dies partway leaves a stub that every later
+      # `mise install` skips. The npm backend does this readily: `npm i -g`
+      # fires before node's binary lands on PATH and exits 127, leaving nothing
+      # but `.npmrc` + `package.json` behind. That is how `oxfmt` went missing
+      # from PATH on this runner while `mise install` reported success. Look for
+      # version directories that contain no executable at all, force a rebuild
+      # once, then fail loud if any are still empty rather than handing the next
+      # step a toolchain with holes in it.
+      - name: Verify the mise toolchain has no partial installs
+        run: |
+          set -euo pipefail
+          stubs() {
+            find "${MISE_DATA_DIR}/installs" -mindepth 2 -maxdepth 2 -type d -print 2>/dev/null |
+              while read -r d; do
+                [ -L "$d" ] && continue
+                find "$d" -type f -perm -u+x -print -quit 2>/dev/null | grep -q . || echo "$d"
+              done
+          }
+          found="$(stubs)"
+          if [ -n "$found" ]; then
+            echo "::warning::partial mise installs found, rebuilding:"
+            echo "$found"
+            # The stub has to be DELETED, not reinstalled over. `mise install`
+            # skips a version whose directory exists and says nothing, and
+            # `mise install --force` refuses to run without an explicit
+            # TOOL@VERSION (`Usage: mise install --force <TOOL@VERSION>...`).
+            # Removing the directory is what lets the plain install below
+            # actually fetch the tool.
+            echo "$found" | while read -r d; do
+              [ -n "$d" ] && rm -rf "$d"
+            done
+            mise install
+            found="$(stubs)"
+          fi
+          if [ -n "$found" ]; then
+            echo "::error::these mise version directories still contain no executable after a rebuild:"
+            echo "$found"
+            exit 1
+          fi
+          echo "mise toolchain: every installed version carries an executable."
 
       - name: Configure git identity
         run: |
@@ -121,26 +193,7 @@ jobs:
           git remote add upstream ${UPSTREAM_REPO_SSH}
           git fetch upstream ${UPSTREAM_BRANCH}
 
-      - name: Try fast-forward
-        id: ff
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          # Move the ref via `gh api` rather than `git push`. PATCH to
-          # /git/refs/heads/main just moves the pointer to the upstream
-          # commit and preserves whatever signature (or none) the upstream
-          # commit carried. No new commit is created.
-          if git merge --ff-only upstream/${UPSTREAM_BRANCH}; then
-            echo "result=ff" >>"$GITHUB_OUTPUT"
-            UPSTREAM_HEAD=$(git rev-parse HEAD)
-            gh api -X PATCH /repos/${{ github.repository }}/git/refs/heads/main \
-              -f sha="$UPSTREAM_HEAD"
-          else
-            echo "result=conflict" >>"$GITHUB_OUTPUT"
-          fi
-
       - name: Create sync branch on non-fast-forward
-        if: steps.ff.outputs.result == 'conflict'
         id: branch
         run: |
           git reset --hard origin/main
@@ -150,7 +203,6 @@ jobs:
           git checkout -b "${BRANCH}"
 
       - name: Merge upstream with fixed conflict rule
-        if: steps.ff.outputs.result == 'conflict'
         run: |
           set +e
           git merge --no-ff --no-commit upstream/${UPSTREAM_BRANCH}
@@ -171,10 +223,41 @@ jobs:
           # `renovate.yml` is now byte-identical between fork and upstream
           # (parametrised on `${{ github.repository }}`), so it also doesn't
           # need protection here.
+          #
+          # IaC-owned governance files. Every path above this comment's list is
+          # written into the fork by kaelys-js-infra's `local.governance_files`
+          # (terraform/repository_files.tf) and delivered by file-sync.yml. None
+          # of them was on either allowlist: ISSUE_TEMPLATE, CONTRIBUTING.md and
+          # SECURITY.md were explicitly upstream-wins, and the rest were swept up
+          # by the accept-upstream fallback below. file-sync then wrote the IaC
+          # copy back on its next run, so which text survived came down to run
+          # order. The sync branch `sync/upstream-2026-07-23-6d70eab-30019711194`
+          # is the proof: it carried foundation-registry's "Contributing to
+          # foundation-registry" over this fork's CONTRIBUTING.md. IaC owns these
+          # paths, so the sync keeps the fork's copy and file-sync stays the only
+          # writer.
+          #
+          # `.github/dependabot.yml` is deliberately NOT listed. It is a
+          # `governance_deletions` entry rather than a file, and
+          # `git checkout HEAD -- <path>` cannot restore something absent from
+          # HEAD; file-sync deleting it on every run is what stops an upstream
+          # re-add from sticking.
           for p in \
             .github/workflows/catalog-notify.yml \
             .github/workflows/ci.yml \
             pnpm-lock.yaml \
+            .github/kaelys-catalog.json \
+            .github/CODEOWNERS \
+            .github/PULL_REQUEST_TEMPLATE.md \
+            .github/ISSUE_TEMPLATE \
+            .github/copilot-instructions.md \
+            SECURITY.md \
+            CODE_OF_CONDUCT.md \
+            CONTRIBUTING.md \
+            SUPPORT.md \
+            LICENSE \
+            .editorconfig \
+            .gitattributes \
           ; do
             if [ -e "$p" ] || git ls-files -u "$p" | grep -q .; then
               git checkout --ours -- "$p" 2>/dev/null || true
@@ -203,7 +286,6 @@ jobs:
           exit ${MERGE_STATUS}
 
       - name: Push sync branch
-        if: steps.ff.outputs.result == 'conflict'
         run: |
           # Uploads the local merge commit + its tree so the API call
           # below has server-side objects to reference before it replaces
@@ -211,7 +293,6 @@ jobs:
           git push origin "${{ steps.branch.outputs.branch }}"
 
       - name: Replace merge commit with API-signed variant
-        if: steps.ff.outputs.result == 'conflict'
         env:
           # The ambient GITHUB_TOKEN, not a PAT. `POST /git/commits`
           # produces a `web-flow`-signed commit only when the caller is
@@ -258,7 +339,6 @@ jobs:
       # Line-start anchoring plus the exact repeat count rules out prose
       # and code that mentions angle brackets or equals signs.
       - name: Scan sync branch for conflict markers
-        if: steps.ff.outputs.result == 'conflict'
         id: guard
         run: |
           if git grep -q -E '^(<{7} |={7}$|>{7} )' HEAD; then
@@ -273,7 +353,6 @@ jobs:
           fi
 
       - name: Open PR
-        if: steps.ff.outputs.result == 'conflict'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -297,7 +376,7 @@ jobs:
       # entirely when the guard flagged conflict markers, so neither
       # `--auto` nor the direct squash can land dirty content.
       - name: Enable auto-merge on clean sync
-        if: steps.ff.outputs.result == 'conflict' && steps.guard.outputs.conflict_markers == 'false'
+        if: steps.guard.outputs.conflict_markers == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -314,7 +393,7 @@ jobs:
       # on the Actions tab. `gh label create --force` is idempotent
       # (repeat runs on the same repo don't fail once the label exists).
       - name: Flag PR for human review on conflict markers
-        if: steps.ff.outputs.result == 'conflict' && steps.guard.outputs.conflict_markers == 'true'
+        if: steps.guard.outputs.conflict_markers == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
