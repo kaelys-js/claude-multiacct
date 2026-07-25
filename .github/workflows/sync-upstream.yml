@@ -279,6 +279,38 @@ jobs:
         uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
         with:
           install: true
+      # mise marks a tool installed the moment its version directory exists, so
+      # an install that dies partway leaves a stub that every later
+      # `mise install` skips. The npm backend does this readily: `npm i -g`
+      # fires before node's binary lands on PATH and exits 127, leaving nothing
+      # but `.npmrc` + `package.json` behind. That is how `oxfmt` went missing
+      # from PATH on this runner while `mise install` reported success. Look for
+      # version directories that contain no executable at all, force a rebuild
+      # once, then fail loud if any are still empty rather than handing the next
+      # step a toolchain with holes in it.
+      - name: Verify the mise toolchain has no partial installs
+        run: |
+          set -euo pipefail
+          stubs() {
+            find "${MISE_DATA_DIR}/installs" -mindepth 2 -maxdepth 2 -type d -print 2>/dev/null |
+              while read -r d; do
+                [ -L "$d" ] && continue
+                find "$d" -type f -perm -u+x -print -quit 2>/dev/null | grep -q . || echo "$d"
+              done
+          }
+          found="$(stubs)"
+          if [ -n "$found" ]; then
+            echo "::warning::partial mise installs found, forcing a rebuild:"
+            echo "$found"
+            mise install --force
+            found="$(stubs)"
+          fi
+          if [ -n "$found" ]; then
+            echo "::error::these mise version directories still contain no executable after a forced reinstall:"
+            echo "$found"
+            exit 1
+          fi
+          echo "mise toolchain: every installed version carries an executable."
 
       - name: Configure git identity
         run: |
