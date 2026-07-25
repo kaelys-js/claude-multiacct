@@ -300,13 +300,22 @@ jobs:
           }
           found="$(stubs)"
           if [ -n "$found" ]; then
-            echo "::warning::partial mise installs found, forcing a rebuild:"
+            echo "::warning::partial mise installs found, rebuilding:"
             echo "$found"
-            mise install --force
+            # The stub has to be DELETED, not reinstalled over. `mise install`
+            # skips a version whose directory exists and says nothing, and
+            # `mise install --force` refuses to run without an explicit
+            # TOOL@VERSION (`Usage: mise install --force <TOOL@VERSION>...`).
+            # Removing the directory is what lets the plain install below
+            # actually fetch the tool.
+            echo "$found" | while read -r d; do
+              [ -n "$d" ] && rm -rf "$d"
+            done
+            mise install
             found="$(stubs)"
           fi
           if [ -n "$found" ]; then
-            echo "::error::these mise version directories still contain no executable after a forced reinstall:"
+            echo "::error::these mise version directories still contain no executable after a rebuild:"
             echo "$found"
             exit 1
           fi
