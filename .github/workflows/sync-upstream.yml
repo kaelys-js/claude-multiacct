@@ -51,10 +51,12 @@
 #      + write of fork under the same account).
 #   2. Add the HTTPS `upstream` remote (token embedded via
 #      `x-access-token`) and fetch the tracked branch.
-#   3. Try fast-forward. On success, PATCH the fork's `main` ref via
-#      `gh api` so the ref points at the upstream tip; no new commit is
-#      created, and upstream commit signatures are preserved verbatim.
-#   4. On non-fast-forward: cut branch
+#   3. No fast-forward fast path. Moving the fork's `main` ref directly (the
+#      old `gh api -X PATCH` on the ref) is refused by the zero-bypass checks
+#      ruleset every repo in this fleet now carries, so that branch could only
+#      ever redden the run. Every sync takes the reviewed, gate-checked PR
+#      route below, whether or not the fork could have fast-forwarded.
+#   4. Cut branch
 #      `sync/upstream-YYYY-MM-DD-<sha>-<run_id>`. The run id keeps every
 #      attempt unique, so the ref is always CREATED and never force-updated —
 #      a `non_fast_forward` ruleset matching `sync/**` refuses a force-update
@@ -119,6 +121,20 @@ env:
   # cron path leaves it empty and behaves as before. Explicit string compare
   # against 'true' downstream so schedule stays on the mutating branch.
   DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+  # Keep mise's tool tree inside the workspace. jdx/mise-action runs
+  # `mise install` with mise's DEFAULT data dir, which on the shared
+  # self-hosted mini is ~/.local/share/mise — the machine owner's own
+  # toolchain. Every repo's workflows were installing their pinned linters
+  # there, and two running at once (claude-multiacct and ttt-studio share a
+  # 10:00 UTC sync cron) rebuilt the same pipx package over each other,
+  # which is how `reuse` lost its charset-normalizer extra and `attrs` came
+  # out half-written. Pinning these also makes the warm-up honest: it now
+  # warms the exact `.mise` that ./bin/mise reads.
+  MISE_DATA_DIR: ${{ github.workspace }}/.mise
+  MISE_CONFIG_DIR: ${{ github.workspace }}/.mise
+  MISE_CACHE_DIR: ${{ github.workspace }}/.mise/cache
+  MISE_STATE_DIR: ${{ github.workspace }}/.mise/state
+  MISE_TRUSTED_CONFIG_PATHS: ${{ github.workspace }}
 
 jobs:
   preflight:
@@ -275,32 +291,7 @@ jobs:
           git remote add upstream "https://x-access-token:${{ secrets.GH_TOKEN }}@github.com/kaelys-js/foundation-registry.git"
           git fetch upstream main
 
-      - name: Try fast-forward
-        id: ff
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
-        run: |
-          # Move the ref via `gh api` rather than `git push`. A push would
-          # be a fast-forward at the SHA level, but the ambient GITHUB_TOKEN
-          # path adds a signed-off-by-actions layer we don't want; a PATCH
-          # to /git/refs/heads/main just moves the pointer to the upstream
-          # commit, preserving whatever signature (or none) the upstream
-          # commit carried. No new commit is created.
-          if git merge --ff-only upstream/main; then
-            echo "result=ff" >>"$GITHUB_OUTPUT"
-            UPSTREAM_HEAD=$(git rev-parse HEAD)
-            if [[ "${DRY_RUN}" == "true" ]]; then
-              echo "[DRY_RUN] would PATCH refs/heads/main -> ${UPSTREAM_HEAD}"
-            else
-              gh api -X PATCH /repos/${{ github.repository }}/git/refs/heads/main \
-                -f sha="$UPSTREAM_HEAD"
-            fi
-          else
-            echo "result=conflict" >>"$GITHUB_OUTPUT"
-          fi
-
       - name: Create sync branch on non-fast-forward
-        if: steps.ff.outputs.result == 'conflict'
         id: branch
         run: |
           git reset --hard origin/main
@@ -317,7 +308,6 @@ jobs:
           git checkout -b "${BRANCH}"
 
       - name: Merge upstream with fixed conflict rule
-        if: steps.ff.outputs.result == 'conflict'
         id: merge
         run: |
           set +e
@@ -326,17 +316,15 @@ jobs:
 
           # Upstream-wins (upstream is authoritative). packages/shared and
           # .schemas are the shared library surface; mise.toml/turbo.json track
-          # upstream toolchain baseline; doc surfaces (README/CONTRIBUTING/
-          # SECURITY/ISSUE_TEMPLATE) track upstream governance.
+          # upstream toolchain baseline; README tracks upstream prose.
+          # CONTRIBUTING.md, SECURITY.md and .github/ISSUE_TEMPLATE used to be
+          # here; they moved to fork-wins below because IaC owns them.
           for p in \
             packages/shared \
             .schemas \
             mise.toml \
             turbo.json \
-            .github/ISSUE_TEMPLATE \
             README.md \
-            CONTRIBUTING.md \
-            SECURITY.md \
           ; do
             if [ -e "$p" ] || git ls-files -u "$p" | grep -q .; then
               git checkout --theirs -- "$p" 2>/dev/null || true
@@ -352,12 +340,43 @@ jobs:
           # upstream template change cannot silently revert this Option A
           # strategy. Fork-specific divergences beyond this list stay in the
           # concrete `.github/workflows/sync-upstream.yml` fork-wins block.
+          #
+          # IaC-owned governance files. Every path above this comment's list is
+          # written into the fork by kaelys-js-infra's `local.governance_files`
+          # (terraform/repository_files.tf) and delivered by file-sync.yml. None
+          # of them was on either allowlist: ISSUE_TEMPLATE, CONTRIBUTING.md and
+          # SECURITY.md were explicitly upstream-wins, and the rest were swept up
+          # by the accept-upstream fallback below. file-sync then wrote the IaC
+          # copy back on its next run, so which text survived came down to run
+          # order. The sync branch `sync/upstream-2026-07-23-6d70eab-30019711194`
+          # is the proof: it carried foundation-registry's "Contributing to
+          # foundation-registry" over this fork's CONTRIBUTING.md. IaC owns these
+          # paths, so the sync keeps the fork's copy and file-sync stays the only
+          # writer.
+          #
+          # `.github/dependabot.yml` is deliberately NOT listed. It is a
+          # `governance_deletions` entry rather than a file, and
+          # `git checkout HEAD -- <path>` cannot restore something absent from
+          # HEAD; file-sync deleting it on every run is what stops an upstream
+          # re-add from sticking.
           for p in \
             packages/products \
             apps \
             pnpm-lock.yaml \
             .github/workflows/sync-upstream.yml \
             packages/shared/config/workflows/sync-upstream.same-owner.template.yml \
+            .github/kaelys-catalog.json \
+            .github/CODEOWNERS \
+            .github/PULL_REQUEST_TEMPLATE.md \
+            .github/ISSUE_TEMPLATE \
+            .github/copilot-instructions.md \
+            SECURITY.md \
+            CODE_OF_CONDUCT.md \
+            CONTRIBUTING.md \
+            SUPPORT.md \
+            LICENSE \
+            .editorconfig \
+            .gitattributes \
           ; do
             if [ -e "$p" ] || git ls-files -u "$p" | grep -q .; then
               # `git checkout --ours` silently no-ops on cleanly-merged files
@@ -501,7 +520,7 @@ jobs:
       # force-update ever happens, so the `non_fast_forward` ruleset that matches
       # `sync/**` has nothing to refuse (it used to 422 the old force-PATCH).
       - name: Create signed sync commit on a fresh branch
-        if: steps.ff.outputs.result == 'conflict' && steps.merge.outputs.noop != 'true'
+        if: steps.merge.outputs.noop != 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           GH_REPO: ${{ github.repository }}
@@ -619,7 +638,7 @@ jobs:
       # Line-start anchoring plus the exact repeat count rules out prose
       # and code that mentions angle brackets or equals signs.
       - name: Scan sync branch for conflict markers
-        if: steps.ff.outputs.result == 'conflict' && steps.merge.outputs.noop != 'true'
+        if: steps.merge.outputs.noop != 'true'
         id: guard
         run: |
           if git grep -q -E '^(<{7} |={7}$|>{7} )' HEAD; then
@@ -634,7 +653,7 @@ jobs:
           fi
 
       - name: Open PR
-        if: steps.ff.outputs.result == 'conflict' && steps.merge.outputs.noop != 'true'
+        if: steps.merge.outputs.noop != 'true'
         env:
           # `github.token` (the ambient GITHUB_TOKEN) cannot create pull
           # requests: GitHub blocks it with `GitHub Actions is not permitted
@@ -674,7 +693,7 @@ jobs:
       # entirely when the guard flagged conflict markers, so neither
       # `--auto` nor the direct squash can land dirty content.
       - name: Enable auto-merge on clean sync
-        if: steps.ff.outputs.result == 'conflict' && steps.guard.outputs.conflict_markers == 'false'
+        if: steps.guard.outputs.conflict_markers == 'false'
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           GH_REPO: ${{ github.repository }}
@@ -696,7 +715,7 @@ jobs:
       # on the Actions tab. `gh label create --force` is idempotent
       # (repeat runs on the same repo don't fail once the label exists).
       - name: Flag PR for human review on conflict markers
-        if: steps.ff.outputs.result == 'conflict' && steps.guard.outputs.conflict_markers == 'true'
+        if: steps.guard.outputs.conflict_markers == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           GH_REPO: ${{ github.repository }}
