@@ -603,13 +603,24 @@ describe("refreshAccount — flag gate + refresh flow", () => {
 		expect(reason).toBe("refresh_failed");
 	});
 
-	it("happy path: puts the new tokens (JSON blob) under the account uuid", async () => {
+	it("happy path: stores the refreshed tokens as a RECORD, keeping refreshToken + expiresAt", async () => {
+		// This used to call `put(uuid, JSON.stringify(tokens))`, so the store's
+		// `accessToken` field held the whole serialised bag and the refresh token
+		// was only reachable by re-parsing a value nothing else parses. A refresh
+		// exists precisely to keep an account alive, so the renewed refreshToken +
+		// expiresAt must land in the fields the store reads on the NEXT refresh —
+		// otherwise the account survives exactly one renewal.
 		const ports = makePorts({
 			registry: baseRegistry(),
 			refresh: () =>
 				Promise.resolve({
 					ok: true,
-					tokens: { accessToken: "NEW", refreshToken: "NEWR", scopes: ["s"] },
+					tokens: {
+						accessToken: "NEW",
+						refreshToken: "NEWR",
+						expiresAt: "2026-07-25T12:00:00.000Z",
+						scopes: ["s"],
+					},
 				}),
 		});
 		const r = await refreshAccount({
@@ -619,13 +630,18 @@ describe("refreshAccount — flag gate + refresh flow", () => {
 			overrideFlag: true,
 		});
 		assertOk(r);
-		const stored = ports.tokenStore.snapshot()[UUID_A];
-		expect(JSON.parse(stored ?? "{}").accessToken).toBe("NEW");
+		// accessToken is a bearer token, not a JSON blob.
+		expect(ports.tokenStore.snapshot()[UUID_A]).toBe("NEW");
+		await expect(ports.tokenStore.getRecord(coerceUuid(UUID_A))).resolves.toStrictEqual({
+			accessToken: "NEW",
+			refreshToken: "NEWR",
+			expiresAt: "2026-07-25T12:00:00.000Z",
+		});
 	});
 
 	it("token_store_failed surfaces when put throws", async () => {
 		const store = new InMemoryMutableTokenStore();
-		vi.spyOn(store, "put").mockRejectedValueOnce(new Error("kc fail"));
+		vi.spyOn(store, "putRecord").mockRejectedValueOnce(new Error("kc fail"));
 		const ports = makePorts({
 			registry: baseRegistry(),
 			tokenStore: store,

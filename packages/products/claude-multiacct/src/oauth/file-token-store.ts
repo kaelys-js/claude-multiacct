@@ -18,7 +18,8 @@
  *
  * The encrypted plaintext is a JSON `TokenRecord` (`{accessToken,
  * refreshToken?, expiresAt?}`). Older installs wrote a BARE access-token
- * string; `parseRecord` reads both, so a legacy file still decodes to
+ * string; `parseTokenRecord` (./token-record.ts, shared with the keychain
+ * store) reads both, so a legacy file still decodes to
  * `{accessToken: <that string>}`. Carrying the refresh token + expiry is
  * what lets `get` renew an expired access token in place instead of handing
  * the shim a dead credential.
@@ -38,6 +39,7 @@ import type { AccountUuid } from "../domain/account.ts";
 import type { TokenRecord } from "../ports.ts";
 import { CLAUDE_CODE_CLIENT_ID, CLAUDE_TOKEN_URL } from "./login.ts";
 import { type FetchImpl, refreshTokens } from "./refresh.ts";
+import { encodeTokenRecord, parseTokenRecord } from "./token-record.ts";
 import type { MutableTokenStore } from "./token-store-mut.ts";
 
 /** Length of the AES-256-GCM key in bytes. */
@@ -157,7 +159,7 @@ export class FileTokenStore implements MutableTokenStore {
 		const iv = randomBytes(IV_LEN);
 		const cipher = createCipheriv("aes-256-gcm", key, iv);
 		const ciphertext = Buffer.concat([
-			cipher.update(Buffer.from(JSON.stringify(record), "utf8")),
+			cipher.update(Buffer.from(encodeTokenRecord(record), "utf8")),
 			cipher.final(),
 		]);
 		const tag = cipher.getAuthTag();
@@ -200,40 +202,7 @@ export class FileTokenStore implements MutableTokenStore {
 		} catch (error) {
 			throw new Error(`FileTokenStore: decrypt failed for ${accountUuid}`, { cause: error });
 		}
-		return this.parseRecord(plaintext);
-	}
-
-	/**
-	 * Parse decrypted plaintext into a {@link TokenRecord}. A well-formed JSON
-	 * object with a non-empty string `accessToken` is taken as a record; ANY
-	 * parse error or non-record shape is treated as a BARE legacy access token
-	 * (`{accessToken: plaintext}`). This backward-compat path is load-bearing:
-	 * installs that predate the record format hold raw token strings on disk.
-	 *
-	 * @param {string} plaintext - The decrypted UTF-8 plaintext.
-	 * @returns {TokenRecord} The parsed record.
-	 */
-	private parseRecord(plaintext: string): TokenRecord {
-		let parsed: unknown;
-		try {
-			parsed = JSON.parse(plaintext);
-		} catch {
-			return { accessToken: plaintext };
-		}
-		const record = parsed as {
-			accessToken?: unknown;
-			refreshToken?: unknown;
-			expiresAt?: unknown;
-		} | null;
-		if (typeof record?.accessToken !== "string" || record.accessToken.length === 0) {
-			// Parsed, but not a TokenRecord shape → legacy bare token.
-			return { accessToken: plaintext };
-		}
-		return {
-			accessToken: record.accessToken,
-			...(typeof record.refreshToken === "string" ? { refreshToken: record.refreshToken } : {}),
-			...(typeof record.expiresAt === "string" ? { expiresAt: record.expiresAt } : {}),
-		};
+		return parseTokenRecord(plaintext);
 	}
 
 	/**

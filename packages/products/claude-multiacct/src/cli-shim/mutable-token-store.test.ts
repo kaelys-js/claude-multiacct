@@ -12,9 +12,16 @@
  * before the registry write, so swallowing a real keychain error would drop the
  * registry entry while the credential lingers — the opposite of fail-closed.
  *
- * get/put are thin delegations to the base `SecurityCliTokenStore`; we assert
- * they reach the injected exec with the base adapter's argv so a refactor that
- * drops the delegation is caught.
+ * get/put reach the base `SecurityCliTokenStore` argv; we assert that so a
+ * refactor dropping the delegation is caught.
+ *
+ * The record surface carries the rest of the intent. `refreshToken` +
+ * `expiresAt` are the ONLY material that can renew an expiring access token, so
+ * a store that persists just `accessToken` silently kills every account it
+ * writes about an hour later, recoverable only by re-registering. An earlier
+ * build of `putRecord` did exactly that. The round-trip test below fails if the
+ * drop comes back, and the legacy test pins that a keychain secret written by a
+ * pre-record build still reads as a record rather than as a corrupt entry.
  */
 
 import { describe, expect, it, vi } from "vitest";
@@ -76,7 +83,10 @@ describe("SecurityCliMutableTokenStore", () => {
 	});
 
 	it("get delegates to the base store's find-generic-password argv", async () => {
-		const exec = vi.fn<ExecFileAsync>().mockResolvedValue({ stdout: "handle-1\n", stderr: "" });
+		const exec = vi.fn<ExecFileAsync>().mockResolvedValue({
+			stdout: `${JSON.stringify({ accessToken: "handle-1" })}\n`,
+			stderr: "",
+		});
 		const store = new SecurityCliMutableTokenStore(exec);
 		await expect(store.get(UUID_A)).resolves.toBe("handle-1");
 		expect(exec).toHaveBeenCalledWith("security", [
@@ -89,7 +99,10 @@ describe("SecurityCliMutableTokenStore", () => {
 		]);
 	});
 
-	it("put delegates to the base store's add-generic-password argv", async () => {
+	it("put stores the access token as a one-field record via add-generic-password", async () => {
+		// `put` is the access-token-only view over `putRecord`, exactly as in
+		// FileTokenStore, so the secret is always a record — never sometimes a
+		// bare string and sometimes JSON depending on which method was called.
 		const exec = vi.fn<ExecFileAsync>().mockResolvedValue({ stdout: "", stderr: "" });
 		const store = new SecurityCliMutableTokenStore(exec);
 		await store.put(UUID_A, "handle-x");
@@ -101,21 +114,30 @@ describe("SecurityCliMutableTokenStore", () => {
 			"-a",
 			UUID_A,
 			"-w",
-			"handle-x",
+			JSON.stringify({ accessToken: "handle-x" }),
 		]);
 	});
 
-	it("getRecord wraps the base access token as a record (bare-string adapter)", async () => {
-		const exec = vi.fn<ExecFileAsync>().mockResolvedValue({ stdout: "handle-1\n", stderr: "" });
-		const store = new SecurityCliMutableTokenStore(exec);
-		await expect(store.getRecord(UUID_A)).resolves.toStrictEqual({ accessToken: "handle-1" });
-	});
-
-	it("putRecord persists the record's access token via the base add-generic-password argv", async () => {
-		const exec = vi.fn<ExecFileAsync>().mockResolvedValue({ stdout: "", stderr: "" });
-		const store = new SecurityCliMutableTokenStore(exec);
-		await store.putRecord(UUID_A, { accessToken: "handle-x", refreshToken: "rt" });
-		expect(exec).toHaveBeenCalledWith("security", [
+	it("putRecord → getRecord round-trips the FULL record (refreshToken + expiresAt survive)", async () => {
+		// The regression this pins: putRecord used to write only
+		// `record.accessToken`, so refreshToken + expiresAt were dropped on the
+		// floor. The access token expires in about an hour and refreshToken is the
+		// only thing that can renew it, so an account provisioned through this
+		// store became unusable with no recovery but a manual re-register. Feed
+		// the secret that putRecord wrote back through getRecord: anything less
+		// than byte-equality means credential material was lost in storage.
+		const record = {
+			accessToken: "at-1",
+			refreshToken: "rt-1",
+			expiresAt: "2026-07-25T12:00:00.000Z",
+		};
+		// The secret asserted on the write is the exact byte string replayed to the
+		// read, so this is a real round-trip with no capture plumbing (and no
+		// conditional in the mock).
+		const secret = JSON.stringify(record);
+		const writer = vi.fn<ExecFileAsync>().mockResolvedValue({ stdout: "", stderr: "" });
+		await new SecurityCliMutableTokenStore(writer).putRecord(UUID_A, record);
+		expect(writer).toHaveBeenCalledWith("security", [
 			"add-generic-password",
 			"-U",
 			"-s",
@@ -123,8 +145,26 @@ describe("SecurityCliMutableTokenStore", () => {
 			"-a",
 			UUID_A,
 			"-w",
-			"handle-x",
+			secret,
 		]);
+		const reader = vi.fn<ExecFileAsync>().mockResolvedValue({ stdout: `${secret}\n`, stderr: "" });
+		const store = new SecurityCliMutableTokenStore(reader);
+		await expect(store.getRecord(UUID_A)).resolves.toStrictEqual(record);
+		// And the access-token view still yields a bearer token, not the JSON.
+		await expect(store.get(UUID_A)).resolves.toBe("at-1");
+	});
+
+	it("getRecord reads a LEGACY bare-string secret as an access-token-only record", async () => {
+		// Items written before the record format hold the raw token. Decoding
+		// must accept that forever — a strict JSON parse would make every
+		// pre-upgrade account read as corrupt and break the install on update,
+		// which is worse than the bug being fixed.
+		const exec = vi.fn<ExecFileAsync>().mockResolvedValue({ stdout: "legacy-token\n", stderr: "" });
+		const store = new SecurityCliMutableTokenStore(exec);
+		await expect(store.getRecord(UUID_A)).resolves.toStrictEqual({
+			accessToken: "legacy-token",
+		});
+		await expect(store.get(UUID_A)).resolves.toBe("legacy-token");
 	});
 
 	it("list dumps the keychain (attributes only) and returns this service's account uuids", async () => {

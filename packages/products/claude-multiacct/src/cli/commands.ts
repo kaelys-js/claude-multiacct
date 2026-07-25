@@ -34,6 +34,7 @@ import type { AccountRegistry } from "../domain/registry.ts";
 import type { SessionAccountChoice } from "../domain/session-choice.ts";
 import type { AtomicRegistryWriter } from "../registry/registry-writer.ts";
 import type { OAuthTokens, ProvisionResult, RefreshResult, VerifyResult } from "../oauth/models.ts";
+import { tokenRecordFrom } from "../oauth/token-record.ts";
 import {
 	FLAG_ENABLED_VALUE,
 	FLAG_ENV_VAR,
@@ -538,7 +539,11 @@ export async function refreshAccount(args: {
 	// Snapshot old token so we can restore on write fail.
 	const oldStored = await args.ports.tokenStore.get(account.uuid);
 	try {
-		await args.ports.tokenStore.put(account.uuid, JSON.stringify(refreshed.tokens));
+		// putRecord, not put(JSON.stringify(...)): the record surface is what
+		// carries refreshToken + expiresAt into the store, and every store encodes
+		// the record itself. Handing the JSON text to the access-token-only `put`
+		// stored a blob whose `accessToken` was the entire serialised bag.
+		await args.ports.tokenStore.putRecord(account.uuid, tokenRecordFrom(refreshed.tokens));
 	} catch (error) {
 		return {
 			ok: false,
