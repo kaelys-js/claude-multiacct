@@ -1,37 +1,29 @@
 {
 	"$schema": "https://raw.githubusercontent.com/kaelys-js/kaelys-js/main/schema/kaelys-catalog.schema.json",
-	"name": "claude-multiacct",
-	"tagline": "Several Claude accounts in one Claude Desktop, switchable per session.",
-	"sellMe": "Run more than one Claude subscription without separate apps or signing in and out. claude-multiacct adds an account picker inside Claude Desktop, so you can add accounts, remove them, and choose which one a session uses. It sets itself up when Claude starts and keeps working after Claude updates.",
-	"status": "beta",
+	"name": "foundation-registry",
+	"tagline": "The decisions behind the work, written down and easy to find later.",
+	"sellMe": "Decisions scatter across chat and one-off docs, and the reasoning is gone six months later. This keeps them as plain Markdown records, each owned by a team and linked in order from requirement to release, so the why is always there. It's a record, not a running app.",
+	"status": "wip",
 	"since": 2026,
 	"primaryLanguage": "TypeScript",
-	"technology": ["TypeScript", "Electron", "Chrome extension", "Node", "esbuild", "macOS"],
+	"technology": ["TypeScript", "pnpm", "Turbo", "mise", "JSON Schema", "Markdown"],
 	"topics": [
-		"claude",
-		"claude-code",
-		"claude-desktop",
-		"browser-extension",
-		"oauth",
-		"multi-account",
-		"macos"
+		"adr",
+		"business-as-code",
+		"decision-records",
+		"governance",
+		"prd",
+		"registry",
+		"spec"
 	],
 	"products": [
 		{
-			"name": "cli-shim",
-			"description": "Runs each session under the account you picked for it."
+			"name": "registry",
+			"description": "The records themselves, checked for consistency and published as a browsable index."
 		},
 		{
-			"name": "watcher",
-			"description": "Keeps everything installed and re-applies it after Claude updates."
-		},
-		{
-			"name": "http-bridge",
-			"description": "A small local service that holds your accounts and answers the picker."
-		},
-		{
-			"name": "extension",
-			"description": "The account picker that appears inside Claude Desktop."
+			"name": "trp",
+			"description": "A protocol for working a ticket through to a decision, with a check that the result holds up."
 		}
 	]
 }
