@@ -228,10 +228,34 @@ jobs:
           key: mise-${{ runner.os }}-${{ hashFiles('mise.toml', 'mise.lock') }}
       - name: Expose vendored mise on PATH
         run: |
+          # Job-scoped bin dir, not a path under $HOME. Every job on the
+          # self-hosted mini shares one $HOME, so the old `ln -sf` had
+          # concurrent jobs — and concurrent REPOS — overwriting a single
+          # symlink, and whichever wrote last decided which work root every
+          # other job's bare `mise` resolved to. RUNNER_TEMP is unique per job
+          # on hosted and self-hosted runners alike.
           ./bin/mise --version >/dev/null 2>&1 || true
-          mkdir -p "$HOME/.local/bin"
-          ln -sf "$(ls "$PWD"/.mise/mise-* | head -n1)" "$HOME/.local/bin/mise"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          MISE_BIN="${RUNNER_TEMP}/mise-bin"
+          mkdir -p "$MISE_BIN"
+          ln -sf "$(ls "$PWD"/.mise/mise-* | head -n1)" "$MISE_BIN/mise"
+          echo "$MISE_BIN" >> "$GITHUB_PATH"
+          # Point a bare `mise` at the same workspace-local `.mise` that
+          # ./bin/mise uses. Left unset, mise falls back to
+          # ~/.local/share/mise, which on the mini is the machine owner's own
+          # toolchain shared by every job of every repo. That is where CI's
+          # pinned linters were landing, and two jobs reinstalling the same
+          # pipx package there tore each other's venv apart (a half-written
+          # `attrs`; `reuse` without its charset-normalizer extra). These
+          # mirror bin/mise's own exports, so `mise` and `./bin/mise` resolve
+          # identically from here on.
+          {
+            echo "MISE_DATA_DIR=$PWD/.mise"
+            echo "MISE_CONFIG_DIR=$PWD/.mise"
+            echo "MISE_CACHE_DIR=$PWD/.mise/cache"
+            echo "MISE_STATE_DIR=$PWD/.mise/state"
+            echo "MISE_TRUSTED_CONFIG_PATHS=$PWD"
+            echo "MISE_IGNORED_CONFIG_PATHS=$HOME/.config/mise"
+          } >> "$GITHUB_ENV"
       - name: Install toolchain (mise — node, pnpm, all formatters)
         run: ./bin/mise install
       - name: Install dependencies
@@ -258,10 +282,34 @@ jobs:
           key: mise-${{ runner.os }}-${{ hashFiles('mise.toml', 'mise.lock') }}
       - name: Expose vendored mise on PATH
         run: |
+          # Job-scoped bin dir, not a path under $HOME. Every job on the
+          # self-hosted mini shares one $HOME, so the old `ln -sf` had
+          # concurrent jobs — and concurrent REPOS — overwriting a single
+          # symlink, and whichever wrote last decided which work root every
+          # other job's bare `mise` resolved to. RUNNER_TEMP is unique per job
+          # on hosted and self-hosted runners alike.
           ./bin/mise --version >/dev/null 2>&1 || true
-          mkdir -p "$HOME/.local/bin"
-          ln -sf "$(ls "$PWD"/.mise/mise-* | head -n1)" "$HOME/.local/bin/mise"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          MISE_BIN="${RUNNER_TEMP}/mise-bin"
+          mkdir -p "$MISE_BIN"
+          ln -sf "$(ls "$PWD"/.mise/mise-* | head -n1)" "$MISE_BIN/mise"
+          echo "$MISE_BIN" >> "$GITHUB_PATH"
+          # Point a bare `mise` at the same workspace-local `.mise` that
+          # ./bin/mise uses. Left unset, mise falls back to
+          # ~/.local/share/mise, which on the mini is the machine owner's own
+          # toolchain shared by every job of every repo. That is where CI's
+          # pinned linters were landing, and two jobs reinstalling the same
+          # pipx package there tore each other's venv apart (a half-written
+          # `attrs`; `reuse` without its charset-normalizer extra). These
+          # mirror bin/mise's own exports, so `mise` and `./bin/mise` resolve
+          # identically from here on.
+          {
+            echo "MISE_DATA_DIR=$PWD/.mise"
+            echo "MISE_CONFIG_DIR=$PWD/.mise"
+            echo "MISE_CACHE_DIR=$PWD/.mise/cache"
+            echo "MISE_STATE_DIR=$PWD/.mise/state"
+            echo "MISE_TRUSTED_CONFIG_PATHS=$PWD"
+            echo "MISE_IGNORED_CONFIG_PATHS=$HOME/.config/mise"
+          } >> "$GITHUB_ENV"
       - name: Install toolchain (mise — node, pnpm, all linters)
         run: ./bin/mise install
       # The pipx-backed linters (reuse, yamllint, check-jsonschema) install as
@@ -272,8 +320,30 @@ jobs:
       # making `mise exec -- reuse` fail ENOENT. `mise install` skips them (the
       # version dir already exists), so force a reinstall to re-anchor the venvs
       # to the current work root. Cheap, idempotent, self-healing.
-      - name: Re-anchor pipx venvs to current work root
-        run: ./bin/mise install --force pipx:reuse pipx:check-jsonschema yamllint
+      - name: Repair pipx venvs left dangling by the restored cache
+        run: |
+          # The pipx-backed linters install as venvs whose shebangs and internal
+          # symlinks are absolute paths into the work root that built them. The
+          # `.mise` cache is keyed only on mise.toml/mise.lock, so on the
+          # self-hosted runners it can restore under a different per-service
+          # work root, leaving those paths dangling and `mise exec -- reuse`
+          # failing ENOENT.
+          #
+          # This used to be a blanket forced reinstall of the whole list, which
+          # tore the venvs down and rebuilt them on EVERY run whether or not
+          # anything was broken, including while a sibling job in the same run
+          # was reading them. Probe first and rebuild only what fails to launch,
+          # so the common case (cache restored under the same work root) does no
+          # writes at all.
+          for tool in pipx:reuse pipx:check-jsonschema yamllint; do
+            bin="${tool#pipx:}"
+            if ./bin/mise exec -- "$bin" --version >/dev/null 2>&1; then
+              echo "$tool: usable, leaving it alone"
+            else
+              echo "$tool: unusable after cache restore, rebuilding"
+              ./bin/mise install --force "$tool"
+            fi
+          done
       - name: Install dependencies
         run: ./bin/mise exec -- pnpm install --frozen-lockfile
       - name: Lint (strict — zero diagnostics required)
@@ -298,10 +368,34 @@ jobs:
           key: mise-${{ runner.os }}-${{ hashFiles('mise.toml', 'mise.lock') }}
       - name: Expose vendored mise on PATH
         run: |
+          # Job-scoped bin dir, not a path under $HOME. Every job on the
+          # self-hosted mini shares one $HOME, so the old `ln -sf` had
+          # concurrent jobs — and concurrent REPOS — overwriting a single
+          # symlink, and whichever wrote last decided which work root every
+          # other job's bare `mise` resolved to. RUNNER_TEMP is unique per job
+          # on hosted and self-hosted runners alike.
           ./bin/mise --version >/dev/null 2>&1 || true
-          mkdir -p "$HOME/.local/bin"
-          ln -sf "$(ls "$PWD"/.mise/mise-* | head -n1)" "$HOME/.local/bin/mise"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          MISE_BIN="${RUNNER_TEMP}/mise-bin"
+          mkdir -p "$MISE_BIN"
+          ln -sf "$(ls "$PWD"/.mise/mise-* | head -n1)" "$MISE_BIN/mise"
+          echo "$MISE_BIN" >> "$GITHUB_PATH"
+          # Point a bare `mise` at the same workspace-local `.mise` that
+          # ./bin/mise uses. Left unset, mise falls back to
+          # ~/.local/share/mise, which on the mini is the machine owner's own
+          # toolchain shared by every job of every repo. That is where CI's
+          # pinned linters were landing, and two jobs reinstalling the same
+          # pipx package there tore each other's venv apart (a half-written
+          # `attrs`; `reuse` without its charset-normalizer extra). These
+          # mirror bin/mise's own exports, so `mise` and `./bin/mise` resolve
+          # identically from here on.
+          {
+            echo "MISE_DATA_DIR=$PWD/.mise"
+            echo "MISE_CONFIG_DIR=$PWD/.mise"
+            echo "MISE_CACHE_DIR=$PWD/.mise/cache"
+            echo "MISE_STATE_DIR=$PWD/.mise/state"
+            echo "MISE_TRUSTED_CONFIG_PATHS=$PWD"
+            echo "MISE_IGNORED_CONFIG_PATHS=$HOME/.config/mise"
+          } >> "$GITHUB_ENV"
       - name: Install toolchain (mise — sync:turbo formats generated JSON via oxfmt)
         run: ./bin/mise install
       - name: Install dependencies
@@ -328,10 +422,34 @@ jobs:
           key: mise-${{ runner.os }}-${{ hashFiles('mise.toml', 'mise.lock') }}
       - name: Expose vendored mise on PATH
         run: |
+          # Job-scoped bin dir, not a path under $HOME. Every job on the
+          # self-hosted mini shares one $HOME, so the old `ln -sf` had
+          # concurrent jobs — and concurrent REPOS — overwriting a single
+          # symlink, and whichever wrote last decided which work root every
+          # other job's bare `mise` resolved to. RUNNER_TEMP is unique per job
+          # on hosted and self-hosted runners alike.
           ./bin/mise --version >/dev/null 2>&1 || true
-          mkdir -p "$HOME/.local/bin"
-          ln -sf "$(ls "$PWD"/.mise/mise-* | head -n1)" "$HOME/.local/bin/mise"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          MISE_BIN="${RUNNER_TEMP}/mise-bin"
+          mkdir -p "$MISE_BIN"
+          ln -sf "$(ls "$PWD"/.mise/mise-* | head -n1)" "$MISE_BIN/mise"
+          echo "$MISE_BIN" >> "$GITHUB_PATH"
+          # Point a bare `mise` at the same workspace-local `.mise` that
+          # ./bin/mise uses. Left unset, mise falls back to
+          # ~/.local/share/mise, which on the mini is the machine owner's own
+          # toolchain shared by every job of every repo. That is where CI's
+          # pinned linters were landing, and two jobs reinstalling the same
+          # pipx package there tore each other's venv apart (a half-written
+          # `attrs`; `reuse` without its charset-normalizer extra). These
+          # mirror bin/mise's own exports, so `mise` and `./bin/mise` resolve
+          # identically from here on.
+          {
+            echo "MISE_DATA_DIR=$PWD/.mise"
+            echo "MISE_CONFIG_DIR=$PWD/.mise"
+            echo "MISE_CACHE_DIR=$PWD/.mise/cache"
+            echo "MISE_STATE_DIR=$PWD/.mise/state"
+            echo "MISE_TRUSTED_CONFIG_PATHS=$PWD"
+            echo "MISE_IGNORED_CONFIG_PATHS=$HOME/.config/mise"
+          } >> "$GITHUB_ENV"
       - name: Install toolchain (mise — node, pnpm, check-jsonschema)
         run: ./bin/mise install
       # schema-check.test.ts drives the REAL check-jsonschema through a stub
@@ -342,8 +460,30 @@ jobs:
       # #36: the two "must FAIL" cases exit 0 and the remote-unreachable case
       # reports the launch warning instead. Same forced reinstall as `lint` —
       # the pipx venv's absolute paths need re-anchoring to this work root.
-      - name: Re-anchor pipx venvs to current work root
-        run: ./bin/mise install --force pipx:check-jsonschema
+      - name: Repair pipx venvs left dangling by the restored cache
+        run: |
+          # The pipx-backed linters install as venvs whose shebangs and internal
+          # symlinks are absolute paths into the work root that built them. The
+          # `.mise` cache is keyed only on mise.toml/mise.lock, so on the
+          # self-hosted runners it can restore under a different per-service
+          # work root, leaving those paths dangling and `mise exec -- check-jsonschema`
+          # failing ENOENT.
+          #
+          # This used to be a blanket forced reinstall of the whole list, which
+          # tore the venvs down and rebuilt them on EVERY run whether or not
+          # anything was broken, including while a sibling job in the same run
+          # was reading them. Probe first and rebuild only what fails to launch,
+          # so the common case (cache restored under the same work root) does no
+          # writes at all.
+          for tool in pipx:check-jsonschema; do
+            bin="${tool#pipx:}"
+            if ./bin/mise exec -- "$bin" --version >/dev/null 2>&1; then
+              echo "$tool: usable, leaving it alone"
+            else
+              echo "$tool: unusable after cache restore, rebuilding"
+              ./bin/mise install --force "$tool"
+            fi
+          done
       - name: Install dependencies
         run: ./bin/mise exec -- pnpm install --frozen-lockfile
       - name: Tests + coverage gate (per-file thresholds)
@@ -368,10 +508,34 @@ jobs:
           key: mise-${{ runner.os }}-${{ hashFiles('mise.toml', 'mise.lock') }}
       - name: Expose vendored mise on PATH
         run: |
+          # Job-scoped bin dir, not a path under $HOME. Every job on the
+          # self-hosted mini shares one $HOME, so the old `ln -sf` had
+          # concurrent jobs — and concurrent REPOS — overwriting a single
+          # symlink, and whichever wrote last decided which work root every
+          # other job's bare `mise` resolved to. RUNNER_TEMP is unique per job
+          # on hosted and self-hosted runners alike.
           ./bin/mise --version >/dev/null 2>&1 || true
-          mkdir -p "$HOME/.local/bin"
-          ln -sf "$(ls "$PWD"/.mise/mise-* | head -n1)" "$HOME/.local/bin/mise"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          MISE_BIN="${RUNNER_TEMP}/mise-bin"
+          mkdir -p "$MISE_BIN"
+          ln -sf "$(ls "$PWD"/.mise/mise-* | head -n1)" "$MISE_BIN/mise"
+          echo "$MISE_BIN" >> "$GITHUB_PATH"
+          # Point a bare `mise` at the same workspace-local `.mise` that
+          # ./bin/mise uses. Left unset, mise falls back to
+          # ~/.local/share/mise, which on the mini is the machine owner's own
+          # toolchain shared by every job of every repo. That is where CI's
+          # pinned linters were landing, and two jobs reinstalling the same
+          # pipx package there tore each other's venv apart (a half-written
+          # `attrs`; `reuse` without its charset-normalizer extra). These
+          # mirror bin/mise's own exports, so `mise` and `./bin/mise` resolve
+          # identically from here on.
+          {
+            echo "MISE_DATA_DIR=$PWD/.mise"
+            echo "MISE_CONFIG_DIR=$PWD/.mise"
+            echo "MISE_CACHE_DIR=$PWD/.mise/cache"
+            echo "MISE_STATE_DIR=$PWD/.mise/state"
+            echo "MISE_TRUSTED_CONFIG_PATHS=$PWD"
+            echo "MISE_IGNORED_CONFIG_PATHS=$HOME/.config/mise"
+          } >> "$GITHUB_ENV"
       - name: Install toolchain (mise — node, pnpm, all gate tools)
         run: ./bin/mise install
       - name: Install dependencies
@@ -405,10 +569,34 @@ jobs:
           key: mise-${{ runner.os }}-${{ hashFiles('mise.toml', 'mise.lock') }}
       - name: Expose vendored mise on PATH
         run: |
+          # Job-scoped bin dir, not a path under $HOME. Every job on the
+          # self-hosted mini shares one $HOME, so the old `ln -sf` had
+          # concurrent jobs — and concurrent REPOS — overwriting a single
+          # symlink, and whichever wrote last decided which work root every
+          # other job's bare `mise` resolved to. RUNNER_TEMP is unique per job
+          # on hosted and self-hosted runners alike.
           ./bin/mise --version >/dev/null 2>&1 || true
-          mkdir -p "$HOME/.local/bin"
-          ln -sf "$(ls "$PWD"/.mise/mise-* | head -n1)" "$HOME/.local/bin/mise"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          MISE_BIN="${RUNNER_TEMP}/mise-bin"
+          mkdir -p "$MISE_BIN"
+          ln -sf "$(ls "$PWD"/.mise/mise-* | head -n1)" "$MISE_BIN/mise"
+          echo "$MISE_BIN" >> "$GITHUB_PATH"
+          # Point a bare `mise` at the same workspace-local `.mise` that
+          # ./bin/mise uses. Left unset, mise falls back to
+          # ~/.local/share/mise, which on the mini is the machine owner's own
+          # toolchain shared by every job of every repo. That is where CI's
+          # pinned linters were landing, and two jobs reinstalling the same
+          # pipx package there tore each other's venv apart (a half-written
+          # `attrs`; `reuse` without its charset-normalizer extra). These
+          # mirror bin/mise's own exports, so `mise` and `./bin/mise` resolve
+          # identically from here on.
+          {
+            echo "MISE_DATA_DIR=$PWD/.mise"
+            echo "MISE_CONFIG_DIR=$PWD/.mise"
+            echo "MISE_CACHE_DIR=$PWD/.mise/cache"
+            echo "MISE_STATE_DIR=$PWD/.mise/state"
+            echo "MISE_TRUSTED_CONFIG_PATHS=$PWD"
+            echo "MISE_IGNORED_CONFIG_PATHS=$HOME/.config/mise"
+          } >> "$GITHUB_ENV"
       - name: Install toolchain (mise — node, pnpm)
         run: ./bin/mise install
       - name: Install dependencies

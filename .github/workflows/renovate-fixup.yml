@@ -208,10 +208,34 @@ jobs:
 
       - name: Expose vendored mise on PATH
         run: |
+          # Job-scoped bin dir, not a path under $HOME. Every job on the
+          # self-hosted mini shares one $HOME, so the old `ln -sf` had
+          # concurrent jobs — and concurrent REPOS — overwriting a single
+          # symlink, and whichever wrote last decided which work root every
+          # other job's bare `mise` resolved to. RUNNER_TEMP is unique per job
+          # on hosted and self-hosted runners alike.
           ./bin/mise --version >/dev/null 2>&1 || true
-          mkdir -p "$HOME/.local/bin"
-          ln -sf "$(ls "$PWD"/.mise/mise-* | head -n1)" "$HOME/.local/bin/mise"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          MISE_BIN="${RUNNER_TEMP}/mise-bin"
+          mkdir -p "$MISE_BIN"
+          ln -sf "$(ls "$PWD"/.mise/mise-* | head -n1)" "$MISE_BIN/mise"
+          echo "$MISE_BIN" >> "$GITHUB_PATH"
+          # Point a bare `mise` at the same workspace-local `.mise` that
+          # ./bin/mise uses. Left unset, mise falls back to
+          # ~/.local/share/mise, which on the mini is the machine owner's own
+          # toolchain shared by every job of every repo. That is where CI's
+          # pinned linters were landing, and two jobs reinstalling the same
+          # pipx package there tore each other's venv apart (a half-written
+          # `attrs`; `reuse` without its charset-normalizer extra). These
+          # mirror bin/mise's own exports, so `mise` and `./bin/mise` resolve
+          # identically from here on.
+          {
+            echo "MISE_DATA_DIR=$PWD/.mise"
+            echo "MISE_CONFIG_DIR=$PWD/.mise"
+            echo "MISE_CACHE_DIR=$PWD/.mise/cache"
+            echo "MISE_STATE_DIR=$PWD/.mise/state"
+            echo "MISE_TRUSTED_CONFIG_PATHS=$PWD"
+            echo "MISE_IGNORED_CONFIG_PATHS=$HOME/.config/mise"
+          } >> "$GITHUB_ENV"
 
       - name: Install toolchain
         run: ./bin/mise install
@@ -387,4 +411,26 @@ jobs:
             echo "::error::commit ${NEW_SHA} came back verified=${VERIFIED}; required_signatures would block this PR."
             exit 1
           fi
-          echo "renovate-fixup: ${NEW_SHA} is signed (verified=true) and carries Signed-off-by ${BOT_EMAIL}."
+
+          # The trailer above was built from the hardcoded BOT_NAME/BOT_EMAIL
+          # pair, which is a GUESS at the identity GitHub will stamp on the
+          # commit. DCO does not check the guess, it checks the trailer against
+          # the author actually recorded. Move the App to a new identity and the
+          # two diverge silently, with the block landing on the merge box rather
+          # than here. Read the author back and assert both halves: that it is
+          # still the expected bot, and that the trailer names it verbatim.
+          # sync-upstream.yml makes the same assertion on its own commit.
+          AUTHOR_NAME="$(gh api "repos/${GH_REPO}/commits/${NEW_SHA}" \
+            --jq '.commit.author.name')"
+          AUTHOR_EMAIL="$(gh api "repos/${GH_REPO}/commits/${NEW_SHA}" \
+            --jq '.commit.author.email')"
+          if [ "$AUTHOR_NAME" != "$BOT_NAME" ] || [ "$AUTHOR_EMAIL" != "$BOT_EMAIL" ]; then
+            echo "::error::commit ${NEW_SHA} is authored by ${AUTHOR_NAME} <${AUTHOR_EMAIL}>, not the expected ${BOT_NAME} <${BOT_EMAIL}>; the Signed-off-by trailer this job wrote names the wrong identity and DCO would block this PR."
+            exit 1
+          fi
+          if ! gh api "repos/${GH_REPO}/commits/${NEW_SHA}" --jq '.commit.message' \
+              | grep -qF "Signed-off-by: ${AUTHOR_NAME} <${AUTHOR_EMAIL}>"; then
+            echo "::error::commit ${NEW_SHA} carries no Signed-off-by matching its author ${AUTHOR_NAME} <${AUTHOR_EMAIL}>; DCO would block this PR."
+            exit 1
+          fi
+          echo "renovate-fixup: ${NEW_SHA} is signed (verified=true) and signed-off by ${AUTHOR_NAME} <${AUTHOR_EMAIL}>."
