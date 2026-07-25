@@ -574,6 +574,48 @@ jobs:
           } >> "$GITHUB_ENV"
       - name: Install toolchain (mise — node, pnpm, all gate tools)
         run: ./bin/mise install
+      - name: Repair pipx venvs left dangling by the restored cache
+        run: |
+          # A pipx tool installs as a venv whose launcher hard-codes an
+          # absolute path to its own interpreter. The `.mise` cache is keyed
+          # only on mise.toml/mise.lock, so on the self-hosted runners it
+          # restores into whichever per-service work root asked for it, and the
+          # launcher then still points at the work root that BUILT it.
+          #
+          # That is worse than a dangling path, because the other work root
+          # usually exists on the same machine: the tool runs, `--version`
+          # answers, and the job looks healthy right up until the sibling
+          # runner rewrites its own checkout mid-run and the interpreter
+          # vanishes underneath. foundation-registry's lint job failed exactly
+          # that way (`"reuse" couldn't exec process: No such file or
+          # directory`) nine seconds after a launch probe had called the same
+          # tool usable.
+          #
+          # So check where the launcher points, not only whether it runs, and
+          # rebuild just the tools that are wrong. This replaces an
+          # unconditional `mise install --force` over the whole list, which
+          # rebuilt on every run, including while a sibling job was reading the
+          # very venvs it was replacing.
+          for tool in pipx:check-jsonschema; do
+            bin="${tool#pipx:}"
+            launcher="$(./bin/mise which "$bin" 2>/dev/null || true)"
+            reason=""
+            if [ -z "$launcher" ] || [ ! -x "$launcher" ]; then
+              reason="not installed"
+            elif ! ./bin/mise exec -- "$bin" --version >/dev/null 2>&1; then
+              reason="does not launch"
+            elif head -n 5 "$launcher" 2>/dev/null |
+                 grep -oE "/[^[:space:]]*/[.]mise/installs/[^[:space:]]*" |
+                 grep -qv "^${MISE_DATA_DIR}/"; then
+              reason="anchored to another work root"
+            fi
+            if [ -z "$reason" ]; then
+              echo "$tool: usable and anchored here"
+            else
+              echo "$tool: $reason, rebuilding"
+              ./bin/mise install --force "$tool"
+            fi
+          done
       - name: Install dependencies
         run: ./bin/mise exec -- pnpm install --frozen-lockfile
       - name: Gate-integrity meta-tests (every gate fails closed)
