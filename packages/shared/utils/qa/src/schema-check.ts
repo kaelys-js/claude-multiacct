@@ -239,6 +239,43 @@ const COVERAGE_EXCLUDED_EXACT = new Set([
 	".github/dependabot.yml",
 ]);
 
+// Per-fork exclusion list. A fork carries product files this repo does not know
+// about, and some of them genuinely cannot hold a schema marker (a Chrome MV3
+// manifest template, a runtime state file the product round-trips). Hardcoding
+// those paths in THIS file made every fork keep a local edit to a
+// `packages/shared` source that the sync declares upstream-authoritative, so a
+// sync either reverted the exemption (claude-multiacct, 2026-07-25: the lint job
+// went red on `manifest.tmpl.json` the moment the upstream copy landed) or the
+// fork pinned the whole file fork-wins and silently dropped every upstream fix
+// to it (ttt-studio-cole-30-60-90-plan, same day: the tool-launch tolerance
+// added in #36 never arrived, so three tests failed on the fork).
+//
+// `.schema-coverage-ignore` at the repo root breaks that loop: it is fork-owned
+// data, no sync rule claims it, and the shared source stays byte-identical
+// everywhere. One path per line; `#` starts a comment; blank lines ignored.
+// Paths are repo-root-relative and matched exactly, same as the set above.
+const FORK_EXCLUSION_FILE = ".schema-coverage-ignore";
+
+// Parse `.schema-coverage-ignore` into an exact-match set. An absent file is the
+// normal case (no fork-specific exemptions) and yields an empty set; an
+// unreadable one is treated the same way rather than crashing the gate, matching
+// how `lacksSchemaMarker` trusts files it cannot read.
+function readForkExclusions(): ReadonlySet<string> {
+	let text: string;
+	try {
+		text = readFileSync(join(ROOT, FORK_EXCLUSION_FILE), "utf8");
+	} catch {
+		return new Set();
+	}
+	const paths = text
+		.split("\n")
+		.map((line) => line.replace(/#.*$/u, "").trim())
+		.filter((line) => line !== "");
+	return new Set(paths);
+}
+
+const FORK_EXCLUDED_EXACT = readForkExclusions();
+
 // Whether a tracked config file is exempt from the schema-coverage requirement.
 // Test fixtures under any `**/tests/fixtures/` directory are data files, not repo
 // config — the coverage gate exists to catch un-schemad config, not to force a
@@ -247,9 +284,12 @@ const COVERAGE_EXCLUDED_EXACT = new Set([
 // (see `packages/shared/config/workflows/`); the CLI that consumes them writes
 // the schema-ref appropriate to the OUTPUT location, so the template itself is
 // intentionally schema-ref-less at rest.
+// A fork adds its own product-specific exemptions in `.schema-coverage-ignore`
+// (see FORK_EXCLUSION_FILE) instead of editing this shared source.
 function isCoverageExcluded(file: string): boolean {
 	if (
 		COVERAGE_EXCLUDED_EXACT.has(file) ||
+		FORK_EXCLUDED_EXACT.has(file) ||
 		file.endsWith(".lock") ||
 		file.endsWith(".schema.json") ||
 		file.endsWith(".template.yml") ||
@@ -300,10 +340,20 @@ const DOWNLOAD_FAILURE_SIGNATURES: readonly string[] = [
 // through mise; when the shared `.mise` toolchain is momentarily mid-flight
 // (the suite re-runs this check inside a concurrent `vitest run`, and pipx tools
 // are the first to vanish from the install dir), the exec fails with a shell
-// `not found` (exit 127) or mise's own `couldn't exec process`. That says
-// nothing about the config — the validator never ran — so it must not count as a
-// schema failure. A genuinely broken toolchain fails `pnpm install`/`mise
-// install` loudly elsewhere; here we skip the file rather than fail the gate.
+// `not found` (exit 127) or mise's own `couldn't exec process`. Recognising that
+// class buys a bounded RETRY — the launch is attempted TOOL_LAUNCH_ATTEMPTS
+// times before the run gives up.
+//
+// What it does NOT buy is a pass. #36 turned an exhausted launch retry into a
+// warning so the flake would stop reddening the `test` job, and that quietly
+// opened the hole this gate exists to close: with the tool absent, EVERY verdict
+// degrades to "skipped", so a config that violates its schema — or a schema
+// reference that resolves nowhere — exits 0 and merges. It also broke the tests
+// that assert those two must fail. The flake's real cause was environmental (the
+// `test` job installed node + pnpm but never re-anchored the pipx venv the way
+// `lint` does; fixed in ci.yml alongside this change), so the correct behaviour
+// here is the fleet default: a validator that could not run leaves the file
+// UNVALIDATED, and an unvalidated config file fails the gate.
 const TOOL_LAUNCH_FAILURE_SIGNATURES: readonly string[] = [
 	"couldn't exec process",
 	"command not found",
@@ -384,11 +434,18 @@ function validate(d: Discovered): Outcome {
 		return "warn-unreachable";
 	}
 	if (toolCouldNotLaunch(r.status, combined)) {
-		// check-jsonschema never ran (toolchain mid-flight): not a schema verdict.
+		// check-jsonschema never ran, after TOOL_LAUNCH_ATTEMPTS tries. The file is
+		// UNVALIDATED, which is the exact state this gate refuses to let through, so
+		// fail closed and say why — the message names the toolchain rather than the
+		// config so nobody hunts a schema bug that isn't there.
 		process.stderr.write(
-			`WARN: ${d.file} — check-jsonschema could not be launched (toolchain busy); skipping validation.\n`,
+			`  ✗ FAIL ${d.file} — check-jsonschema could not be launched after ` +
+				`${String(TOOL_LAUNCH_ATTEMPTS)} attempts, so the file is UNVALIDATED. ` +
+				`Fix the toolchain (\`./bin/mise install --force pipx:check-jsonschema\`); ` +
+				`the gate does not pass on an unrun validator.\n`,
 		);
-		return "warn-unreachable";
+		process.stderr.write(combined);
+		return "fail";
 	}
 	// Genuine validation failure — surface check-jsonschema's own diagnostics.
 	process.stdout.write(r.stdout);
