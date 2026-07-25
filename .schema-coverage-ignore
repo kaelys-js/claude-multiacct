@@ -1,0 +1,14 @@
+# Extra paths exempt from the schema-coverage gate in packages/shared/utils/qa/src/
+# schema-check.ts. Fork-owned: no sync rule claims this file, so an exemption here
+# survives every upstream sync instead of forcing a local edit to the shared
+# validator — which the sync overwrites, taking the exemption with it (that is how
+# PR #79 went red on the lint job).
+#
+# One repo-root-relative path per line; exact matches only.
+
+# Chrome MV3 manifest template consumed by
+# packages/products/claude-multiacct/scripts/build-extension.mjs. No public schema
+# covers every field the build uses, and the script parses the template into a
+# typed shape at build time, which catches shape errors earlier than a $schema ref
+# on a pre-substitution template could.
+packages/products/claude-multiacct/src/extension/manifest.tmpl.json
