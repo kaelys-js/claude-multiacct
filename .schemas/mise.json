@@ -462,7 +462,7 @@
 							"type": "boolean"
 						},
 						"binstall_native": {
-							"description": "[experimental] Use mise's native cargo binary installer when cargo-binstall is unavailable.",
+							"description": "Use mise's native cargo binary installer when cargo-binstall is unavailable.",
 							"type": "boolean"
 						},
 						"binstall_only": {
@@ -1502,6 +1502,10 @@
 					"type": "object",
 					"unevaluatedProperties": false,
 					"properties": {
+						"cache_dir": {
+							"description": "[experimental] Directory for task output cache artifacts.",
+							"type": "string"
+						},
 						"disable_paths": {
 							"default": [],
 							"description": "Paths that mise will not look for tasks in.",
@@ -1919,6 +1923,11 @@
 							"description": "ambient environment variable names whose values affect eligible task cache keys",
 							"items": { "type": "string" },
 							"type": "array"
+						},
+						"command_inputs": {
+							"description": "commands whose stdout and stderr affect eligible task cache keys",
+							"items": { "type": "string" },
+							"type": "array"
 						}
 					}
 				},
@@ -1969,6 +1978,47 @@
 				"lockfile": {
 					"description": "Use a single lockfile at the monorepo root for descendant config roots. true opts in now, false keeps lockfiles next to subproject configs, and unset keeps the current behavior until the scheduled default flip.",
 					"type": "boolean"
+				},
+				"projects": {
+					"description": "Experimental explicit additions, removals, and overrides applied to provider-inferred workspace projects",
+					"type": "object",
+					"additionalProperties": {
+						"type": "object",
+						"unevaluatedProperties": false,
+						"properties": {
+							"remove": {
+								"description": "Remove this project and every dependency edge connected to it",
+								"type": "boolean"
+							},
+							"root": {
+								"description": "Add the project at this workspace-relative root or replace its inferred root",
+								"type": "string"
+							},
+							"metadata": {
+								"description": "Replace provider-inferred project metadata",
+								"type": "object",
+								"additionalProperties": { "type": "string" }
+							},
+							"depends": {
+								"description": "Replace the complete provider-inferred dependency set",
+								"type": "array",
+								"items": { "type": "string" },
+								"uniqueItems": true
+							},
+							"depends_add": {
+								"description": "Add dependency edges after an optional depends replacement",
+								"type": "array",
+								"items": { "type": "string" },
+								"uniqueItems": true
+							},
+							"depends_remove": {
+								"description": "Remove dependency edges after an optional depends replacement",
+								"type": "array",
+								"items": { "type": "string" },
+								"uniqueItems": true
+							}
+						}
+					}
 				}
 			}
 		},
@@ -2398,6 +2448,11 @@
 							"description": "ambient environment variable names whose values affect the cache key",
 							"items": { "type": "string" },
 							"type": "array"
+						},
+						"command_inputs": {
+							"description": "commands whose stdout and stderr affect the cache key",
+							"items": { "type": "string" },
+							"type": "array"
 						}
 					}
 				},
@@ -2805,6 +2860,11 @@
 									{ "enum": ["symlink", "symlink-each", "copy", "template"] },
 									{ "type": "string" }
 								]
+							},
+							"exclude": {
+								"type": "array",
+								"description": "glob patterns to skip when the mode walks a source directory (symlink-each, or copy with a directory source); a pattern without \"/\" matches any path component, one with \"/\" is anchored to the source root",
+								"items": { "type": "string" }
 							},
 							"block": {
 								"type": "string",
