@@ -137,11 +137,11 @@ version = "0.23.1"
 backend = "npm:markdownlint-cli2"
 
 [[tools."npm:oxfmt"]]
-version = "0.59.0"
+version = "0.60.0"
 backend = "npm:oxfmt"
 
 [[tools."npm:oxlint"]]
-version = "1.74.0"
+version = "1.75.0"
 backend = "npm:oxlint"
 
 [[tools."pipx:check-jsonschema"]]

@@ -3896,6 +3896,20 @@
 						}
 					]
 				},
+				"node/no-top-level-await": {
+					"anyOf": [
+						{ "$ref": "#/definitions/RuleNoConfig" },
+						{
+							"type": "array",
+							"items": [
+								{ "$ref": "#/definitions/AllowWarnDeny" },
+								{ "$ref": "#/definitions/NoTopLevelAwaitConfig" }
+							],
+							"maxItems": 2,
+							"minItems": 2
+						}
+					]
+				},
 				"object-shorthand": {
 					"anyOf": [
 						{ "$ref": "#/definitions/RuleNoConfig" },
@@ -4052,7 +4066,7 @@
 							"items": [
 								{ "$ref": "#/definitions/AllowWarnDeny" },
 								{ "$ref": "#/definitions/PreferDestructuringOption" },
-								{ "$ref": "#/definitions/PreferDestructuringRenamedPropertiesConfig" }
+								{ "$ref": "#/definitions/PreferDestructuringEnforcementConfig" }
 							],
 							"maxItems": 3,
 							"minItems": 2
@@ -4398,6 +4412,20 @@
 					]
 				},
 				"react/forward-ref-uses-ref": { "$ref": "#/definitions/RuleNoConfig" },
+				"react/function-component-definition": {
+					"anyOf": [
+						{ "$ref": "#/definitions/RuleNoConfig" },
+						{
+							"type": "array",
+							"items": [
+								{ "$ref": "#/definitions/AllowWarnDeny" },
+								{ "$ref": "#/definitions/FunctionComponentDefinition" }
+							],
+							"maxItems": 2,
+							"minItems": 2
+						}
+					]
+				},
 				"react/hook-use-state": {
 					"anyOf": [
 						{ "$ref": "#/definitions/RuleNoConfig" },
@@ -6457,6 +6485,7 @@
 				"vitest/no-test-return-statement": { "$ref": "#/definitions/RuleNoConfig" },
 				"vitest/no-unneeded-async-expect-function": { "$ref": "#/definitions/RuleNoConfig" },
 				"vitest/padding-around-after-all-blocks": { "$ref": "#/definitions/RuleNoConfig" },
+				"vitest/padding-around-test-blocks": { "$ref": "#/definitions/RuleNoConfig" },
 				"vitest/prefer-called-exactly-once-with": { "$ref": "#/definitions/RuleNoConfig" },
 				"vitest/prefer-called-once": { "$ref": "#/definitions/RuleNoConfig" },
 				"vitest/prefer-called-times": { "$ref": "#/definitions/RuleNoConfig" },
@@ -7469,6 +7498,21 @@
 					"default": { "namedExports": null },
 					"allOf": [{ "$ref": "#/definitions/Override" }],
 					"markdownDescription": "Override the style specifically for named exports. Can be \"expression\", \"declaration\", or \"ignore\" (default)."
+				}
+			},
+			"additionalProperties": false
+		},
+		"FunctionComponentDefinition": { "$ref": "#/definitions/FunctionComponentDefinitionConfig" },
+		"FunctionComponentDefinitionConfig": {
+			"type": "object",
+			"properties": {
+				"namedComponents": {
+					"default": "function-declaration",
+					"allOf": [{ "$ref": "#/definitions/NamedComponents" }]
+				},
+				"unnamedComponents": {
+					"default": "function-expression",
+					"allOf": [{ "$ref": "#/definitions/UnnamedComponents" }]
 				}
 			},
 			"additionalProperties": false
@@ -8820,6 +8864,12 @@
 					"type": "string",
 					"enum": ["prefer-inline"],
 					"markdownDescription": "Prefer `import { type Foo } from 'foo'` for type imports."
+				},
+				{
+					"description": "Prefer `import type { Foo } from 'foo'` when all named imports are types, but allow\n`import { type Foo, bar } from 'foo'` when value imports are present.",
+					"type": "string",
+					"enum": ["prefer-top-level-if-only-type-imports"],
+					"markdownDescription": "Prefer `import type { Foo } from 'foo'` when all named imports are types, but allow\n`import { type Foo, bar } from 'foo'` when value imports are present."
 				}
 			]
 		},
@@ -8924,6 +8974,16 @@
 				}
 			],
 			"markdownDescription": "Name specifier that can be a single string or array of strings"
+		},
+		"NamedComponentStyle": {
+			"type": "string",
+			"enum": ["function-declaration", "arrow-function", "function-expression"]
+		},
+		"NamedComponents": {
+			"anyOf": [
+				{ "$ref": "#/definitions/NamedComponentStyle" },
+				{ "type": "array", "items": { "$ref": "#/definitions/NamedComponentStyle" } }
+			]
 		},
 		"NamedExports": { "type": "string", "enum": ["ignore", "expression", "declaration"] },
 		"Namespace": {
@@ -10866,6 +10926,18 @@
 			},
 			"additionalProperties": false
 		},
+		"NoTopLevelAwaitConfig": {
+			"type": "object",
+			"properties": {
+				"ignoreBin": {
+					"description": "If `true`, top-level `await` is allowed in files that start with a\nhashbang (`#!`), which marks them as executable scripts rather than\nimportable modules.",
+					"default": false,
+					"type": "boolean",
+					"markdownDescription": "If `true`, top-level `await` is allowed in files that start with a\nhashbang (`#!`), which marks them as executable scripts rather than\nimportable modules."
+				}
+			},
+			"additionalProperties": false
+		},
 		"NoTypeofUndefined": {
 			"type": "object",
 			"properties": {
@@ -12150,21 +12222,24 @@
 			"type": "array",
 			"items": [
 				{ "$ref": "#/definitions/PreferDestructuringOption" },
-				{ "$ref": "#/definitions/PreferDestructuringRenamedPropertiesConfig" }
+				{ "$ref": "#/definitions/PreferDestructuringEnforcementConfig" }
 			],
 			"maxItems": 2,
 			"minItems": 2
+		},
+		"PreferDestructuringEnforcementConfig": {
+			"type": "object",
+			"properties": {
+				"enforceForDeclarationWithTypeAnnotation": { "default": false, "type": "boolean" },
+				"enforceForRenamedProperties": { "default": false, "type": "boolean" }
+			},
+			"additionalProperties": false
 		},
 		"PreferDestructuringOption": {
 			"anyOf": [
 				{ "$ref": "#/definitions/PreferDestructuringTargetOption" },
 				{ "$ref": "#/definitions/PreferDestructuringAssignmentConfig" }
 			]
-		},
-		"PreferDestructuringRenamedPropertiesConfig": {
-			"type": "object",
-			"properties": { "enforceForRenamedProperties": { "default": false, "type": "boolean" } },
-			"additionalProperties": false
 		},
 		"PreferDestructuringTargetOption": {
 			"type": "object",
@@ -13681,6 +13756,16 @@
 				}
 			},
 			"additionalProperties": false
+		},
+		"UnnamedComponentStyle": {
+			"type": "string",
+			"enum": ["arrow-function", "function-expression"]
+		},
+		"UnnamedComponents": {
+			"anyOf": [
+				{ "$ref": "#/definitions/UnnamedComponentStyle" },
+				{ "type": "array", "items": { "$ref": "#/definitions/UnnamedComponentStyle" } }
+			]
 		},
 		"UseIsnan": {
 			"type": "object",
