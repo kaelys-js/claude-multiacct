@@ -91,7 +91,7 @@
 		"@vitest/coverage-v8": "4.1.10",
 		"lefthook": "2.1.10",
 		"syncpack": "15.3.2",
-		"turbo": "2.10.5",
+		"turbo": "2.10.6",
 		"typescript": "7.0.2",
 		"vitest": "4.1.10"
 	}

@@ -14,7 +14,11 @@
 					"properties": {
 						"task": { "type": "string" },
 						"args": { "type": "array", "items": { "type": "string" } },
-						"env": { "type": "object", "additionalProperties": { "type": "string" } }
+						"env": { "type": "object", "additionalProperties": { "type": "string" } },
+						"optional": {
+							"description": "do not fail when the task name or pattern has no matches",
+							"type": "boolean"
+						}
 					},
 					"required": ["task"],
 					"unevaluatedProperties": false
@@ -885,6 +889,12 @@
 					"description": "Set to false to disable the idiomatic version files such as .node-version, .ruby-version, etc.",
 					"type": "boolean",
 					"deprecated": true
+				},
+				"idiomatic_version_file_disable_files": {
+					"default": [],
+					"description": "Specific idiomatic version files to disable for a tool.",
+					"type": "array",
+					"items": { "type": "string" }
 				},
 				"idiomatic_version_file_disable_tools": {
 					"default": [],
@@ -1978,6 +1988,11 @@
 				"lockfile": {
 					"description": "Use a single lockfile at the monorepo root for descendant config roots. true opts in now, false keeps lockfiles next to subproject configs, and unset keeps the current behavior until the scheduled default flip.",
 					"type": "boolean"
+				},
+				"task_defaults": {
+					"description": "Experimental task defaults applied by task name across inferred and explicit workspace projects",
+					"type": "object",
+					"additionalProperties": { "$ref": "#/$defs/task_template" }
 				},
 				"projects": {
 					"description": "Experimental explicit additions, removals, and overrides applied to provider-inferred workspace projects",
