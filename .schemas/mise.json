@@ -1,5 +1,5 @@
 {
-	"$id": "https://mise.en.dev/schema/mise.json",
+	"$id": "https://mise.jdx.dev/schema/mise.json",
 	"$schema": "https://json-schema.org/draft/2020-12/schema",
 	"title": "mise",
 	"type": "object",
@@ -1516,6 +1516,32 @@
 							"description": "[experimental] Directory for task output cache artifacts.",
 							"type": "string"
 						},
+						"cache_max_age": {
+							"description": "[experimental] Maximum age of task output cache entries since their last access.",
+							"type": "string"
+						},
+						"cache_max_size": {
+							"description": "[experimental] Maximum total size of task output cache entries.",
+							"type": "string"
+						},
+						"cache_remote_mode": {
+							"default": "read-write",
+							"description": "[experimental] Remote task cache access mode.",
+							"type": "string",
+							"enum": ["read-write", "read-only", "write-only"]
+						},
+						"cache_remote_namespace": {
+							"description": "[experimental] Namespace sent to the remote task cache.",
+							"type": "string"
+						},
+						"cache_remote_token": {
+							"description": "[experimental] Bearer token for remote task cache authentication.",
+							"type": "string"
+						},
+						"cache_remote_url": {
+							"description": "[experimental] Base URL for the remote task cache service.",
+							"type": "string"
+						},
 						"disable_paths": {
 							"default": [],
 							"description": "Paths that mise will not look for tasks in.",
@@ -1927,6 +1953,11 @@
 						"enabled": {
 							"default": false,
 							"description": "store and restore eligible task outputs from the local mise cache",
+							"type": "boolean"
+						},
+						"audit": {
+							"default": false,
+							"description": "report project files read or written outside declared cache sources and outputs",
 							"type": "boolean"
 						},
 						"env": {
@@ -2469,6 +2500,11 @@
 						"enabled": {
 							"default": false,
 							"description": "store and restore task outputs from the local mise cache",
+							"type": "boolean"
+						},
+						"audit": {
+							"default": false,
+							"description": "report project files read or written outside declared cache sources and outputs",
 							"type": "boolean"
 						},
 						"env": {
