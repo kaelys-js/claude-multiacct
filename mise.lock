@@ -133,15 +133,15 @@ version = "0.7.0"
 backend = "npm:@taplo/cli"
 
 [[tools."npm:markdownlint-cli2"]]
-version = "0.23.1"
+version = "0.23.2"
 backend = "npm:markdownlint-cli2"
 
 [[tools."npm:oxfmt"]]
-version = "0.60.0"
+version = "0.61.0"
 backend = "npm:oxfmt"
 
 [[tools."npm:oxlint"]]
-version = "1.75.0"
+version = "1.76.0"
 backend = "npm:oxlint"
 
 [[tools."pipx:check-jsonschema"]]
