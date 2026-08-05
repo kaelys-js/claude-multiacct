@@ -32,8 +32,8 @@ pnpm = "11.13.1"
 python = "3.14.6"
 
 # ── ts/js + json/yaml/md formatting & js/ts lint ─────────────────────
-"npm:oxlint" = "1.75.0"
-"npm:oxfmt" = "0.60.0"
+"npm:oxlint" = "1.76.0"
+"npm:oxfmt" = "0.61.0"
 
 # ── toml (lint + format) ─────────────────────────────────────────────
 "npm:@taplo/cli" = "0.7.0"
@@ -42,7 +42,7 @@ python = "3.14.6"
 yamllint = "1.38.0"
 
 # ── markdown (lint; oxfmt owns formatting) ───────────────────────────
-"npm:markdownlint-cli2" = "0.23.1"
+"npm:markdownlint-cli2" = "0.23.2"
 
 # ── json schema meta-validation ──────────────────────────────────────
 "pipx:check-jsonschema" = "0.37.4"
