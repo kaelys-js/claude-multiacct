@@ -28,7 +28,7 @@
 		"spec"
 	],
 	"engines": {
-		"node": "26.5.0",
+		"node": "26.5.1",
 		"pnpm": "11.13.1"
 	},
 	"packageManager": "pnpm@11.13.1",
@@ -87,7 +87,7 @@
 		"@commitlint/cli": "21.2.1",
 		"@commitlint/config-conventional": "21.2.0",
 		"@foundation/config": "workspace:*",
-		"@types/node": "26.1.1",
+		"@types/node": "26.1.2",
 		"@vitest/coverage-v8": "4.1.10",
 		"lefthook": "2.1.10",
 		"syncpack": "15.3.2",
